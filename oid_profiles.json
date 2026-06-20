@@ -1,0 +1,1257 @@
+{
+  "172.16.25.54": {
+    "ip": "172.16.25.54",
+    "brand": "mfp07622411",
+    "device_type": "color",
+    "scanned_at": "2026-06-20T08:22:34.477324",
+    "scan_ms": 2524,
+    "oid_total": 34,
+    "oid_active": 13,
+    "oid_inactive": 3,
+    "oid_rejected": 3,
+    "oids": {
+      "sys_descr": {
+        "oid": "1.3.6.1.2.1.1.1.0",
+        "type": "str",
+        "category": "sys",
+        "description": "sys_descr",
+        "unit": "str",
+        "active": true,
+        "last_value": "TOSHIBA e-STUDIO2050C"
+      },
+      "sys_uptime": {
+        "oid": "1.3.6.1.2.1.1.3.0",
+        "type": "int",
+        "category": "sys",
+        "description": "sys_uptime",
+        "unit": "str",
+        "active": true,
+        "last_value": "387237200"
+      },
+      "sys_hostname": {
+        "oid": "1.3.6.1.2.1.1.5.0",
+        "type": "str",
+        "category": "sys",
+        "description": "sys_hostname",
+        "unit": "str",
+        "active": true,
+        "last_value": "TOSHIBA e-STUDIO2050C"
+      },
+      "print_total": {
+        "oid": "1.3.6.1.2.1.43.10.2.1.4.1.1",
+        "type": "int",
+        "category": "counter",
+        "active": true,
+        "last_value": "161351"
+      },
+      "print_color": {
+        "oid": "1.3.6.1.2.1.43.10.2.1.4.1.2",
+        "active": false
+      },
+      "print_mono": {
+        "oid": "1.3.6.1.2.1.43.10.2.1.4.1.3",
+        "active": false
+      },
+      "prt_marker_total": {
+        "oid": "1.3.6.1.4.1.1602.1.11.2.1.1.3.1",
+        "active": false
+      },
+      "toner_name_1": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.6.1.1",
+        "type": "str",
+        "category": "identity",
+        "active": true,
+        "last_value": "Black Toner"
+      },
+      "toner_remain_1": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.9.1.1",
+        "type": "int",
+        "category": "supply",
+        "active": true,
+        "last_value": "98"
+      },
+      "toner_max_1": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.8.1.1",
+        "type": "int",
+        "category": "supply",
+        "active": true,
+        "last_value": "100"
+      },
+      "toner_name_2": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.6.1.2",
+        "type": "str",
+        "category": "identity",
+        "active": true,
+        "last_value": "Cyan Toner"
+      },
+      "toner_remain_2": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.9.1.2",
+        "type": "int",
+        "category": "supply",
+        "active": true,
+        "last_value": "41"
+      },
+      "toner_max_2": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.8.1.2",
+        "type": "int",
+        "category": "supply",
+        "active": true,
+        "last_value": "100"
+      },
+      "toner_name_3": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.6.1.3",
+        "type": "str",
+        "category": "identity",
+        "active": true,
+        "last_value": "Magenta Toner"
+      },
+      "toner_remain_3": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.9.1.3",
+        "type": "int",
+        "category": "supply",
+        "active": true,
+        "last_value": "1"
+      },
+      "toner_max_3": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.8.1.3",
+        "type": "int",
+        "category": "supply",
+        "active": true,
+        "last_value": "100"
+      },
+      "toner_name_4": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.6.1.4",
+        "type": "str",
+        "category": "identity",
+        "active": true,
+        "last_value": "Yellow Toner"
+      },
+      "toner_remain_4": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.9.1.4",
+        "type": "int",
+        "category": "supply",
+        "active": true,
+        "last_value": "1"
+      },
+      "toner_max_4": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.8.1.4",
+        "type": "int",
+        "category": "supply",
+        "active": true,
+        "last_value": "100"
+      },
+      "toner_name_5": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.6.1.5",
+        "type": "str",
+        "category": "identity",
+        "active": true,
+        "last_value": "Waste Toner"
+      },
+      "toner_remain_5": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.9.1.5",
+        "type": "int",
+        "category": "supply",
+        "active": true,
+        "last_value": "-3"
+      },
+      "toner_max_5": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.8.1.5",
+        "type": "int",
+        "category": "supply",
+        "active": true,
+        "last_value": "100"
+      },
+      "tray1_name": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.13.1.1",
+        "type": "str",
+        "category": "identity",
+        "active": true,
+        "last_value": "Drawer 1"
+      },
+      "tray1_cap": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.9.1.1",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "250"
+      },
+      "tray1_level": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.10.1.1",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "100"
+      },
+      "tray2_name": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.13.1.2",
+        "type": "str",
+        "category": "identity",
+        "active": true,
+        "last_value": "Drawer 2"
+      },
+      "tray2_cap": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.9.1.2",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "550"
+      },
+      "tray2_level": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.10.1.2",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "25"
+      },
+      "tray3_name": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.13.1.3",
+        "type": "str",
+        "category": "identity",
+        "active": true,
+        "last_value": "Drawer 3"
+      },
+      "tray3_cap": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.9.1.3",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "550"
+      },
+      "tray3_level": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.10.1.3",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "25"
+      },
+      "tray6_name": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.13.1.6",
+        "type": "str",
+        "category": "identity",
+        "active": true,
+        "last_value": "Bypass Tray"
+      },
+      "tray6_cap": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.9.1.6",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "100"
+      },
+      "tray6_level": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.10.1.6",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "0"
+      }
+    },
+    "current_vals": {
+      "sys_descr": "TOSHIBA e-STUDIO2050C",
+      "sys_uptime": "387237200",
+      "sys_hostname": "TOSHIBA e-STUDIO2050C",
+      "print_total": "161351",
+      "toner_name_1": "Black Toner",
+      "toner_remain_1": "98",
+      "toner_max_1": "100",
+      "toner_name_2": "Cyan Toner",
+      "toner_remain_2": "41",
+      "toner_max_2": "100",
+      "toner_name_3": "Magenta Toner",
+      "toner_remain_3": "1",
+      "toner_max_3": "100",
+      "toner_name_4": "Yellow Toner",
+      "toner_remain_4": "1",
+      "toner_max_4": "100",
+      "toner_name_5": "Waste Toner",
+      "toner_remain_5": "-3",
+      "toner_max_5": "100",
+      "tray1_name": "Drawer 1",
+      "tray1_cap": "250",
+      "tray1_level": "100",
+      "tray2_name": "Drawer 2",
+      "tray2_cap": "550",
+      "tray2_level": "25",
+      "tray3_name": "Drawer 3",
+      "tray3_cap": "550",
+      "tray3_level": "25",
+      "tray6_name": "Bypass Tray",
+      "tray6_cap": "100",
+      "tray6_level": "0"
+    },
+    "rejected_oids": {
+      "print_color": "1.3.6.1.2.1.43.10.2.1.4.1.2",
+      "print_mono": "1.3.6.1.2.1.43.10.2.1.4.1.3",
+      "prt_marker_total": "1.3.6.1.4.1.1602.1.11.2.1.1.3.1"
+    },
+    "summary": {
+      "model": "MFP07622411",
+      "serial": "C7C339434",
+      "brand": "mfp07622411",
+      "total_pages": 161351,
+      "toner_pct": null,
+      "device_type": "color"
+    }
+  },
+  "172.16.32.41": {
+    "ip": "172.16.32.41",
+    "brand": "mfp11624818",
+    "device_type": "mono",
+    "scanned_at": "2026-06-20T08:22:35.393316",
+    "scan_ms": 2410,
+    "oid_total": 22,
+    "oid_active": 9,
+    "oid_inactive": 3,
+    "oid_rejected": 3,
+    "oids": {
+      "sys_descr": {
+        "oid": "1.3.6.1.2.1.1.1.0",
+        "type": "str",
+        "category": "sys",
+        "description": "sys_descr",
+        "unit": "str",
+        "active": true,
+        "last_value": "TOSHIBA e-STUDIO257"
+      },
+      "sys_uptime": {
+        "oid": "1.3.6.1.2.1.1.3.0",
+        "type": "int",
+        "category": "sys",
+        "description": "sys_uptime",
+        "unit": "str",
+        "active": true,
+        "last_value": "662149500"
+      },
+      "sys_hostname": {
+        "oid": "1.3.6.1.2.1.1.5.0",
+        "type": "str",
+        "category": "sys",
+        "description": "sys_hostname",
+        "unit": "str",
+        "active": true,
+        "last_value": "TOSHIBA e-STUDIO257"
+      },
+      "print_total": {
+        "oid": "1.3.6.1.2.1.43.10.2.1.4.1.1",
+        "type": "int",
+        "category": "counter",
+        "active": true,
+        "last_value": "237606"
+      },
+      "print_color": {
+        "oid": "1.3.6.1.2.1.43.10.2.1.4.1.2",
+        "active": false
+      },
+      "print_mono": {
+        "oid": "1.3.6.1.2.1.43.10.2.1.4.1.3",
+        "active": false
+      },
+      "prt_marker_total": {
+        "oid": "1.3.6.1.4.1.1602.1.11.2.1.1.3.1",
+        "active": false
+      },
+      "toner_name_1": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.6.1.1",
+        "type": "str",
+        "category": "identity",
+        "active": true,
+        "last_value": "Black Toner"
+      },
+      "toner_remain_1": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.9.1.1",
+        "type": "int",
+        "category": "supply",
+        "active": true,
+        "last_value": "1"
+      },
+      "toner_max_1": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.8.1.1",
+        "type": "int",
+        "category": "supply",
+        "active": true,
+        "last_value": "100"
+      },
+      "toner_name_5": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.6.1.5",
+        "type": "str",
+        "category": "identity",
+        "active": true,
+        "last_value": "Waste Toner"
+      },
+      "toner_remain_5": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.9.1.5",
+        "type": "int",
+        "category": "supply",
+        "active": true,
+        "last_value": "-3"
+      },
+      "toner_max_5": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.8.1.5",
+        "type": "int",
+        "category": "supply",
+        "active": true,
+        "last_value": "100"
+      },
+      "tray1_name": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.13.1.1",
+        "type": "str",
+        "category": "identity",
+        "active": true,
+        "last_value": "Drawer 1"
+      },
+      "tray1_cap": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.9.1.1",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "550"
+      },
+      "tray1_level": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.10.1.1",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "25"
+      },
+      "tray2_name": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.13.1.2",
+        "type": "str",
+        "category": "identity",
+        "active": true,
+        "last_value": "Drawer 2"
+      },
+      "tray2_cap": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.9.1.2",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "550"
+      },
+      "tray2_level": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.10.1.2",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "25"
+      },
+      "tray6_name": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.13.1.6",
+        "type": "str",
+        "category": "identity",
+        "active": true,
+        "last_value": "Bypass Tray"
+      },
+      "tray6_cap": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.9.1.6",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "100"
+      },
+      "tray6_level": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.10.1.6",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "-3"
+      }
+    },
+    "current_vals": {
+      "sys_descr": "TOSHIBA e-STUDIO257",
+      "sys_uptime": "662149500",
+      "sys_hostname": "TOSHIBA e-STUDIO257",
+      "print_total": "237606",
+      "toner_name_1": "Black Toner",
+      "toner_remain_1": "1",
+      "toner_max_1": "100",
+      "toner_name_5": "Waste Toner",
+      "toner_remain_5": "-3",
+      "toner_max_5": "100",
+      "tray1_name": "Drawer 1",
+      "tray1_cap": "550",
+      "tray1_level": "25",
+      "tray2_name": "Drawer 2",
+      "tray2_cap": "550",
+      "tray2_level": "25",
+      "tray6_name": "Bypass Tray",
+      "tray6_cap": "100",
+      "tray6_level": "-3"
+    },
+    "rejected_oids": {
+      "print_color": "1.3.6.1.2.1.43.10.2.1.4.1.2",
+      "print_mono": "1.3.6.1.2.1.43.10.2.1.4.1.3",
+      "prt_marker_total": "1.3.6.1.4.1.1602.1.11.2.1.1.3.1"
+    },
+    "summary": {
+      "model": "MFP11624818",
+      "serial": "CEBF57491",
+      "brand": "mfp11624818",
+      "total_pages": 237606,
+      "toner_pct": null,
+      "device_type": "mono"
+    }
+  },
+  "172.16.0.42": {
+    "ip": "172.16.0.42",
+    "brand": "hp",
+    "device_type": "mono",
+    "scanned_at": "2026-06-20T08:22:38.895408",
+    "scan_ms": 1768,
+    "oid_total": 13,
+    "oid_active": 6,
+    "oid_inactive": 3,
+    "oid_rejected": 3,
+    "oids": {
+      "sys_descr": {
+        "oid": "1.3.6.1.2.1.1.1.0",
+        "type": "str",
+        "category": "sys",
+        "description": "sys_descr",
+        "unit": "str",
+        "active": true,
+        "last_value": "HP ETHERNET MULTI-ENVIRONMENT,SN:CNB9H314LT,FN:Y322GJD,SVCID:26219,PID:HP LaserJet Pro MFP M225dn"
+      },
+      "sys_uptime": {
+        "oid": "1.3.6.1.2.1.1.3.0",
+        "type": "int",
+        "category": "sys",
+        "description": "sys_uptime",
+        "unit": "str",
+        "active": true,
+        "last_value": "41172299"
+      },
+      "sys_hostname": {
+        "oid": "1.3.6.1.2.1.1.5.0",
+        "type": "str",
+        "category": "sys",
+        "description": "sys_hostname",
+        "unit": "str",
+        "active": true,
+        "last_value": "NPI0CEC36"
+      },
+      "print_total": {
+        "oid": "1.3.6.1.2.1.43.10.2.1.4.1.1",
+        "type": "int",
+        "category": "counter",
+        "active": true,
+        "last_value": "58544"
+      },
+      "print_color": {
+        "oid": "1.3.6.1.2.1.43.10.2.1.4.1.2",
+        "active": false
+      },
+      "print_mono": {
+        "oid": "1.3.6.1.2.1.43.10.2.1.4.1.3",
+        "active": false
+      },
+      "prt_marker_total": {
+        "oid": "1.3.6.1.4.1.1602.1.11.2.1.1.3.1",
+        "active": false
+      },
+      "toner_name_1": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.6.1.1",
+        "type": "str",
+        "category": "identity",
+        "active": true,
+        "last_value": "Black Cartridge HP CF283A"
+      },
+      "toner_remain_1": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.9.1.1",
+        "type": "int",
+        "category": "supply",
+        "active": true,
+        "last_value": "0"
+      },
+      "toner_max_1": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.8.1.1",
+        "type": "int",
+        "category": "supply",
+        "active": true,
+        "last_value": "100"
+      },
+      "tray1_name": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.13.1.1",
+        "type": "str",
+        "category": "identity",
+        "active": true,
+        "last_value": "Tray 1"
+      },
+      "tray1_cap": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.9.1.1",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "250"
+      },
+      "tray1_level": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.10.1.1",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "-3"
+      }
+    },
+    "current_vals": {
+      "sys_descr": "HP ETHERNET MULTI-ENVIRONMENT,SN:CNB9H314LT,FN:Y322GJD,SVCID:26219,PID:HP LaserJet Pro MFP M225dn",
+      "sys_uptime": "41172299",
+      "sys_hostname": "NPI0CEC36",
+      "print_total": "58544",
+      "toner_name_1": "Black Cartridge HP CF283A",
+      "toner_remain_1": "0",
+      "toner_max_1": "100",
+      "tray1_name": "Tray 1",
+      "tray1_cap": "250",
+      "tray1_level": "-3"
+    },
+    "rejected_oids": {
+      "print_color": "1.3.6.1.2.1.43.10.2.1.4.1.2",
+      "print_mono": "1.3.6.1.2.1.43.10.2.1.4.1.3",
+      "prt_marker_total": "1.3.6.1.4.1.1602.1.11.2.1.1.3.1"
+    },
+    "summary": {
+      "model": "HP LaserJet Pro MFP M225dn",
+      "serial": "CNB9H314LT",
+      "brand": "hp",
+      "total_pages": 58544,
+      "toner_pct": null,
+      "device_type": "mono"
+    }
+  },
+  "172.16.0.43": {
+    "ip": "172.16.0.43",
+    "brand": "canon",
+    "device_type": "mono",
+    "scanned_at": "2026-06-20T08:22:40.399750",
+    "scan_ms": 3032,
+    "oid_total": 25,
+    "oid_active": 9,
+    "oid_inactive": 7,
+    "oid_rejected": 4,
+    "oids": {
+      "sys_descr": {
+        "oid": "1.3.6.1.2.1.1.1.0",
+        "active": false
+      },
+      "sys_uptime": {
+        "oid": "1.3.6.1.2.1.1.3.0",
+        "type": "int",
+        "category": "sys",
+        "description": "sys_uptime",
+        "unit": "str",
+        "active": true,
+        "last_value": "41261166"
+      },
+      "sys_hostname": {
+        "oid": "1.3.6.1.2.1.1.5.0",
+        "type": "str",
+        "category": "sys",
+        "description": "sys_hostname",
+        "unit": "str",
+        "active": true,
+        "last_value": ""
+      },
+      "print_total": {
+        "oid": "1.3.6.1.2.1.43.10.2.1.4.1.1",
+        "type": "int",
+        "category": "counter",
+        "active": true,
+        "last_value": "142842"
+      },
+      "print_color": {
+        "oid": "1.3.6.1.2.1.43.10.2.1.4.1.2",
+        "active": false
+      },
+      "print_mono": {
+        "oid": "1.3.6.1.2.1.43.10.2.1.4.1.3",
+        "active": false
+      },
+      "prt_marker_total": {
+        "oid": "1.3.6.1.4.1.1602.1.11.2.1.1.3.1",
+        "active": false
+      },
+      "toner_name_1": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.6.1.1",
+        "type": "str",
+        "category": "identity",
+        "active": true,
+        "last_value": "Canon Cartridge 324 II"
+      },
+      "toner_remain_1": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.9.1.1",
+        "type": "int",
+        "category": "supply",
+        "active": true,
+        "last_value": "10"
+      },
+      "toner_max_1": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.8.1.1",
+        "type": "int",
+        "category": "supply",
+        "active": true,
+        "last_value": "100"
+      },
+      "toner_name_2": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.6.1.2",
+        "type": "str",
+        "category": "identity",
+        "active": false,
+        "last_value": ""
+      },
+      "toner_remain_2": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.9.1.2",
+        "type": "int",
+        "category": "supply",
+        "active": true,
+        "last_value": "-1"
+      },
+      "toner_max_2": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.8.1.2",
+        "type": "int",
+        "category": "supply",
+        "active": true,
+        "last_value": "100"
+      },
+      "toner_name_3": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.6.1.3",
+        "type": "str",
+        "category": "identity",
+        "active": false,
+        "last_value": ""
+      },
+      "toner_remain_3": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.9.1.3",
+        "type": "int",
+        "category": "supply",
+        "active": true,
+        "last_value": "-1"
+      },
+      "toner_max_3": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.8.1.3",
+        "type": "int",
+        "category": "supply",
+        "active": true,
+        "last_value": "100"
+      },
+      "toner_name_4": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.6.1.4",
+        "type": "str",
+        "category": "identity",
+        "active": false,
+        "last_value": ""
+      },
+      "toner_remain_4": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.9.1.4",
+        "type": "int",
+        "category": "supply",
+        "active": true,
+        "last_value": "-1"
+      },
+      "toner_max_4": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.8.1.4",
+        "type": "int",
+        "category": "supply",
+        "active": true,
+        "last_value": "100"
+      },
+      "tray1_name": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.13.1.1",
+        "type": "str",
+        "category": "identity",
+        "active": true,
+        "last_value": "MP Tray"
+      },
+      "tray1_cap": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.9.1.1",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "100"
+      },
+      "tray1_level": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.10.1.1",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "-3"
+      },
+      "tray2_name": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.13.1.2",
+        "type": "str",
+        "category": "identity",
+        "active": true,
+        "last_value": "Cassette 1"
+      },
+      "tray2_cap": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.9.1.2",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "500"
+      },
+      "tray2_level": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.10.1.2",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "0"
+      }
+    },
+    "current_vals": {
+      "sys_uptime": "41261166",
+      "sys_hostname": "",
+      "print_total": "142842",
+      "toner_name_1": "Canon Cartridge 324 II",
+      "toner_remain_1": "10",
+      "toner_max_1": "100",
+      "toner_name_2": "",
+      "toner_remain_2": "-1",
+      "toner_max_2": "100",
+      "toner_name_3": "",
+      "toner_remain_3": "-1",
+      "toner_max_3": "100",
+      "toner_name_4": "",
+      "toner_remain_4": "-1",
+      "toner_max_4": "100",
+      "tray1_name": "MP Tray",
+      "tray1_cap": "100",
+      "tray1_level": "-3",
+      "tray2_name": "Cassette 1",
+      "tray2_cap": "500",
+      "tray2_level": "0"
+    },
+    "rejected_oids": {
+      "sys_descr": "1.3.6.1.2.1.1.1.0",
+      "print_color": "1.3.6.1.2.1.43.10.2.1.4.1.2",
+      "print_mono": "1.3.6.1.2.1.43.10.2.1.4.1.3",
+      "prt_marker_total": "1.3.6.1.4.1.1602.1.11.2.1.1.3.1"
+    },
+    "summary": {
+      "model": "Canon LBP2330K Series",
+      "serial": "N/A",
+      "brand": "canon",
+      "total_pages": 142842,
+      "toner_pct": null,
+      "device_type": "mono"
+    }
+  },
+  "172.16.0.40": {
+    "ip": "172.16.0.40",
+    "brand": "toshibablack61",
+    "device_type": "mono",
+    "scanned_at": "2026-06-20T08:22:41.994687",
+    "scan_ms": 5756,
+    "oid_total": 22,
+    "oid_active": 9,
+    "oid_inactive": 3,
+    "oid_rejected": 3,
+    "oids": {
+      "sys_descr": {
+        "oid": "1.3.6.1.2.1.1.1.0",
+        "type": "str",
+        "category": "sys",
+        "description": "sys_descr",
+        "unit": "str",
+        "active": true,
+        "last_value": "TOSHIBA e-STUDIO306"
+      },
+      "sys_uptime": {
+        "oid": "1.3.6.1.2.1.1.3.0",
+        "type": "int",
+        "category": "sys",
+        "description": "sys_uptime",
+        "unit": "str",
+        "active": true,
+        "last_value": "23070400"
+      },
+      "sys_hostname": {
+        "oid": "1.3.6.1.2.1.1.5.0",
+        "type": "str",
+        "category": "sys",
+        "description": "sys_hostname",
+        "unit": "str",
+        "active": true,
+        "last_value": "TOSHIBA e-STUDIO306"
+      },
+      "print_total": {
+        "oid": "1.3.6.1.2.1.43.10.2.1.4.1.1",
+        "type": "int",
+        "category": "counter",
+        "active": true,
+        "last_value": "701034"
+      },
+      "print_color": {
+        "oid": "1.3.6.1.2.1.43.10.2.1.4.1.2",
+        "active": false
+      },
+      "print_mono": {
+        "oid": "1.3.6.1.2.1.43.10.2.1.4.1.3",
+        "active": false
+      },
+      "prt_marker_total": {
+        "oid": "1.3.6.1.4.1.1602.1.11.2.1.1.3.1",
+        "active": false
+      },
+      "toner_name_1": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.6.1.1",
+        "type": "str",
+        "category": "identity",
+        "active": true,
+        "last_value": "Black Toner"
+      },
+      "toner_remain_1": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.9.1.1",
+        "type": "int",
+        "category": "supply",
+        "active": true,
+        "last_value": "100"
+      },
+      "toner_max_1": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.8.1.1",
+        "type": "int",
+        "category": "supply",
+        "active": true,
+        "last_value": "100"
+      },
+      "toner_name_5": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.6.1.5",
+        "type": "str",
+        "category": "identity",
+        "active": true,
+        "last_value": "Waste Toner"
+      },
+      "toner_remain_5": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.9.1.5",
+        "type": "int",
+        "category": "supply",
+        "active": true,
+        "last_value": "-3"
+      },
+      "toner_max_5": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.8.1.5",
+        "type": "int",
+        "category": "supply",
+        "active": true,
+        "last_value": "100"
+      },
+      "tray1_name": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.13.1.1",
+        "type": "str",
+        "category": "identity",
+        "active": true,
+        "last_value": "Drawer 1"
+      },
+      "tray1_cap": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.9.1.1",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "550"
+      },
+      "tray1_level": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.10.1.1",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "100"
+      },
+      "tray2_name": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.13.1.2",
+        "type": "str",
+        "category": "identity",
+        "active": true,
+        "last_value": "Drawer 2"
+      },
+      "tray2_cap": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.9.1.2",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "550"
+      },
+      "tray2_level": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.10.1.2",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "100"
+      },
+      "tray6_name": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.13.1.6",
+        "type": "str",
+        "category": "identity",
+        "active": true,
+        "last_value": "Bypass Tray"
+      },
+      "tray6_cap": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.9.1.6",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "100"
+      },
+      "tray6_level": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.10.1.6",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "0"
+      }
+    },
+    "current_vals": {
+      "sys_descr": "TOSHIBA e-STUDIO306",
+      "sys_uptime": "23070400",
+      "sys_hostname": "TOSHIBA e-STUDIO306",
+      "print_total": "701034",
+      "toner_name_1": "Black Toner",
+      "toner_remain_1": "100",
+      "toner_max_1": "100",
+      "toner_name_5": "Waste Toner",
+      "toner_remain_5": "-3",
+      "toner_max_5": "100",
+      "tray1_name": "Drawer 1",
+      "tray1_cap": "550",
+      "tray1_level": "100",
+      "tray2_name": "Drawer 2",
+      "tray2_cap": "550",
+      "tray2_level": "100",
+      "tray6_name": "Bypass Tray",
+      "tray6_cap": "100",
+      "tray6_level": "0"
+    },
+    "rejected_oids": {
+      "print_color": "1.3.6.1.2.1.43.10.2.1.4.1.2",
+      "print_mono": "1.3.6.1.2.1.43.10.2.1.4.1.3",
+      "prt_marker_total": "1.3.6.1.4.1.1602.1.11.2.1.1.3.1"
+    },
+    "summary": {
+      "model": "ToshibaBlack61",
+      "serial": "C2L213591",
+      "brand": "toshibablack61",
+      "total_pages": 701034,
+      "toner_pct": null,
+      "device_type": "mono"
+    }
+  },
+  "172.16.0.41": {
+    "ip": "172.16.0.41",
+    "brand": "mfp07893025",
+    "device_type": "mono",
+    "scanned_at": "2026-06-20T08:22:43.815588",
+    "scan_ms": 8775,
+    "oid_total": 25,
+    "oid_active": 10,
+    "oid_inactive": 3,
+    "oid_rejected": 3,
+    "oids": {
+      "sys_descr": {
+        "oid": "1.3.6.1.2.1.1.1.0",
+        "type": "str",
+        "category": "sys",
+        "description": "sys_descr",
+        "unit": "str",
+        "active": true,
+        "last_value": "TOSHIBA e-STUDIO306"
+      },
+      "sys_uptime": {
+        "oid": "1.3.6.1.2.1.1.3.0",
+        "type": "int",
+        "category": "sys",
+        "description": "sys_uptime",
+        "unit": "str",
+        "active": true,
+        "last_value": "23070800"
+      },
+      "sys_hostname": {
+        "oid": "1.3.6.1.2.1.1.5.0",
+        "type": "str",
+        "category": "sys",
+        "description": "sys_hostname",
+        "unit": "str",
+        "active": true,
+        "last_value": "TOSHIBA e-STUDIO306"
+      },
+      "print_total": {
+        "oid": "1.3.6.1.2.1.43.10.2.1.4.1.1",
+        "type": "int",
+        "category": "counter",
+        "active": true,
+        "last_value": "263107"
+      },
+      "print_color": {
+        "oid": "1.3.6.1.2.1.43.10.2.1.4.1.2",
+        "active": false
+      },
+      "print_mono": {
+        "oid": "1.3.6.1.2.1.43.10.2.1.4.1.3",
+        "active": false
+      },
+      "prt_marker_total": {
+        "oid": "1.3.6.1.4.1.1602.1.11.2.1.1.3.1",
+        "active": false
+      },
+      "toner_name_1": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.6.1.1",
+        "type": "str",
+        "category": "identity",
+        "active": true,
+        "last_value": "Black Toner"
+      },
+      "toner_remain_1": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.9.1.1",
+        "type": "int",
+        "category": "supply",
+        "active": true,
+        "last_value": "100"
+      },
+      "toner_max_1": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.8.1.1",
+        "type": "int",
+        "category": "supply",
+        "active": true,
+        "last_value": "100"
+      },
+      "toner_name_5": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.6.1.5",
+        "type": "str",
+        "category": "identity",
+        "active": true,
+        "last_value": "Waste Toner"
+      },
+      "toner_remain_5": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.9.1.5",
+        "type": "int",
+        "category": "supply",
+        "active": true,
+        "last_value": "-3"
+      },
+      "toner_max_5": {
+        "oid": "1.3.6.1.2.1.43.11.1.1.8.1.5",
+        "type": "int",
+        "category": "supply",
+        "active": true,
+        "last_value": "100"
+      },
+      "tray1_name": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.13.1.1",
+        "type": "str",
+        "category": "identity",
+        "active": true,
+        "last_value": "Drawer 1"
+      },
+      "tray1_cap": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.9.1.1",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "550"
+      },
+      "tray1_level": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.10.1.1",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "25"
+      },
+      "tray2_name": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.13.1.2",
+        "type": "str",
+        "category": "identity",
+        "active": true,
+        "last_value": "Drawer 2"
+      },
+      "tray2_cap": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.9.1.2",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "550"
+      },
+      "tray2_level": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.10.1.2",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "100"
+      },
+      "tray3_name": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.13.1.3",
+        "type": "str",
+        "category": "identity",
+        "active": true,
+        "last_value": "Drawer 3"
+      },
+      "tray3_cap": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.9.1.3",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "550"
+      },
+      "tray3_level": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.10.1.3",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "100"
+      },
+      "tray6_name": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.13.1.6",
+        "type": "str",
+        "category": "identity",
+        "active": true,
+        "last_value": "Bypass Tray"
+      },
+      "tray6_cap": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.9.1.6",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "100"
+      },
+      "tray6_level": {
+        "oid": "1.3.6.1.2.1.43.8.2.1.10.1.6",
+        "type": "int",
+        "category": "tray",
+        "active": true,
+        "last_value": "0"
+      }
+    },
+    "current_vals": {
+      "sys_descr": "TOSHIBA e-STUDIO306",
+      "sys_uptime": "23070800",
+      "sys_hostname": "TOSHIBA e-STUDIO306",
+      "print_total": "263107",
+      "toner_name_1": "Black Toner",
+      "toner_remain_1": "100",
+      "toner_max_1": "100",
+      "toner_name_5": "Waste Toner",
+      "toner_remain_5": "-3",
+      "toner_max_5": "100",
+      "tray1_name": "Drawer 1",
+      "tray1_cap": "550",
+      "tray1_level": "25",
+      "tray2_name": "Drawer 2",
+      "tray2_cap": "550",
+      "tray2_level": "100",
+      "tray3_name": "Drawer 3",
+      "tray3_cap": "550",
+      "tray3_level": "100",
+      "tray6_name": "Bypass Tray",
+      "tray6_cap": "100",
+      "tray6_level": "0"
+    },
+    "rejected_oids": {
+      "print_color": "1.3.6.1.2.1.43.10.2.1.4.1.2",
+      "print_mono": "1.3.6.1.2.1.43.10.2.1.4.1.3",
+      "prt_marker_total": "1.3.6.1.4.1.1602.1.11.2.1.1.3.1"
+    },
+    "summary": {
+      "model": "MFP07893025",
+      "serial": "C2CD27415",
+      "brand": "mfp07893025",
+      "total_pages": 263107,
+      "toner_pct": null,
+      "device_type": "mono"
+    }
+  }
+}

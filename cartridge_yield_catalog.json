@@ -1,0 +1,675 @@
+{
+  "version": 2,
+  "description": "Local fallback catalog for nominal cartridge yield. This catalog is tuned for mixed compatible/refilled cartridge usage instead of pure OEM values. OEM values are kept for reference; local/refill/compatible values are used by CARTRIDGE_YIELD_MODE.",
+  "matching_notes": [
+    "A match may use cartridge_contains, model_contains, or both.",
+    "If your printer reports only generic names like Black Toner, add a model_contains rule for that printer model.",
+    "auto_learn and shared_profile always have higher priority than this catalog."
+  ],
+  "entries": [
+    {
+      "id": "hp-cf283a-83a-cartridge",
+      "vendor": "HP",
+      "cartridge": "CF283A / 83A",
+      "color": "black",
+      "yield_per_page": 1500,
+      "confidence": "medium",
+      "source_note": "HP 83A/CF283A nominal yield | local baseline assumes mixed compatible/refilled cartridges.",
+      "match": {
+        "color": "black",
+        "cartridge_contains": [
+          "cf283a",
+          "83a"
+        ]
+      },
+      "yield_per_page_oem": 1500,
+      "yield_per_page_compatible": 1100,
+      "yield_per_page_refill": 900,
+      "yield_per_page_local": 1000
+    },
+    {
+      "id": "hp-laserjet-pro-m225dn-cf283a",
+      "vendor": "HP",
+      "cartridge": "CF283A / 83A",
+      "color": "black",
+      "yield_per_page": 1500,
+      "confidence": "medium",
+      "source_note": "Model fallback for HP LaserJet Pro MFP M225dn | local baseline assumes mixed compatible/refilled cartridges.",
+      "match": {
+        "color": "black",
+        "model_contains": [
+          "laserjet pro mfp m225",
+          "m225dn"
+        ]
+      },
+      "yield_per_page_oem": 1500,
+      "yield_per_page_compatible": 1100,
+      "yield_per_page_refill": 900,
+      "yield_per_page_local": 1000
+    },
+    {
+      "id": "hp-cf287a-87a-cartridge",
+      "vendor": "HP",
+      "cartridge": "CF287A / 87A",
+      "color": "black",
+      "yield_per_page": 9000,
+      "confidence": "medium",
+      "source_note": "HP 87A/CF287A nominal yield | local baseline assumes mixed compatible/refilled cartridges.",
+      "match": {
+        "color": "black",
+        "cartridge_contains": [
+          "cf287a",
+          "87a"
+        ]
+      },
+      "yield_per_page_oem": 9000,
+      "yield_per_page_compatible": 6800,
+      "yield_per_page_refill": 5400,
+      "yield_per_page_local": 5800
+    },
+    {
+      "id": "hp-laserjet-m506-cf287a",
+      "vendor": "HP",
+      "cartridge": "CF287A / 87A",
+      "color": "black",
+      "yield_per_page": 9000,
+      "confidence": "medium",
+      "source_note": "Model fallback for HP LaserJet Enterprise M506/M506dn | local baseline assumes mixed compatible/refilled cartridges.",
+      "match": {
+        "color": "black",
+        "model_contains": [
+          "laserjet m506",
+          "m506dn"
+        ]
+      },
+      "yield_per_page_oem": 9000,
+      "yield_per_page_compatible": 6800,
+      "yield_per_page_refill": 5400,
+      "yield_per_page_local": 5800
+    },
+    {
+      "id": "hp-laserjet-mfp-m527-cf287a",
+      "vendor": "HP",
+      "cartridge": "CF287A / 87A",
+      "color": "black",
+      "yield_per_page": 9000,
+      "confidence": "medium",
+      "source_note": "Model fallback for HP LaserJet MFP M527 | local baseline assumes mixed compatible/refilled cartridges.",
+      "match": {
+        "color": "black",
+        "model_contains": [
+          "laserjet mfp m527",
+          "m527"
+        ]
+      },
+      "yield_per_page_oem": 9000,
+      "yield_per_page_compatible": 6800,
+      "yield_per_page_refill": 5400,
+      "yield_per_page_local": 5800
+    },
+    {
+      "id": "canon-cartridge-737-cartridge",
+      "vendor": "Canon",
+      "cartridge": "Cartridge 737",
+      "color": "black",
+      "yield_per_page": 2400,
+      "confidence": "medium",
+      "source_note": "Canon Cartridge 737 nominal yield | local baseline assumes mixed compatible/refilled cartridges.",
+      "match": {
+        "color": "black",
+        "cartridge_contains": [
+          "cartridge 737"
+        ]
+      },
+      "yield_per_page_oem": 2400,
+      "yield_per_page_compatible": 1800,
+      "yield_per_page_refill": 1400,
+      "yield_per_page_local": 1600
+    },
+    {
+      "id": "canon-mf210-220-230-240-cartridge-737",
+      "vendor": "Canon",
+      "cartridge": "Cartridge 737",
+      "color": "black",
+      "yield_per_page": 2400,
+      "confidence": "medium",
+      "source_note": "Model fallback for Canon MF210/MF220/MF230/MF240 series commonly using Cartridge 737 | local baseline assumes mixed compatible/refilled cartridges.",
+      "match": {
+        "color": "black",
+        "model_contains": [
+          "canon mf210",
+          "canon mf220",
+          "canon mf230",
+          "canon mf240",
+          "mf210 series",
+          "mf220 series",
+          "mf230 series",
+          "mf240 series"
+        ]
+      },
+      "yield_per_page_oem": 2400,
+      "yield_per_page_compatible": 1800,
+      "yield_per_page_refill": 1400,
+      "yield_per_page_local": 1600
+    },
+    {
+      "id": "canon-cartridge-324-ii",
+      "vendor": "Canon",
+      "cartridge": "Cartridge 324 II",
+      "color": "black",
+      "yield_per_page": 12500,
+      "confidence": "medium",
+      "source_note": "Canon Cartridge 324 II nominal yield | local baseline assumes mixed compatible/refilled cartridges.",
+      "match": {
+        "color": "black",
+        "cartridge_contains": [
+          "cartridge 324 ii",
+          "324 ii"
+        ]
+      },
+      "yield_per_page_oem": 12500,
+      "yield_per_page_compatible": 9400,
+      "yield_per_page_refill": 7500,
+      "yield_per_page_local": 8100
+    },
+    {
+      "id": "toshiba-estudio-2505h-black-t2507",
+      "vendor": "Toshiba",
+      "cartridge": "T-2507 / T-2507U Black",
+      "color": "black",
+      "yield_per_page": 10000,
+      "confidence": "medium",
+      "source_note": "Toshiba e-STUDIO2505H black toner nominal yield | local baseline assumes mixed compatible/refilled cartridges.",
+      "match": {
+        "color": "black",
+        "model_contains": [
+          "e-studio2505h",
+          "e studio 2505h"
+        ],
+        "cartridge_contains": [
+          "black toner",
+          "toner"
+        ]
+      },
+      "yield_per_page_oem": 10000,
+      "yield_per_page_compatible": 7500,
+      "yield_per_page_refill": 6000,
+      "yield_per_page_local": 6500
+    },
+    {
+      "id": "toshiba-estudio-2050c-black-tfc30",
+      "vendor": "Toshiba",
+      "cartridge": "T-FC30U-K Black",
+      "color": "black",
+      "yield_per_page": 38400,
+      "confidence": "medium",
+      "source_note": "Toshiba e-STUDIO2050C/2550C black toner nominal yield | local baseline assumes mixed compatible/refilled cartridges.",
+      "match": {
+        "color": "black",
+        "model_contains": [
+          "e-studio2050",
+          "e studio 2050",
+          "mfp07622411",
+          "e-studio2550",
+          "e studio 2550"
+        ],
+        "cartridge_contains": [
+          "black toner",
+          "toner"
+        ]
+      },
+      "yield_per_page_oem": 38400,
+      "yield_per_page_compatible": 28800,
+      "yield_per_page_refill": 23000,
+      "yield_per_page_local": 25000
+    },
+    {
+      "id": "toshiba-estudio-2050c-cyan-tfc30",
+      "vendor": "Toshiba",
+      "cartridge": "T-FC30U-C Cyan",
+      "color": "cyan",
+      "yield_per_page": 33600,
+      "confidence": "medium",
+      "source_note": "Toshiba e-STUDIO2050C/2550C cyan toner nominal yield | local baseline assumes mixed compatible/refilled cartridges.",
+      "match": {
+        "color": "cyan",
+        "model_contains": [
+          "e-studio2050",
+          "e studio 2050",
+          "mfp07622411",
+          "e-studio2550",
+          "e studio 2550"
+        ],
+        "cartridge_contains": [
+          "cyan toner",
+          "toner"
+        ]
+      },
+      "yield_per_page_oem": 33600,
+      "yield_per_page_compatible": 25200,
+      "yield_per_page_refill": 20200,
+      "yield_per_page_local": 21800
+    },
+    {
+      "id": "toshiba-estudio-2050c-magenta-tfc30",
+      "vendor": "Toshiba",
+      "cartridge": "T-FC30U-M Magenta",
+      "color": "magenta",
+      "yield_per_page": 33600,
+      "confidence": "medium",
+      "source_note": "Toshiba e-STUDIO2050C/2550C magenta toner nominal yield | local baseline assumes mixed compatible/refilled cartridges.",
+      "match": {
+        "color": "magenta",
+        "model_contains": [
+          "e-studio2050",
+          "e studio 2050",
+          "mfp07622411",
+          "e-studio2550",
+          "e studio 2550"
+        ],
+        "cartridge_contains": [
+          "magenta toner",
+          "toner"
+        ]
+      },
+      "yield_per_page_oem": 33600,
+      "yield_per_page_compatible": 25200,
+      "yield_per_page_refill": 20200,
+      "yield_per_page_local": 21800
+    },
+    {
+      "id": "toshiba-estudio-2050c-yellow-tfc30",
+      "vendor": "Toshiba",
+      "cartridge": "T-FC30U-Y Yellow",
+      "color": "yellow",
+      "yield_per_page": 33600,
+      "confidence": "medium",
+      "source_note": "Toshiba e-STUDIO2050C/2550C yellow toner nominal yield | local baseline assumes mixed compatible/refilled cartridges.",
+      "match": {
+        "color": "yellow",
+        "model_contains": [
+          "e-studio2050",
+          "e studio 2050",
+          "mfp07622411",
+          "e-studio2550",
+          "e studio 2550"
+        ],
+        "cartridge_contains": [
+          "yellow toner",
+          "toner"
+        ]
+      },
+      "yield_per_page_oem": 33600,
+      "yield_per_page_compatible": 25200,
+      "yield_per_page_refill": 20200,
+      "yield_per_page_local": 21800
+    },
+    {
+      "id": "toshiba-estudio-2505ac-black-tfc505",
+      "vendor": "Toshiba",
+      "cartridge": "T-FC505U-K Black",
+      "color": "black",
+      "yield_per_page": 38400,
+      "confidence": "medium",
+      "source_note": "Toshiba e-STUDIO2505AC black toner nominal yield | local baseline assumes mixed compatible/refilled cartridges.",
+      "match": {
+        "color": "black",
+        "model_contains": [
+          "e-studio2505ac",
+          "e studio 2505ac",
+          "mfp11917633"
+        ],
+        "cartridge_contains": [
+          "black toner",
+          "toner"
+        ]
+      },
+      "yield_per_page_oem": 38400,
+      "yield_per_page_compatible": 28800,
+      "yield_per_page_refill": 23000,
+      "yield_per_page_local": 25000
+    },
+    {
+      "id": "toshiba-estudio-2505ac-cyan-tfc505",
+      "vendor": "Toshiba",
+      "cartridge": "T-FC505U-C Cyan",
+      "color": "cyan",
+      "yield_per_page": 33600,
+      "confidence": "medium",
+      "source_note": "Toshiba e-STUDIO2505AC cyan toner nominal yield | local baseline assumes mixed compatible/refilled cartridges.",
+      "match": {
+        "color": "cyan",
+        "model_contains": [
+          "e-studio2505ac",
+          "e studio 2505ac",
+          "mfp11917633"
+        ],
+        "cartridge_contains": [
+          "cyan toner",
+          "toner"
+        ]
+      },
+      "yield_per_page_oem": 33600,
+      "yield_per_page_compatible": 25200,
+      "yield_per_page_refill": 20200,
+      "yield_per_page_local": 21800
+    },
+    {
+      "id": "toshiba-estudio-2505ac-magenta-tfc505",
+      "vendor": "Toshiba",
+      "cartridge": "T-FC505U-M Magenta",
+      "color": "magenta",
+      "yield_per_page": 33600,
+      "confidence": "medium",
+      "source_note": "Toshiba e-STUDIO2505AC magenta toner nominal yield | local baseline assumes mixed compatible/refilled cartridges.",
+      "match": {
+        "color": "magenta",
+        "model_contains": [
+          "e-studio2505ac",
+          "e studio 2505ac",
+          "mfp11917633"
+        ],
+        "cartridge_contains": [
+          "magenta toner",
+          "toner"
+        ]
+      },
+      "yield_per_page_oem": 33600,
+      "yield_per_page_compatible": 25200,
+      "yield_per_page_refill": 20200,
+      "yield_per_page_local": 21800
+    },
+    {
+      "id": "toshiba-estudio-2505ac-yellow-tfc505",
+      "vendor": "Toshiba",
+      "cartridge": "T-FC505U-Y Yellow",
+      "color": "yellow",
+      "yield_per_page": 33600,
+      "confidence": "medium",
+      "source_note": "Toshiba e-STUDIO2505AC yellow toner nominal yield | local baseline assumes mixed compatible/refilled cartridges.",
+      "match": {
+        "color": "yellow",
+        "model_contains": [
+          "e-studio2505ac",
+          "e studio 2505ac",
+          "mfp11917633"
+        ],
+        "cartridge_contains": [
+          "yellow toner",
+          "toner"
+        ]
+      },
+      "yield_per_page_oem": 33600,
+      "yield_per_page_compatible": 25200,
+      "yield_per_page_refill": 20200,
+      "yield_per_page_local": 21800
+    },
+    {
+      "id": "toshiba-estudio-257-black-t5070u",
+      "vendor": "Toshiba",
+      "cartridge": "T-5070U Black",
+      "color": "black",
+      "yield_per_page": 36600,
+      "confidence": "medium",
+      "source_note": "Toshiba e-STUDIO257 black toner nominal yield | local baseline assumes mixed compatible/refilled cartridges.",
+      "match": {
+        "color": "black",
+        "model_contains": [
+          "e-studio257",
+          "e studio 257",
+          "mfp11624818"
+        ],
+        "cartridge_contains": [
+          "black toner",
+          "toner"
+        ]
+      },
+      "yield_per_page_oem": 36600,
+      "yield_per_page_compatible": 27400,
+      "yield_per_page_refill": 22000,
+      "yield_per_page_local": 23800
+    },
+    {
+      "id": "toshiba-estudio-306-black-t4590",
+      "vendor": "Toshiba",
+      "cartridge": "T-4590 Black",
+      "color": "black",
+      "yield_per_page": 36600,
+      "confidence": "medium",
+      "source_note": "Toshiba e-STUDIO306 black toner nominal yield | local baseline assumes mixed compatible/refilled cartridges.",
+      "match": {
+        "color": "black",
+        "model_contains": [
+          "e-studio306",
+          "e studio 306",
+          "mfp07893025",
+          "toshibablack61"
+        ],
+        "cartridge_contains": [
+          "black toner",
+          "toner"
+        ]
+      },
+      "yield_per_page_oem": 36600,
+      "yield_per_page_compatible": 27400,
+      "yield_per_page_refill": 22000,
+      "yield_per_page_local": 23800
+    },
+    {
+      "id": "toshiba-estudio-3015ac-black-tfc415",
+      "vendor": "Toshiba",
+      "cartridge": "T-FC415U-K Black",
+      "color": "black",
+      "yield_per_page": 38400,
+      "confidence": "medium",
+      "source_note": "Toshiba e-STUDIO3015AC black toner nominal yield | local baseline assumes mixed compatible/refilled cartridges.",
+      "match": {
+        "color": "black",
+        "model_contains": [
+          "e-studio3015ac",
+          "e studio 3015ac",
+          "e-studio3015",
+          "e studio 3015"
+        ],
+        "cartridge_contains": [
+          "black toner",
+          "toner"
+        ]
+      },
+      "yield_per_page_oem": 38400,
+      "yield_per_page_compatible": 28800,
+      "yield_per_page_refill": 23000,
+      "yield_per_page_local": 25000
+    },
+    {
+      "id": "toshiba-estudio-3015ac-cyan-tfc415",
+      "vendor": "Toshiba",
+      "cartridge": "T-FC415U-C Cyan",
+      "color": "cyan",
+      "yield_per_page": 33600,
+      "confidence": "medium",
+      "source_note": "Toshiba e-STUDIO3015AC cyan toner nominal yield | local baseline assumes mixed compatible/refilled cartridges.",
+      "match": {
+        "color": "cyan",
+        "model_contains": [
+          "e-studio3015ac",
+          "e studio 3015ac",
+          "e-studio3015",
+          "e studio 3015"
+        ],
+        "cartridge_contains": [
+          "cyan toner",
+          "toner"
+        ]
+      },
+      "yield_per_page_oem": 33600,
+      "yield_per_page_compatible": 25200,
+      "yield_per_page_refill": 20200,
+      "yield_per_page_local": 21800
+    },
+    {
+      "id": "toshiba-estudio-3015ac-magenta-tfc415",
+      "vendor": "Toshiba",
+      "cartridge": "T-FC415U-M Magenta",
+      "color": "magenta",
+      "yield_per_page": 33600,
+      "confidence": "medium",
+      "source_note": "Toshiba e-STUDIO3015AC magenta toner nominal yield | local baseline assumes mixed compatible/refilled cartridges.",
+      "match": {
+        "color": "magenta",
+        "model_contains": [
+          "e-studio3015ac",
+          "e studio 3015ac",
+          "e-studio3015",
+          "e studio 3015"
+        ],
+        "cartridge_contains": [
+          "magenta toner",
+          "toner"
+        ]
+      },
+      "yield_per_page_oem": 33600,
+      "yield_per_page_compatible": 25200,
+      "yield_per_page_refill": 20200,
+      "yield_per_page_local": 21800
+    },
+    {
+      "id": "toshiba-estudio-3015ac-yellow-tfc415",
+      "vendor": "Toshiba",
+      "cartridge": "T-FC415U-Y Yellow",
+      "color": "yellow",
+      "yield_per_page": 33600,
+      "confidence": "medium",
+      "source_note": "Toshiba e-STUDIO3015AC yellow toner nominal yield | local baseline assumes mixed compatible/refilled cartridges.",
+      "match": {
+        "color": "yellow",
+        "model_contains": [
+          "e-studio3015ac",
+          "e studio 3015ac",
+          "e-studio3015",
+          "e studio 3015"
+        ],
+        "cartridge_contains": [
+          "yellow toner",
+          "toner"
+        ]
+      },
+      "yield_per_page_oem": 33600,
+      "yield_per_page_compatible": 25200,
+      "yield_per_page_refill": 20200,
+      "yield_per_page_local": 21800
+    },
+    {
+      "id": "toshiba-estudio-3540c-black-tfc25",
+      "vendor": "Toshiba",
+      "cartridge": "T-FC25-K Black",
+      "color": "black",
+      "yield_per_page": 34200,
+      "confidence": "medium",
+      "source_note": "Toshiba e-STUDIO3540C black toner nominal yield | local baseline assumes mixed compatible/refilled cartridges.",
+      "match": {
+        "color": "black",
+        "model_contains": [
+          "e-studio3540c",
+          "e studio 3540c",
+          "e-studio3540",
+          "e studio 3540"
+        ],
+        "cartridge_contains": [
+          "black toner",
+          "toner"
+        ]
+      },
+      "yield_per_page_oem": 34200,
+      "yield_per_page_compatible": 25600,
+      "yield_per_page_refill": 20500,
+      "yield_per_page_local": 22200
+    },
+    {
+      "id": "toshiba-estudio-3540c-cyan-tfc25",
+      "vendor": "Toshiba",
+      "cartridge": "T-FC25-C Cyan",
+      "color": "cyan",
+      "yield_per_page": 29500,
+      "confidence": "medium",
+      "source_note": "Toshiba e-STUDIO3540C cyan toner nominal yield | local baseline assumes mixed compatible/refilled cartridges.",
+      "match": {
+        "color": "cyan",
+        "model_contains": [
+          "e-studio3540c",
+          "e studio 3540c",
+          "e-studio3540",
+          "e studio 3540"
+        ],
+        "cartridge_contains": [
+          "cyan toner",
+          "toner"
+        ]
+      },
+      "yield_per_page_oem": 29500,
+      "yield_per_page_compatible": 22100,
+      "yield_per_page_refill": 17700,
+      "yield_per_page_local": 19200
+    },
+    {
+      "id": "toshiba-estudio-3540c-magenta-tfc25",
+      "vendor": "Toshiba",
+      "cartridge": "T-FC25-M Magenta",
+      "color": "magenta",
+      "yield_per_page": 29500,
+      "confidence": "medium",
+      "source_note": "Toshiba e-STUDIO3540C magenta toner nominal yield | local baseline assumes mixed compatible/refilled cartridges.",
+      "match": {
+        "color": "magenta",
+        "model_contains": [
+          "e-studio3540c",
+          "e studio 3540c",
+          "e-studio3540",
+          "e studio 3540"
+        ],
+        "cartridge_contains": [
+          "magenta toner",
+          "toner"
+        ]
+      },
+      "yield_per_page_oem": 29500,
+      "yield_per_page_compatible": 22100,
+      "yield_per_page_refill": 17700,
+      "yield_per_page_local": 19200
+    },
+    {
+      "id": "toshiba-estudio-3540c-yellow-tfc25",
+      "vendor": "Toshiba",
+      "cartridge": "T-FC25-Y Yellow",
+      "color": "yellow",
+      "yield_per_page": 29500,
+      "confidence": "medium",
+      "source_note": "Toshiba e-STUDIO3540C yellow toner nominal yield | local baseline assumes mixed compatible/refilled cartridges.",
+      "match": {
+        "color": "yellow",
+        "model_contains": [
+          "e-studio3540c",
+          "e studio 3540c",
+          "e-studio3540",
+          "e studio 3540"
+        ],
+        "cartridge_contains": [
+          "yellow toner",
+          "toner"
+        ]
+      },
+      "yield_per_page_oem": 29500,
+      "yield_per_page_compatible": 22100,
+      "yield_per_page_refill": 17700,
+      "yield_per_page_local": 19200
+    }
+  ],
+  "local_policy": {
+    "market": "Iran / mixed compatible and refilled cartridges",
+    "default_mode": "local",
+    "compatible_ratio": 0.75,
+    "refill_ratio": 0.6,
+    "local_mixed_ratio": 0.65,
+    "note": "These are conservative starting baselines. auto_learn/shared_profile will override them after real usage data is collected."
+  }
+}
