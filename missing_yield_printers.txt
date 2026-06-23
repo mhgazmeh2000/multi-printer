@@ -19,7 +19,7 @@
 172.16.25.54 yield_per_page=25000 status=learned
 172.16.25.55 yield_per_page=2000 status=default
 172.16.25.57 yield_per_page=2000 status=default
-172.16.25.58 yield_per_page=2000 status=default
+172.16.25.58 yield_per_page=650 status=auto_learn
 172.16.25.59 yield_per_page=2000 status=default
 172.16.25.60 yield_per_page=1600 status=learned
 172.16.32.40 yield_per_page=2000 status=default

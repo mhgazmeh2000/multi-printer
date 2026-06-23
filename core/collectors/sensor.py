@@ -43,11 +43,6 @@ HUM_WARNING_HIGH = float(os.getenv("SENSOR_HUM_WARNING_HIGH", "70"))
 HUM_CRITICAL_HIGH = float(os.getenv("SENSOR_HUM_CRITICAL_HIGH", "80"))
 HUM_WARNING_LOW = float(os.getenv("SENSOR_HUM_WARNING_LOW", "20"))
 
-# ثبت لاگ تغییر سنسور فقط وقتی تغییر معنی‌دار باشد.
-# درخواست عملیاتی: دما حداقل ۱ درجه، رطوبت حداقل ۵٪.
-SENSOR_TEMP_CHANGE_LOG_DELTA = float(os.getenv("SENSOR_TEMP_CHANGE_LOG_DELTA", "1"))
-SENSOR_HUM_CHANGE_LOG_DELTA = float(os.getenv("SENSOR_HUM_CHANGE_LOG_DELTA", "5"))
-
 
 def _port_oids(port: int) -> dict:
     return {
@@ -142,22 +137,18 @@ def _register_sensor_changes(ip: str, previous: dict, readings: list):
             new_f = round(float(new), 1)
         except (TypeError, ValueError):
             continue
-        delta = round(abs(new_f - old_f), 1)
-        threshold = SENSOR_TEMP_CHANGE_LOG_DELTA if r["kind"] == "temperature" else SENSOR_HUM_CHANGE_LOG_DELTA
-        if delta < threshold:
+        if old_f == new_f:
             continue
         label = "دما" if r["kind"] == "temperature" else "رطوبت"
         unit = r.get("unit") or ("°C" if r["kind"] == "temperature" else "%")
         add_event(ip, "SENSOR_CHANGE", {
-            "message": f"تغییر {label} سنسور پورت {r['port']}: {old_f}{unit} → {new_f}{unit} (Δ={delta}{unit})",
+            "message": f"تغییر {label} سنسور پورت {r['port']}: {old_f}{unit} → {new_f}{unit}",
             "severity": "info",
             "code": f"sensor:{r['kind']}:port{r['port']}",
             "sensor_kind": r["kind"],
             "sensor_port": r["port"],
             "prev_value": old_f,
             "new_value": new_f,
-            "delta": delta,
-            "threshold": threshold,
             "unit": unit,
         })
 
