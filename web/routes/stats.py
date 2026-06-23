@@ -3,7 +3,6 @@ import logging
 from datetime import datetime, timedelta
 from flask import Blueprint, jsonify, request
 from config.settings import DB_PATH
-from core import store
 
 bp = Blueprint("stats", __name__)
 log = logging.getLogger("PrinterMonitor")
@@ -90,20 +89,6 @@ def api_sensor_daily_stats():
                 temp_by_day[day] = round(float(avg_value), 1)
             elif kind == 'humidity':
                 hum_by_day[day] = round(float(avg_value), 1)
-
-        # اگر هنوز جدول sensor_readings داده کافی ندارد، از snapshot زنده سنسور برای امروز fallback بگیر.
-        # این باعث می‌شود نمودار بلافاصله بعد از اولین poll هم چیزی برای نمایش داشته باشد.
-        today = datetime.now().date().isoformat()
-        if today not in temp_by_day or today not in hum_by_day:
-            with store.data_lock:
-                live = dict(store.printer_data.get(ip) or {})
-            live_readings = live.get('sensor_readings') or []
-            temps = [float(r.get('value')) for r in live_readings if r.get('kind') == 'temperature' and r.get('value') is not None]
-            hums = [float(r.get('value')) for r in live_readings if r.get('kind') == 'humidity' and r.get('value') is not None]
-            if temps and today not in temp_by_day:
-                temp_by_day[today] = round(sum(temps) / len(temps), 1)
-            if hums and today not in hum_by_day:
-                hum_by_day[today] = round(sum(hums) / len(hums), 1)
 
         start_dt = datetime.now().date() - timedelta(days=days)
         dates = []
