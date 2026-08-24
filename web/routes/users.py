@@ -139,6 +139,8 @@ def api_user_add():
         return jsonify({"error": "email الزامی است"}), 400
     if role not in ("admin", "manager", "viewer"):
         return jsonify({"error": "role نامعتبر است"}), 400
+    if role == "admin" and getattr(current_user, "role", None) != "admin":
+        return jsonify({"error": "فقط admin می‌تواند کاربر با نقش admin بسازد"}), 403
     if User.find_by_identifier(username):
         return jsonify({"error": "نام کاربری تکراری است"}), 400
     if User.find_by_email(email):
@@ -222,6 +224,8 @@ def api_user_role(user_id):
     role = (data.get("role") or "").strip().lower()
     if role not in ("admin", "manager", "viewer"):
         return jsonify({"error": "role نامعتبر است"}), 400
+    if role == "admin" and getattr(current_user, "role", None) != "admin":
+        return jsonify({"error": "فقط admin می‌تواند نقش admin بدهد"}), 403
 
     target = User.get(user_id)
     if not target:

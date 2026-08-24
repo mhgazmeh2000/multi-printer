@@ -12,7 +12,7 @@ load_dotenv()
 
 # ─── فایل‌ها و مسیرها ───────────────────────────────────────────
 PRINTERS_FILE        = "printers.json"
-DB_PATH              = "logs.db.active"
+DB_PATH              = "logs.db"
 OID_PROFILES_FILE    = "oid_profiles.json"
 VALIDATION_LOG_FILE  = "oid_validation_errors.txt"
 

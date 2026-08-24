@@ -31,6 +31,18 @@ def g(ip, community, oid, timeout, version=None):
     return snmp_get_with_fallback(ip, oid, community, version=version, timeout=timeout)
 
 
+# مسیرهای صفحه‌ی وب هر برند برای دامپ محتوای تونر/کارتریج (fallback با .get).
+PAGE_PATHS = {
+    "hp": ["/hp/device/InternalPages/Index?id=SuppliesStatus",
+           "/hp/info/suppliesStatus.html",
+           "/DevMgmt/ConsumableConfigDyn.xml", "/"],
+    "brother": ["/general/information.html", "/general/status.html", "/"],
+    "canon": ["/", "/Status.html", "/status.html", "/supply.html"],
+    "toshiba": ["/", "/MAIN/TopAccess/index.html", "/status.html", "/supply.html"],
+    None: ["/", "/status.html", "/supply.html"],
+}
+
+
 def probe(ip, community, timeout, snmp_version=None):
     """جمع‌آوری خام همه‌ی فیلدهای مهم."""
     data = {"ip": ip, "time": datetime.datetime.now().isoformat(timespec="seconds")}
@@ -128,14 +140,7 @@ def probe(ip, community, timeout, snmp_version=None):
         ("hp ", "hp"), ("laserjet", "hp"), ("jetdirect", "hp"),
         ("toshiba", "toshiba"),
     ) if tok in desc_l), None)
-    page_paths = {
-        "hp": ["/hp/device/InternalPages/Index?id=SuppliesStatus",
-               "/hp/info/suppliesStatus.html",
-               "/DevMgmt/ConsumableConfigDyn.xml", "/"],
-        "brother": ["/general/information.html", "/general/status.html", "/"],
-        "canon": ["/", "/Status.html", "/status.html", "/supply.html"],
-        None: ["/", "/status.html", "/supply.html"],
-    }[hint]
+    page_paths = PAGE_PATHS.get(hint, PAGE_PATHS[None])
     data["_web_brand_hint"] = hint
 
     kw_re = re.compile(r"toner|drum|cartridge|suppl|percent", re.IGNORECASE)

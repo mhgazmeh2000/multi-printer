@@ -72,9 +72,13 @@ def _window_args(args, latest_ts):
 
 def audit_printer(conn, ip, t0=None, t1=None):
     """ممیزی یک پرینتر در بازه [t0, t1]. خروجی: dict نتیجه."""
+    # مرجع شمارنده = همه‌ی خوانش‌هایی که print_total دارند — حتی سطرهایی که
+    # به‌خاطر ناخوانایی «سطح تونر» رد شده‌اند (valid=0). یافته‌ی واقعی ناوگان:
+    # دستگاه‌هایی مثل 25.34/0.45 که OID سطح تونرشان خوانده نمی‌شود ولی شمارنده‌ی
+    # صفحه در هر سطر سالم است؛ شرط valid=1 همان‌ها را بی‌دلیل ⛔ می‌کرد.
     q_snap = (
-        "SELECT timestamp, print_total, printer_model FROM toner_snapshots_v2 "
-        "WHERE printer_ip=? AND color='black' AND valid=1 AND print_total IS NOT NULL"
+        "SELECT timestamp, print_total, printer_model, valid FROM toner_snapshots_v2 "
+        "WHERE printer_ip=? AND color='black' AND print_total IS NOT NULL"
     )
     params = [ip]
     if t0:
@@ -84,17 +88,18 @@ def audit_printer(conn, ip, t0=None, t1=None):
     q_snap += " ORDER BY timestamp"
     snaps = conn.execute(q_snap, params).fetchall()
 
-    # ─── لنگر شکاف‌آگاه: مبنای دلتا = آخرین snapshot معتبرِ *قبل* از شروع
-    # پنجره. دلیل: رویدادهای داخل پنجره ممکن است حاصل حرکت شمارنده در زمان‌های
-    # *قبل* از پنجره باشند (مورد واقعی ۱۶ آگوست: سرور ۸۹ ساعت خاموش بود؛ در
-    # اولین خوانش یکشنبه، دلتای انباشته به‌عنوان PRINTِ داخل پنجره ثبت شد در
-    # حالی که مصرف شمارنده‌اش پیش از پنجره رخ داده بود — بدون این لنگر، ممیزی
-    # کاذب «لاگ بیش از شمارنده» گزارش می‌کرد). ───
+    # ─── لنگر شکاف‌آگاه: مبنای دلتا = آخرین خوانش شمارنده *قبل* از شروع
+    # پنجره (با همان قاعده‌ی بالا: valid لازم نیست، فقط شمارنده). دلیل:
+    # رویدادهای داخل پنجره ممکن است حاصل حرکت شمارنده در زمان‌های *قبل* از
+    # پنجره باشند (مورد واقعی ۱۶ آگوست: سرور ۸۹ ساعت خاموش بود؛ در اولین خوانش
+    # یکشنبه، دلتای انباشته به‌عنوان PRINTِ داخل پنجره ثبت شد در حالی که مصرف
+    # شمارنده‌اش پیش از پنجره رخ داده بود — بدون این لنگر، ممیزی کاذب
+    # «لاگ بیش از شمارنده» گزارش می‌کرد). ───
     anchor = None
     if t0:
         anchor = conn.execute(
             "SELECT timestamp, print_total FROM toner_snapshots_v2 "
-            "WHERE printer_ip=? AND color='black' AND valid=1 AND print_total IS NOT NULL "
+            "WHERE printer_ip=? AND color='black' AND print_total IS NOT NULL "
             "AND timestamp<? ORDER BY timestamp DESC LIMIT 1", (ip, t0)).fetchone()
 
     # ─── شکاف‌های پایش (گپ‌های >GAP_MIN_SECONDS بین خوانش‌های معتبر) ───
@@ -126,7 +131,10 @@ def audit_printer(conn, ip, t0=None, t1=None):
     prev = anchor[1] if anchor else None
     anchor_ts = anchor[0] if anchor else None
     model = "—"
-    for ts, total, mdl in snaps:
+    toner_valid = 0
+    for ts, total, mdl, is_valid in snaps:
+        if is_valid:
+            toner_valid += 1
         if mdl:
             model = mdl
         if first_total is None:
@@ -134,10 +142,12 @@ def audit_printer(conn, ip, t0=None, t1=None):
         last_total, last_ts = total, ts
         if prev is not None:
             if reset_ref is not None:
-                # در ناحیه‌ی بازگشت: فقط وقتی از سطح قبل از افت (+تلورانس) عبور کرد،
-                # مازاد آن چاپ واقعی جدید است.
-                if total > reset_ref + restore_tol:
-                    counter_delta += total - reset_ref
+                # ناحیه‌ی مرده‌ی بعد از افت: خوانش‌های پایین‌تر از مرجع (از جمله
+                # صفرهای مقطعی counter_decreased_anchor_reset) دور ریخته می‌شوند.
+                # به محض بازگشت شمارنده به نزدیکی سطح قبل از افت (بازگشت NVRAM
+                # پس از ریبوت) یا عبور از آن، از همان مرجع ادامه می‌دهیم.
+                if total >= reset_ref - restore_tol:
+                    counter_delta += max(0, total - reset_ref)
                     reset_ref = None
             elif total >= prev:
                 counter_delta += total - prev
@@ -188,11 +198,10 @@ def audit_printer(conn, ip, t0=None, t1=None):
         verdict = "— بدون داده"
         ok = None
     elif len(snaps) == 0 or (len(snaps) < 2 and anchor is None):
-        # ⛔ بدون مرجع: هیچ snapshot معتبری داخل پنجره نیست (حتی اگر لنگر
+        # ⛔ بدون مرجع: هیچ خوانش شمارنده‌ای داخل پنجره نیست (حتی اگر لنگر
         # قبل از پنجره هست، بدون نقطه‌ی داخل پنجره دلتای مصرفی ساخته نمی‌شود)،
-        # یا فقط یک نقطه و بدون لنگر → تطبیق ممکن نیست (جلوگیری از مثبت‌کاذب
-        # «لاگ بیش از شمارنده» برای دستگاه‌هایی با snapshotهای ردشده‌ی مداوم).
-        verdict = "⛔ بدون مرجع (snapshot معتبر کافی نیست)"  # نه داخل پنجره نه لنگر کافی
+        # یا فقط یک نقطه و بدون لنگر → تطبیق ممکن نیست.
+        verdict = "⛔ بدون مرجع (شمارنده‌ی قابل‌خواندن کافی نیست)"
         if est:
             verdict += f" · ⚠️ {_fmt(est)} صفحه تخمینی تاریخی"
         ok = None
@@ -208,12 +217,18 @@ def audit_printer(conn, ip, t0=None, t1=None):
     if ok and est_share > EST_SHARE_WARN:
         verdict += f" · ⚠️ سهم تخمین {est_share:.0%}"
         ok = None
+    # سلامت خوانش سطح تونر — جدا از راستی‌آزمایی صفحات (فقط اطلاع‌رسانی)
+    if snaps and toner_valid == 0:
+        verdict += " · 🟡 سطح تونر ناخوانا"
+    elif snaps and toner_valid * 2 < len(snaps):
+        verdict += f" · 🟡 تونر ناپایدار ({toner_valid / len(snaps) * 100:.1f}٪ معتبر)"
 
     return {
         "ip": ip,
         "model": model,
         "window": [t0 or (first_ts or "—"), t1 or (last_ts or "—")],
         "snapshots": len(snaps),
+        "toner_valid_snaps": toner_valid,
         "first_total": first_total,
         "last_total": last_total,
         "counter_delta": counter_delta,

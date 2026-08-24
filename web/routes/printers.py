@@ -87,7 +87,7 @@ def api_printers():
         cfg_by_ip = {p.get("ip"): p for p in cfg if p.get("ip")}
     for data in snap:
         configured = cfg_by_ip.get(data.get("ip")) or {}
-        for key in ("device_type", "brand", "group", "community"):
+        for key in ("device_type", "brand", "group"):
             if configured.get(key) and not data.get(key):
                 data[key] = configured[key]
     seen = {d["ip"] for d in snap}
