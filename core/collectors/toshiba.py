@@ -462,14 +462,6 @@ def collect_toshiba(ip: str, name: str, community: str, start: float) -> dict:
     with store._prev_lock:
         current_prev = store._prev.get(ip) or {}
         changed = False
-        if a3_total is not None:
-            current_prev["a3_total"] = a3_total
-            current_prev["a3_lagged"] = False
-            changed = True
-        if a4_total is not None:
-            current_prev["a4_total"] = a4_total
-            current_prev["a4_lagged"] = False
-            changed = True
         # ✅ هم‌ترازی baseline: فقط وقتی موتور رویداد snapshot این poll را
         # پذیرفته (print_total جلو رفته) baseline عملکرد/زیرگروه‌ها هم جلو می‌رود؛
         # در غیر این صورت (خواندن مشکوک / overflow pending) نگه‌داشتن baseline
@@ -479,6 +471,18 @@ def collect_toshiba(ip: str, name: str, community: str, start: float) -> dict:
             and si(current_prev.get("print_total"), -1) == total
         )
         if snapshot_accepted:
+            # ✅ باگ #2 (fallback): baseline کاغذ بزرگ/کوچک هم — دقیقاً مثل
+            # printer/copy/fax/list — فقط با snapshot پذیرفته‌شده جلو می‌رود تا
+            # در pollهای anomaly/overflow از print_total جدا نشود و سایز کاغذ
+            # اشتباه (A3 به‌جای A4 یا برعکس) در PRINT ثبت نشود.
+            if a3_total is not None:
+                current_prev["a3_total"] = a3_total
+                current_prev["a3_lagged"] = False
+                changed = True
+            if a4_total is not None:
+                current_prev["a4_total"] = a4_total
+                current_prev["a4_lagged"] = False
+                changed = True
             for _k, _v in (("printer_total", printer), ("copy_total", copy_),
                            ("fax_total", fax), ("list_total", list_total),
                            ("print_large_total", print_large_total),

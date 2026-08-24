@@ -502,6 +502,31 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
             })
             return
         if total > reset_ref + restore_tol:
+            if prev_total is not None and prev_total <= reset_ref - 10:
+                # ✅ فیکس double-count پس از ریبوت (مورد واقعی 20575 → 0 → 21000):
+                # زنجیره‌ی snapshot از موقع ریست هرگز به باند مرجع نرسیده و شمارنده
+                # یک‌باره به بالای آن پریده = امضای «بازگشت NVRAM + چاپ واقعی در
+                # فاصله‌ی ریبوت» است، نه چاپ از صفر. بنابراین baseline واقعی قبل
+                # از ریست (reset_ref) دور ریخته نمی‌شود؛ دلتا نسبت به همان مرجع
+                # محاسبه می‌شود (real_delta = total - reset_ref = 425 نه 21000) و
+                # جریان عادی پایین (PRINT/OVERFLOW/یادگیری تونر) با همین مرجع
+                # اصلاح‌شده ادامه می‌یابد — پس نه صفحه‌ی فانتوم داریم نه دو بار شماری.
+                # رشد تدریجی (ریست واقعی که آرام به مرجع نزدیک می‌شود) وارد این
+                # شاخه نمی‌شود و رفتار قبلی را دارد.
+                real_delta = total - reset_ref
+                add_event(ip, "COUNTER_RESTORED", {
+                    "message": f"شمارنده پس از ریبوت به {total:,} بازگشت ({real_delta:,} صفحه چاپ واقعی در فاصله‌ی ریبوت)",
+                    "severity": "info",
+                    "prev_total": prev_total,
+                    "restored_total": total,
+                    "reset_reference": reset_ref,
+                    "real_delta": real_delta,
+                })
+                log.warning("  [%s] counter restored above reset reference: baseline=%s real_delta=%s",
+                            ip, reset_ref, real_delta)
+                prev_total = reset_ref
+                actual_delta = real_delta
+                delta_pages = real_delta if real_delta > 0 else 0
             # از باند بازگشت گذشت (چاپ واقعی پس از ریست) — پرچم را بردار و ادامه بده
             reset_ref = None
 
