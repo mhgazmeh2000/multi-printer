@@ -320,6 +320,15 @@ if (typeof window.toast !== 'function') {
   };
 }
 
+// ✅ فیکس ReferenceError در پنل تنظیمات سیستم: کد ماژول showToast(...) را صدا
+// می‌زد ولی فقط window.toast تعریف شده بود. آداپتور زیر همان نام را روی همان
+// toast سراسری صفحه می‌نشاند و نوع متنی را به کلاس CSS صحیح (s/e/w) نگاشت
+// می‌کند — دقیقاً همان استایل toast داشبورد (المان #toast موجود در این صفحه).
+function showToast(message, type) {
+  const clsMap = { success: 's', error: 'e', warning: 'w', warn: 'w', info: '' };
+  toast(message, clsMap[type] || type || '');
+}
+
 function escapeHtml(str) {
   if (str === null || str === undefined) return '';
   return String(str)
