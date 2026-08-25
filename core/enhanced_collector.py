@@ -775,6 +775,30 @@ def _canon_display_percent(model: str, supply_name: str, percent: Optional[int])
     return percent
 
 
+# ─── نام‌های منطقه‌ای معادل کارتریج کانن ─────────────────────────
+# CRG-137 (آمریکا) / CRG-337 (آسیا) / CRG-737 (اروپا) / CRG-937 (اقیانوسیه)
+# همگی یک کارتریج فیزیکی یکسان با ظرفیت یکسان هستند و شماره‌شان فقط منطقه‌ای است.
+# کاتالوگ پروژه و بازار خرید ایران «Cartridge 737» را مرجع می‌دانند، ولی
+# دستگاهی با فریمور منطقه‌ی دیگر نام معادل را گزارش می‌کند (مورد واقعی ناوگان:
+# SNMP نامی «Cartridge 137» برگرداند درحالی‌که کاربر Cartridge 737 نصب کرده بود).
+# نمایش/کلید یادگیری با نام کانونیکال یکدست می‌شود و نام خام دستگاه در
+# raw_name حفظ می‌شود. heuristicهایی که روی نام خام کار می‌کنند (مثل
+# _canon_display_percent) همچنان رشته‌ی اصلی را می‌بینند.
+_CANON_REGIONAL_CARTRIDGE_EQUIVALENTS = {
+    "cartridge 137": "Cartridge 737",
+    "cartridge 337": "Cartridge 737",
+    "cartridge 937": "Cartridge 737",
+}
+
+
+def _canonical_cartridge_display_name(name):
+    """نام کانونیکال نمایشی کارتریج: معادل‌های منطقه‌ای کانن را به «737» نگاشت می‌کند."""
+    if not name:
+        return name
+    key = " ".join(str(name).strip().lower().split())
+    return _CANON_REGIONAL_CARTRIDGE_EQUIVALENTS.get(key, name)
+
+
 
 def _read_toshiba_value(ip: str, community: str, key: str, snmp_version: int, default=None, timeout: float = 2.0):
     oid = OIDS.get(key)
@@ -1150,6 +1174,13 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
             if existing and existing.get("level") is not None and s["percent"] is None:
                 continue
 
+            # ✅ فیکس نام کارتریج کانن: معادل منطقه‌ای (137/337/937) → کانونیکال 737
+            # نام خام SNMP در raw_name برای ردگیری نگه داشته می‌شود.
+            raw_supply_name = s["name"]
+            display_supply_name = (
+                _canonical_cartridge_display_name(raw_supply_name) if brand == "canon" else raw_supply_name
+            )
+
             toners[color_key] = {
                 "level": display_level,
                 # ✅ فیکس: raw_level باید واقعاً خام باشد تا یادگیری yield از داده‌ی
@@ -1159,7 +1190,8 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
                 "percent_source": s.get("percent_source"),
                 "supply_present": s.get("supply_present", False),
                 "status": s["status"] if s["status"] != "N/A" else "unknown",
-                "name": s["name"],
+                "name": display_supply_name,
+                "raw_name": raw_supply_name if display_supply_name != raw_supply_name else None,
                 "remaining": s["remaining"],
                 "max": s["max"],
                 "unit": s.get("unit"),
