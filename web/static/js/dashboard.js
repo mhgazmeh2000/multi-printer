@@ -1336,6 +1336,7 @@ function buildPrinterDetail(p) {
           <button class="filter-btn" onclick="filterLog('STATUS',this,'${logId}')">وضعیت</button>
           <button class="filter-btn" onclick="filterLog('SERVICE',this,'${logId}')">🔧 سرویس</button>
           <button class="filter-btn" onclick="filterLog('REFILL',this,'${logId}')">🖨 شارژ</button>
+          <button class="filter-btn" onclick="filterLog('CARTRIDGE_CHANGED',this,'${logId}')">🔄 کارتریج</button>
         </div>
         <span class="log-count" id="${logId}-count"></span>
         <button class="btn btn-cyan" onclick="openEvModal('${ip}','SERVICE')" style="font-size:11px">🔧 ثبت سرویس</button>
@@ -1494,7 +1495,7 @@ function _buildRows(events, hasPrinter, hasUser) {
     const badge  = `<span class="sev-badge ${SEV[sev] || 'sev-info'}">${escapeHtml(sev.toUpperCase())}</span>`;
     // ✅ خانواده‌ی صفحات با برچسب فارسی؛ PRINT_GAP رویداد «تخمینی» است و بصری جدا می‌شود
     const isEstimated = e.type === 'PRINT_GAP' || e.estimated === true;
-    const TYPE_FA = { PRINT: 'چاپ', PRINT_GAP: 'چاپ·تخمینی', PRINT_OVERFLOW: 'جهش مشکوک' };
+    const TYPE_FA = { PRINT: 'چاپ', PRINT_GAP: 'چاپ·تخمینی', PRINT_OVERFLOW: 'جهش مشکوک', CARTRIDGE_CHANGED: 'تعویض/شارژ کارتریج' };
     const tbadge = `<span class="type-badge">${escapeHtml(TYPE_FA[e.type] || e.type || '—')}</span>`;
     
     const pCell = hasPrinter

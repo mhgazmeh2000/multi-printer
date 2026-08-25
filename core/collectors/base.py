@@ -244,7 +244,8 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
                     a3_total: int = None, a4_total: int = None,
                     poll_timestamp: str = None,
                     paper_split: dict = None,
-                    paper_detail: dict = None, func_split: dict = None):
+                    paper_detail: dict = None, func_split: dict = None,
+                    toner_levels: dict = None, legacy_toner_color: str = None):
     """
     ثبت رویدادهای چاپ/هشدار با محافظت در برابر داده‌های مشکوک SNMP.
 
@@ -595,6 +596,78 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
             "auto_detected": True,
         })
 
+    # ─── تشخیص خودکار تعویض/شارژ کارتریج برای بقیه‌ی رنگ‌ها (CMY و …) ────
+    # مسیر REFILL بالا فقط «یک» تونر (تونری که به current_toner_level داده شده،
+    # معمولاً مشکی) را پوشش می‌دهد. این بلوک همان معنای دوپالیِ ضد-فلپ
+    # (کاندید در جهش >۲۰٪ → پایداری سطح در ۲ poll متوالی → رویداد) را برای
+    # بقیه‌ی رنگ‌ها اجرا می‌کند تا تعویض کارتریج سیان/سرخابی/زرد هم در رویدادها
+    # ثبت شود. فقط روی داده‌ی واقعی (raw_level) کار می‌کند؛ برآوردهای نمایشی
+    # (canon_status_code و …) اصلاً به این بلوک داده نمی‌شوند. رنگِ لگاسی هم
+    # کنار گذاشته می‌شود تا یک تعویض فیزیکی، دو رویداد ثبت نکند (REFILL +
+    # CARTRIDGE_CHANGED). کلیدهای وضعیت مثل pending_refill فقط در حافظه
+    # (PrevStore کش) نگه‌داری می‌شوند و بعد از ری‌استارت یک پنجره‌ی جدید شروع
+    # می‌شود — همان سیاست موجود.
+    cart_merged_levels = None
+    cart_pending_next = None
+    if toner_levels is not None:
+        fa_colors = {"black": "مشکی", "cyan": "آبی", "magenta": "سرخابی", "yellow": "زرد"}
+        prev_levels = prev.get("toner_levels") or {}
+        pendings_prev = prev.get("cart_change_pending") or {}
+        if not isinstance(pendings_prev, dict):
+            pendings_prev = {}
+        cart_merged_levels = dict(prev_levels)
+        cart_pending_next = {}
+        for color_key, cur_val in toner_levels.items():
+            if color_key not in fa_colors or color_key == legacy_toner_color:
+                continue
+            try:
+                cur = int(cur_val)
+            except (TypeError, ValueError):
+                continue
+            cart_merged_levels[color_key] = cur
+            pend = pendings_prev.get(color_key)
+            if pend and not prev.get("manual_override") and total is not None:
+                # پنجره‌ی پایداری: باید سطح بالای کاندید بماند و صفحات از کاندید کم باشد
+                try:
+                    pend_new = int(pend.get("new"))
+                    pend_total = int(pend.get("total", prev_total))
+                    pages_since = total - pend_total
+                except (TypeError, ValueError):
+                    pages_since = None
+                if pages_since is not None and pages_since < 50 and cur >= pend_new - 1:
+                    hits = int(pend.get("hits") or 0) + 1
+                    if hits >= 2:
+                        add_event(ip, "CARTRIDGE_CHANGED", {
+                            "message": (f"تشخیص خودکار تاییدشده: کارتریج {fa_colors[color_key]}"
+                                        f" تعویض یا شارژ شد (سطح تونر از {pend.get('prev')}% به {cur}%)"),
+                            "severity": "info",
+                            "auto_detected": True,
+                            "confirmed": True,
+                            "color": color_key,
+                            "color_fa": fa_colors[color_key],
+                            "prev_toner": pend.get("prev"),
+                            "new_toner": cur,
+                            "pages": max(0, pages_since),
+                        })
+                        continue  # تأیید شد؛ pending بسته می‌شود (رویداد یک‌شوت است)
+                    cart_pending_next[color_key] = {**pend, "hits": hits}
+                    continue
+                if pages_since is None or cur < pend_new - 1:
+                    # سطح به زیر کاندید برگشته (فلپ/بليب) یا داده‌ی شمارنده ناهماهنگ → کاندید باطل
+                    continue
+                # صفحات از کاندید زیاد شده ولی سطح بالا مانده: pending حفظ می‌شود (رفتار لگاسی)
+                cart_pending_next[color_key] = pend
+                continue
+            # کاندید تازه: جهش سطح نسبت به آخرین سطحِ شناخته‌شده‌ی همان رنگ
+            try:
+                prev_lvl = int(prev_levels[color_key]) if prev_levels.get(color_key) is not None else None
+            except (TypeError, ValueError):
+                prev_lvl = None
+            if (prev_lvl is not None and cur - prev_lvl > 20 and delta_pages < 50
+                    and not prev.get("manual_override")):
+                log.info(f"  [{ip}] cartridge-change candidate ({color_key}): toner {prev_lvl}% → {cur}%")
+                cart_pending_next[color_key] = {"prev": prev_lvl, "new": cur, "total": total, "hits": 0}
+
     # ─── محاسبه و اعتبارسنجی دلتاهای رنگی/سیاه‌وسفید ───────────────
     delta_fc = (full_color - prev_fc) if (full_color is not None and prev_fc is not None) else 0
     delta_bw = (black_white - prev_bw) if (black_white is not None and prev_bw is not None) else 0
@@ -797,6 +870,11 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
                 new_prev["pending_refill_hits"] = None
         except (TypeError, ValueError):
             pass
+    if toner_levels is not None:
+        # وضعیت تشخیص تعویض کارتریج (کش in-memory مثل pending_refill)
+        new_prev["toner_levels"] = cart_merged_levels
+        new_prev["cart_change_pending"] = cart_pending_next if cart_pending_next else None
+        new_prev["legacy_toner_color"] = legacy_toner_color
     if a3_total is not None:
         new_prev["a3_total"] = a3_total
     if a4_total is not None:

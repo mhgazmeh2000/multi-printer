@@ -1447,18 +1447,38 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
     # ✅ یادگیری yield و منطق REFILL باید از سطح خام دستگاه استفاده کنند، نه از
     # مقدار نمایشی/override؛ در غیر این صورت چرخه‌ی تخمین-یادگیری دایره‌ای می‌شود.
     if toners.get("black", {}).get("raw_level") is not None:
+        legacy_toner_color = "black"
         black_level = toners["black"]["raw_level"]
         toners["black"]["level"] = toners["black"]["level"] if toners["black"].get("level") is not None else black_level
     elif toners.get("black", {}).get("level") is not None:
+        legacy_toner_color = "black"
         black_level = toners["black"]["level"]
     else:
-        for t in toners.values():
+        legacy_toner_color = None
+        for ck, t in toners.items():
             if t.get("raw_level") is not None:
                 black_level = t["raw_level"]
+                legacy_toner_color = ck
                 break
             if t.get("level") is not None:
                 black_level = t["level"]
+                legacy_toner_color = ck
                 break
+
+    # ✅ سطحِ خامِ هر رنگ برای تشخیص خودکار تعویض/شارژ کارتریج (رویداد
+    # CARTRIDGE_CHANGED در _counters_event). فقط داده‌ی واقعی (raw_level) وارد
+    # می‌شود؛ برآوردهای نمایشی (مثل canon_status_code) رویداد جعلی نمی‌سازند.
+    toner_levels_for_events = {}
+    for ck in ("black", "cyan", "magenta", "yellow"):
+        _t = toners.get(ck) or {}
+        _rv = _t.get("raw_level")
+        if _rv is None:
+            continue
+        try:
+            toner_levels_for_events[ck] = int(_rv)
+        except (TypeError, ValueError):
+            continue
+
     prev_toner = prev.get("toner_level")
     paper_size = (toshiba_data or {}).get("paper_size")
     a3_total = (toshiba_data or {}).get("a3_total")
@@ -1477,6 +1497,7 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
     _counters_event(ip, total_for_event, prev, alerts, [a["code"] for a in alerts],
                     full_color=color, black_white=bw_for_event, paper_size=paper_size,
                     current_toner_level=black_level, prev_toner_level=prev_toner,
+                    toner_levels=toner_levels_for_events, legacy_toner_color=legacy_toner_color,
                     uptime=ut, a3_total=a3_total, a4_total=a4_total,
                     poll_timestamp=datetime.fromtimestamp(start_time).isoformat(),
                     paper_split=(toshiba_data or {}).get("paper_split"))
