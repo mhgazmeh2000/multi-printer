@@ -311,6 +311,47 @@ def _scan_toshiba_paper_map(ip, community, timeout, snmp_version):
     return "\n".join(lines) + "\n"
 
 
+def _scan_cartridge_identity(ip, community, timeout, snmp_version, brand_hint=None):
+    """کاوش شواهد «شناسه‌ی یکتای کارتریج» (Chip ID / سریال / صفحات‌باکارتریج).
+
+    از همان منطق واقعی runtime استفاده می‌کند (core/collectors/cartridge_id.py):
+    اولویت اول OIDهای تأییدشده در config/cartridge_id_map.json و سپس پنل وب.
+    در نبود شواهد، راهنمای فعال‌سازی چاپ می‌شود.
+    """
+    from core.collectors.cartridge_id import (
+        get_cartridge_identity_data, load_id_config, _snmp_oids_for)
+
+    cfg = load_id_config(force=True)
+    brand = brand_hint or ""
+    lines = ["\n---\n\n## 🔍 کاوش شناسه‌ی یکتای کارتریج (Chip ID / Serial / Supply Counter)\n"]
+    cfg_exists = os.path.exists(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "config", "cartridge_id_map.json"))
+    lines.append(f"- فایل نقشه‌ی OID تأییدشده (config/cartridge_id_map.json): "
+                 f"{'✅ یافت شد' if cfg_exists else '— موجود نیست (نمونه: cartridge_id_map.example.json)'}")
+    oids = _snmp_oids_for(ip, (brand or "").lower(), cfg)
+    if oids:
+        lines.append(f"- OIDهای تنظیم‌شده برای این دستگاه/برند: {oids}")
+
+    result = get_cartridge_identity_data(
+        ip=ip, brand=brand, community=community, snmp_version=snmp_version,
+        force_refresh=True) or {}
+    ids = result.get("ids") or {}
+    pages = result.get("supply_pages") or {}
+    lines.append(f"- منبع شواهد یافت‌شده: `{result.get('source', 'none')}`")
+    if ids or pages:
+        lines.append("\n| رنگ | سریال/ChipID | صفحات با این کارتریج |")
+        lines.append("|-----|--------------|----------------------|")
+        for ck in sorted(set(list(ids) + list(pages))):
+            lines.append(f"| {ck} | `{ids.get(ck, '—')}` | {pages.get(ck, '—')} |")
+    else:
+        lines.append(
+            "\n> ⚠️ برای این مدل شناسه‌ی عمومی پیدا نشد. اگر در پنل وب دستگاه یا برچسب کارتریج،\n"
+            "> شماره‌ی سریال/Chip ID می‌بینید: مقدار دقیق + آدرس صفحه (URL) + مدل دستگاه را ارسال کنید\n"
+            "> تا OID/الگوی اختصاصی در cartridge_id_map.json یا کد اضافه شود. تا آن زمان، تشخیص تعویض\n"
+            "> با fallback جهش سطح تونر انجام می‌شود.")
+    return "\n".join(lines) + "\n"
+
+
 def main():
     ap = argparse.ArgumentParser(description="Printer supply diagnostic dumper")
     ap.add_argument("ip")
@@ -327,6 +368,12 @@ def main():
     print(f"[..] probing {args.ip} (community={args.community!r}) ...")
     data = probe(args.ip, args.community, args.timeout, args.snmp_version)
     md = render_md(data)
+    try:
+        md += _scan_cartridge_identity(
+            args.ip, args.community, args.timeout, args.snmp_version,
+            brand_hint=(data.get("brand_hint") or None))
+    except Exception as exc:
+        md += f"\n## 🔍 کاوش شناسه‌ی کارتریج\n\nخطا در اجرای کاوش: {exc}\n"
     if args.paper_map:
         md += _scan_toshiba_paper_map(args.ip, args.community, args.timeout, args.snmp_version)
     out = f"diagnose_{args.ip}.md"

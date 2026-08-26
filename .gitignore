@@ -40,6 +40,8 @@ secrets.json
 cookies.txt
 # نقشه‌ی واقعی ساب‌نت‌ها — نسخه‌ی نمونه: office_subnets.example.json
 config/office_subnets.json
+# نقشه‌ی OIDهای شناسه کارتریج (تأییدشده روی ناوگان) — نمونه: cartridge_id_map.example.json
+config/cartridge_id_map.json
 
 # ===== فایل‌های سیستم‌عامل =====
 Thumbs.db

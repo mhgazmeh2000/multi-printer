@@ -155,6 +155,41 @@ def _dump_json_list(value) -> str:
     return json.dumps(cleaned, ensure_ascii=False)
 
 
+def _load_cartridge_id_state(value):
+    """پارس JSON وضعیت شناسه‌های کارتریج → کلیدهای cartridge_ids / cart_supply_pages."""
+    out = {}
+    if not value:
+        return out
+    try:
+        data = json.loads(value)
+        if isinstance(data, dict):
+            ids = data.get("ids")
+            pages = data.get("supply_pages")
+            if isinstance(ids, dict) and ids:
+                out["cartridge_ids"] = ids
+            if isinstance(pages, dict) and pages:
+                out["cart_supply_pages"] = pages
+    except Exception:
+        pass
+    return out
+
+
+def _dump_cartridge_id_state(data: dict):
+    """ساخت JSON ستون از کلیدهای cartridge_ids / cart_supply_pages در data."""
+    ids = data.get("cartridge_ids")
+    pages = data.get("cart_supply_pages")
+    if not isinstance(ids, dict):
+        ids = {}
+    if not isinstance(pages, dict):
+        pages = {}
+    if not ids and not pages:
+        return None
+    try:
+        return json.dumps({"ids": ids, "supply_pages": pages}, ensure_ascii=False)
+    except Exception:
+        return None
+
+
 def _load_json_list(value):
     if not value:
         return []
@@ -239,9 +274,15 @@ def init_db():
             a3_total INTEGER,
             a4_total INTEGER,
             alert_codes TEXT,
+            cartridge_id_state TEXT,
             updated_at TEXT
         )
     ''')
+    # اضافه کردن ستون cartridge_id_state به جداول قدیمی (شناسه‌های کارتریج)
+    try:
+        c.execute("ALTER TABLE printer_counters ADD COLUMN cartridge_id_state TEXT")
+    except sqlite3.OperationalError:
+        pass
     # اضافه کردن ستون device_type به جداول قدیمی
     try:
         c.execute("ALTER TABLE printer_counters ADD COLUMN device_type TEXT")
@@ -912,6 +953,7 @@ def ensure_printer_counters_columns():
         "ALTER TABLE printer_counters ADD COLUMN force_estimate INTEGER DEFAULT 0",
         "ALTER TABLE printer_counters ADD COLUMN yield_learning_failures INTEGER DEFAULT 0",
         "ALTER TABLE printer_counters ADD COLUMN last_alert_codes TEXT DEFAULT NULL",
+        "ALTER TABLE printer_counters ADD COLUMN cartridge_id_state TEXT DEFAULT NULL",
     )
     try:
         with db_connection(commit=True) as conn:
@@ -944,7 +986,7 @@ _COUNTERS_COLS = (
     "device_type, print_total, full_color, black_white, toner_level, manual_override, "
     "override_color, override_base_level, override_start_total, override_start_toner, "
     "yield_per_page, force_estimate, yield_learning_failures, last_alert_codes, "
-    "a3_total, a4_total, alert_codes, updated_at"
+    "a3_total, a4_total, alert_codes, cartridge_id_state, updated_at"
 )
 
 
@@ -976,7 +1018,8 @@ def load_printer_counters(ip: str) -> Optional[dict]:
             "a3_total": row[14],
             "a4_total": row[15],
             "alert_codes": _load_json_list(row[16]),
-            "updated_at": row[17],
+            **_load_cartridge_id_state(row[17]),
+            "updated_at": row[18],
         }
     except Exception as e:
         log.exception(f"Error loading counters for {ip}: {e}")
@@ -994,8 +1037,8 @@ def save_printer_counters(ip: str, data: dict):
                 (ip, device_type, print_total, full_color, black_white, toner_level, manual_override,
                  override_color, override_base_level, override_start_total, override_start_toner,
                  yield_per_page, force_estimate, yield_learning_failures,
-                 last_alert_codes, a3_total, a4_total, alert_codes, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 last_alert_codes, a3_total, a4_total, alert_codes, cartridge_id_state, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 ip,
                 data.get("device_type"),
@@ -1015,6 +1058,7 @@ def save_printer_counters(ip: str, data: dict):
                 data.get("a3_total"),
                 data.get("a4_total"),
                 json.dumps(data.get("alert_codes", [])),
+                _dump_cartridge_id_state(data),
                 updated_at,
             ))
     except Exception as e:

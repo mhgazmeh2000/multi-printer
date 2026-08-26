@@ -1479,6 +1479,21 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
         except (TypeError, ValueError):
             continue
 
+    # ✅ شناسه‌ی یکتای کارتریج (ChipID/سریال از SNMP/Web) — سیگنال قطعی تعویض.
+    # کش ۱۰دقیقه‌ای دارد و در نبود شواهد خالی برمی‌گرداند؛ fallback همان مسیر
+    # جهش سطح است. خواندن خطا هم هرگز چرخه‌ی poll را خراب نمی‌کند.
+    cartridge_ids_event = None
+    cartridge_pages_event = None
+    try:
+        from core.collectors.cartridge_id import get_cartridge_identity_data
+        _cid = get_cartridge_identity_data(
+            ip=ip, brand=brand, community=community, snmp_version=snmp_version)
+        if _cid:
+            cartridge_ids_event = _cid.get("ids") or {}
+            cartridge_pages_event = _cid.get("supply_pages") or {}
+    except Exception as exc:
+        log.debug("  [%s] cartridge identity read failed: %s", ip, exc)
+
     prev_toner = prev.get("toner_level")
     paper_size = (toshiba_data or {}).get("paper_size")
     a3_total = (toshiba_data or {}).get("a3_total")
@@ -1498,6 +1513,7 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
                     full_color=color, black_white=bw_for_event, paper_size=paper_size,
                     current_toner_level=black_level, prev_toner_level=prev_toner,
                     toner_levels=toner_levels_for_events, legacy_toner_color=legacy_toner_color,
+                    cartridge_ids=cartridge_ids_event, cartridge_supply_pages=cartridge_pages_event,
                     uptime=ut, a3_total=a3_total, a4_total=a4_total,
                     poll_timestamp=datetime.fromtimestamp(start_time).isoformat(),
                     paper_split=(toshiba_data or {}).get("paper_split"))

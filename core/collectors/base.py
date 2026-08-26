@@ -25,6 +25,10 @@ MAX_REASONABLE_DELTA = max(100, int(_BASE_MAX_PER_30S * (POLL_INTERVAL / 30.0)))
 MIN_DELTA_FOR_FALLBACK = 1        # حداقل دلتا برای fallback مبتنی بر total
 MIN_VALID_TOTAL_FOR_FIRST_POLL = 50  # اگر total < 50 باشد، شاید پرینتر جدید است
 MAX_TOTAL_AFTER_RESET = 5000      # اگر مقدار جدید کمتر از این باشد و قبلی بزرگ بود، ریست شده
+# تشخیص تعویض کارتریج از روی ریستِ «صفحات چاپ‌شده با این کارتریج» (EWS و…):
+# عدد فقط صعودی است؛ افت معنی‌دار به زیر نسبتِ ریست یعنی کارتریج تازه نصب شده.
+CART_ID_RESET_MIN_PAGES = 100     # حداقل صفحات ثبت‌شده‌ی قبلی تا ریست معنی‌دار باشد
+CART_ID_RESET_RATIO = 0.5         # مقدار جدید < ۵۰٪ مقدار قبلی ⇒ ریست/تعویض
 
 
 def _elapsed_since_prev(prev: dict) -> float:
@@ -245,7 +249,8 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
                     poll_timestamp: str = None,
                     paper_split: dict = None,
                     paper_detail: dict = None, func_split: dict = None,
-                    toner_levels: dict = None, legacy_toner_color: str = None):
+                    toner_levels: dict = None, legacy_toner_color: str = None,
+                    cartridge_ids: dict = None, cartridge_supply_pages: dict = None):
     """
     ثبت رویدادهای چاپ/هشدار با محافظت در برابر داده‌های مشکوک SNMP.
 
@@ -548,6 +553,86 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
         except (TypeError, ValueError):
             pass
 
+    # ─── تشخیص تعویض کارتریج بر اساس شناسه‌ی یکتا (سیگنال قطعی) ──────────
+    # تغییر Chip ID / سریال کارتریج، یا ریست «صفحات چاپ‌شده با این کارتریج»،
+    # تعویض را قطعی می‌کند: رویداد همان poll ثبت می‌شود (بدون انتظار ۲poll) و
+    # pendingهای مسیر جهشِ سطح برای آن رنگ پاک می‌شود تا رویداد دوم ساخته نشود.
+    # بدون داده‌ی قبلی (اولین مشاهده) فقط baseline ساخته می‌شود — رویداد نه.
+    # خواندن ناموفق (کلید نبود) مقدار قبلی را پاک نمی‌کند (merge نگه‌داشته).
+    cart_id_changed_colors = set()
+    cart_id_merged = None
+    cart_pages_merged = None
+    if cartridge_ids is not None or cartridge_supply_pages is not None:
+        cid_colors = {"black": "مشکی", "cyan": "آبی", "magenta": "سرخابی", "yellow": "زرد"}
+        prev_ids = prev.get("cartridge_ids") or {}
+        prev_pages = prev.get("cart_supply_pages") or {}
+        if not isinstance(prev_ids, dict):
+            prev_ids = {}
+        if not isinstance(prev_pages, dict):
+            prev_pages = {}
+        cart_id_merged = dict(prev_ids)
+        cart_pages_merged = dict(prev_pages)
+        if not prev.get("manual_override"):
+            for ck, raw_sid in (cartridge_ids or {}).items():
+                if ck not in cid_colors:
+                    continue
+                try:
+                    sid = str(raw_sid).strip()
+                except Exception:
+                    continue
+                if not sid:
+                    continue
+                cart_id_merged[ck] = sid
+                prev_sid = prev_ids.get(ck)
+                if prev_sid and sid != prev_sid:
+                    cart_id_changed_colors.add(ck)
+                    add_event(ip, "CARTRIDGE_CHANGED", {
+                        "message": (f"تشخیص قطعی تعویض کارتریج {cid_colors[ck]}: "
+                                    f"شناسه‌ی تراشه تغییر کرد ({prev_sid} → {sid})"),
+                        "severity": "info",
+                        "auto_detected": True, "confirmed": True,
+                        "detection": "chip_id",
+                        "color": ck, "color_fa": cid_colors[ck],
+                        "prev_cartridge_id": prev_sid, "cartridge_id": sid,
+                    })
+            for ck, val in (cartridge_supply_pages or {}).items():
+                if ck not in cid_colors:
+                    continue
+                try:
+                    cur_p = int(val)
+                except (TypeError, ValueError):
+                    continue
+                cart_pages_merged[ck] = cur_p
+                try:
+                    prev_p = int(prev_pages[ck]) if prev_pages.get(ck) is not None else None
+                except (TypeError, ValueError):
+                    prev_p = None
+                if (prev_p is not None and prev_p >= CART_ID_RESET_MIN_PAGES
+                        and cur_p < prev_p * CART_ID_RESET_RATIO):
+                    cart_id_changed_colors.add(ck)
+                    add_event(ip, "CARTRIDGE_CHANGED", {
+                        "message": (f"تشخیص تعویض کارتریج {cid_colors[ck]}: شمارش «صفحات "
+                                    f"با کارتریج» ریست شد ({prev_p:,} → {cur_p:,})"),
+                        "severity": "info",
+                        "auto_detected": True, "confirmed": True,
+                        "detection": "supply_pages_reset",
+                        "color": ck, "color_fa": cid_colors[ck],
+                        "prev_supply_pages": prev_p, "supply_pages": cur_p,
+                    })
+
+        # پاکسازی pendingهای مسیر سطح برای رنگ‌های تعویض‌شده تا دفعه‌ی بعد
+        # تأیید دوپالی، همین تعویض را بار دوم گزارش نکند (رویداد یک‌شوت).
+        if cart_id_changed_colors:
+            pend_prev = prev.get("cart_change_pending")
+            if isinstance(pend_prev, dict):
+                for ck in cart_id_changed_colors:
+                    pend_prev.pop(ck, None)
+            if legacy_toner_color in cart_id_changed_colors:
+                prev["pending_refill_new_toner"] = None
+                prev["pending_refill_prev_toner"] = None
+                prev["pending_refill_total"] = None
+                prev["pending_refill_hits"] = None
+
     # ─── REFILL خودکار دو مرحله‌ای: با یک poll قطعی ثبت نکن ─────────
     refill_confirmed = False
     pending_refill_new = prev.get("pending_refill_new_toner")
@@ -619,6 +704,10 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
         cart_pending_next = {}
         for color_key, cur_val in toner_levels.items():
             if color_key not in fa_colors or color_key == legacy_toner_color:
+                continue
+            if color_key in cart_id_changed_colors:
+                # تعویض همین رنگ همین poll با شواهد قطعی (تراشه/ریست) ثبت شد؛
+                # کاندیدِ جهشِ سطح برایش ساخته نشود تا رویداد دوم نیاید.
                 continue
             try:
                 cur = int(cur_val)
@@ -850,7 +939,10 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
     }
     if current_toner_level is not None and prev_toner_level is not None:
         try:
-            if int(current_toner_level) - int(prev_toner_level) > 20 and delta_pages < 50 and not refill_confirmed:
+            # تعویضِ شناسه‌محورِ رنگ لگاسی همین poll ثبت شده → کاندید REFILL نه
+            skip_legacy_refill = legacy_toner_color in cart_id_changed_colors
+            if (int(current_toner_level) - int(prev_toner_level) > 20 and delta_pages < 50
+                    and not refill_confirmed and not skip_legacy_refill):
                 new_prev["pending_refill_prev_toner"] = prev_toner_level
                 new_prev["pending_refill_new_toner"] = current_toner_level
                 new_prev["pending_refill_total"] = total
@@ -875,6 +967,12 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
         new_prev["toner_levels"] = cart_merged_levels
         new_prev["cart_change_pending"] = cart_pending_next if cart_pending_next else None
         new_prev["legacy_toner_color"] = legacy_toner_color
+    if cartridge_ids is not None or cartridge_supply_pages is not None:
+        # شناسه‌های کارتریج — این‌ها در دیتابیس هم persist می‌شوند (ستون
+        # cartridge_id_state) تا تعویضِ در زمان خاموش/ری‌استارت سرور هم با
+        # مقایسه‌ی آخرین شناسه‌ی ذخیره‌شده در اولین poll برخورد شود.
+        new_prev["cartridge_ids"] = cart_id_merged
+        new_prev["cart_supply_pages"] = cart_pages_merged
     if a3_total is not None:
         new_prev["a3_total"] = a3_total
     if a4_total is not None:
