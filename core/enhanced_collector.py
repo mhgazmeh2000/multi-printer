@@ -1486,8 +1486,20 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
     cartridge_pages_event = None
     try:
         from core.collectors.cartridge_id import get_cartridge_identity_data
+        # اگر برند ذخیره‌شده خالی/نامعتبر باشد، از sysDescr (معتبرترین منبع) استنتاج کن
+        _cid_brand = brand
+        if _cid_brand not in ("hp", "canon", "brother", "toshiba"):
+            _sd = (sys_desc_str or "").lower()
+            if "hp" in _sd or "laserjet" in _sd or "hewlett" in _sd:
+                _cid_brand = "hp"
+            elif "canon" in _sd:
+                _cid_brand = "canon"
+            elif "brother" in _sd:
+                _cid_brand = "brother"
+            elif "toshiba" in _sd:
+                _cid_brand = "toshiba"
         _cid = get_cartridge_identity_data(
-            ip=ip, brand=brand, community=community, snmp_version=snmp_version)
+            ip=ip, brand=_cid_brand, community=community, snmp_version=snmp_version)
         if _cid:
             cartridge_ids_event = _cid.get("ids") or {}
             cartridge_pages_event = _cid.get("supply_pages") or {}

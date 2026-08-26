@@ -38,8 +38,8 @@ from core.snmp.protocol import snmp_get_with_fallback
 
 log = logging.getLogger("PrinterMonitor")
 
-_TTL_FOUND = 600.0    # شناسه پیدا شد: ۱۰ دقیقه کش
-_TTL_MISS = 3600.0    # چیزی پیدا نشد: ۱ ساعت بک‌آف (دستگاهها دیر عوض می‌شوند)
+_TTL_FOUND = 180.0    # شناسه پیدا شد: ۳ دقیقه کش (حداکثر تاخیر تشخیص تعویض از مسیر شناسه)
+_TTL_MISS = 900.0     # چیزی پیدا نشد: ۱۵ دقیقه بک‌آف
 _cache = {}           # ip -> (expire_ts, result_dict)
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
