@@ -160,7 +160,26 @@ def encode_length(n: int) -> bytes:
         return bytes([0x82, (n >> 8) & 0xFF, n & 0xFF])
 
 
-def build_snmp_get_v1(community: str, oid: str, request_id: int = 1) -> bytes:
+def decode_oid_bytes(data: bytes) -> str:
+    """解码 بایت‌های OID به رشته‌ی نقطه‌ای (برای walk و getnext)."""
+    if not data:
+        return ""
+    try:
+        first = data[0]
+        parts = [str(first // 40), str(first % 40)]
+        val = 0
+        for b in data[1:]:
+            val = (val << 7) | (b & 0x7F)
+            if not (b & 0x80):
+                parts.append(str(val))
+                val = 0
+        return ".".join(parts)
+    except Exception:
+        return ""
+
+
+def _build_snmp_pdu(community: str, oid: str, request_id: int, version: int, pdu_tag: int) -> bytes:
+    """ساخت PDU عمومی (GET با tag 0xa0 / GETNEXT با tag 0xa1)."""
     ob = encode_oid(oid)
     oid_tlv = b'\x06' + encode_length(len(ob)) + ob
     vb = b'\x30' + encode_length(len(oid_tlv) + 2) + oid_tlv + b'\x05\x00'
@@ -169,27 +188,27 @@ def build_snmp_get_v1(community: str, oid: str, request_id: int = 1) -> bytes:
     rb = rid.to_bytes((rid.bit_length() + 8) // 8, 'big')
     rid_tlv = b'\x02' + encode_length(len(rb)) + rb
     pdu_body = rid_tlv + b'\x02\x01\x00\x02\x01\x00' + vbl
-    pdu = b'\xa0' + encode_length(len(pdu_body)) + pdu_body
+    pdu = bytes([pdu_tag]) + encode_length(len(pdu_body)) + pdu_body
     cb = community.encode()
     comm_tlv = b'\x04' + encode_length(len(cb)) + cb
     msg_body = b'\x02\x01\x00' + comm_tlv + pdu
     return b'\x30' + encode_length(len(msg_body)) + msg_body
 
 
+def build_snmp_get_v1(community: str, oid: str, request_id: int = 1) -> bytes:
+    return _build_snmp_pdu(community, oid, request_id, 1, 0xa0)
+
+
 def build_snmp_get_v2c(community: str, oid: str, request_id: int = 1) -> bytes:
-    ob = encode_oid(oid)
-    oid_tlv = b'\x06' + encode_length(len(ob)) + ob
-    vb = b'\x30' + encode_length(len(oid_tlv) + 2) + oid_tlv + b'\x05\x00'
-    vbl = b'\x30' + encode_length(len(vb)) + vb
-    rid = request_id & 0x7FFFFFFF
-    rb = rid.to_bytes((rid.bit_length() + 8) // 8, 'big')
-    rid_tlv = b'\x02' + encode_length(len(rb)) + rb
-    pdu_body = rid_tlv + b'\x02\x01\x00\x02\x01\x00' + vbl
-    pdu = b'\xa0' + encode_length(len(pdu_body)) + pdu_body
-    cb = community.encode()
-    comm_tlv = b'\x04' + encode_length(len(cb)) + cb
-    msg_body = b'\x02\x01\x01' + comm_tlv + pdu
-    return b'\x30' + encode_length(len(msg_body)) + msg_body
+    return _build_snmp_pdu(community, oid, request_id, 2, 0xa0)
+
+
+def build_snmp_getnext_v1(community: str, oid: str, request_id: int = 1) -> bytes:
+    return _build_snmp_pdu(community, oid, request_id, 1, 0xa1)
+
+
+def build_snmp_getnext_v2c(community: str, oid: str, request_id: int = 1) -> bytes:
+    return _build_snmp_pdu(community, oid, request_id, 2, 0xa1)
 
 
 def parse_snmp_response_debug(data: bytes, expected_request_id=None):
@@ -300,6 +319,9 @@ def parse_snmp_response_debug(data: bytes, expected_request_id=None):
             "raw_oid_hex": oid_bytes.hex(),
         }
 
+        # OID پاسخ (برای walk/getnext) — قبل از خواندن value استخراج می‌شود
+        result["response_oid"] = decode_oid_bytes(oid_bytes)
+
         if vt == 0x02:
             result["value"] = 0 if vl == 0 else int.from_bytes(vb, 'big', signed=True)
             result["value_type"] = "integer"
@@ -334,6 +356,63 @@ def parse_snmp_response_debug(data: bytes, expected_request_id=None):
 def parse_snmp_response(data: bytes, expected_request_id=None):
     parsed = parse_snmp_response_debug(data, expected_request_id=expected_request_id)
     return parsed.get("value") if parsed.get("status") == "ok" else None
+
+
+def snmp_getnext(ip: str, oid: str, community: str = "public",
+                 port: int = 161, timeout: float = 3.0, request_id: int = 1, version: int = 2):
+    """درخواست GETNEXT؛ خروجی (oid_بعدی، مقدار) یا None."""
+    s = None
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(timeout)
+        pkt = build_snmp_getnext_v1(community, oid, request_id) if version == 1 \
+            else build_snmp_getnext_v2c(community, oid, request_id)
+        s.sendto(pkt, (ip, port))
+        resp, _ = s.recvfrom(65535)
+        parsed = parse_snmp_response_debug(resp, expected_request_id=request_id)
+        if parsed.get("status") != "ok":
+            return None
+        next_oid = parsed.get("response_oid")
+        value = parsed.get("value")
+        if not next_oid or value is None:
+            return None
+        return next_oid, value
+    except Exception:
+        return None
+    finally:
+        if s:
+            s.close()
+
+
+def snmp_walk(ip: str, prefix: str, community: str = "public",
+              port: int = 161, timeout: float = 2.0, max_vars: int = 48,
+              version: int | None = None):
+    """walk محدود یک زیرشاخه با GETNEXT؛ خروجی [(oid, value), ...].
+
+    محدودیت max_vars تضمین می‌کند شاخه‌های بزرگ vendor باعث حلقه‌ی بی‌پایان
+    یا سربار شبکه نشوند. نسخه‌ی SNMP در صورت نبود از کش/تشخیص خودکار می‌آید.
+    """
+    prefix = prefix.strip(".")
+    if not prefix:
+        return []
+    if version not in (1, 2):
+        version = _detect_snmp_version(ip, community, port, probe_timeout=1.5)
+        if version is None:
+            return []
+    results = []
+    current = prefix
+    for i in range(max_vars):
+        nxt = snmp_getnext(ip, current, community, port, timeout,
+                           request_id=i + 1, version=version)
+        if not nxt:
+            break
+        nxt_oid, value = nxt
+        # خروج از زیرشاخه
+        if nxt_oid != prefix and not nxt_oid.startswith(prefix + "."):
+            break
+        results.append((nxt_oid, value))
+        current = nxt_oid
+    return results
 
 
 def snmp_get(ip: str, oid: str, community: str = "public",

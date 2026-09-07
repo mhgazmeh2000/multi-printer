@@ -1357,6 +1357,20 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
                 toners[color_key]["usage"] = usage_raw
                 toners[color_key]["usage_m"] = round(usage_raw / 1_000_000, 2)
 
+    # ─── غنی‌سازی نام کارتریج: اگر toner نام ندارد از standard MIB بخوان ──
+    _color_mib_idx = {"black": 1, "cyan": 2, "magenta": 3, "yellow": 4}
+    for col, idx in _color_mib_idx.items():
+        t = toners.get(col)
+        if t and not t.get("name"):
+            try:
+                desc = snmp_get_with_fallback(
+                    ip, f"1.3.6.1.2.1.43.11.1.1.6.1.{idx}", community,
+                    version=snmp_version, timeout=1.5)
+                if desc and str(desc).strip():
+                    t["name"] = str(desc).strip()
+            except Exception:
+                pass
+
     # ─── اعمال override دستی تونر بر اساس مصرف صفحات ─────────────────
     prev_override = store._prev.get(ip) or {}
     if prev_override.get('yield_per_page', 2000) == 2000 and not prev_override.get('force_estimate'):
@@ -1484,6 +1498,9 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
     # جهش سطح است. خواندن خطا هم هرگز چرخه‌ی poll را خراب نمی‌کند.
     cartridge_ids_event = None
     cartridge_pages_event = None
+    cartridge_id_source = "none"
+    cartridge_signal_quality = {}
+    cartridge_identity_type = {}
     try:
         from core.collectors.cartridge_id import get_cartridge_identity_data
         # اگر برند ذخیره‌شده خالی/نامعتبر باشد، از sysDescr (معتبرترین منبع) استنتاج کن
@@ -1503,6 +1520,18 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
         if _cid:
             cartridge_ids_event = _cid.get("ids") or {}
             cartridge_pages_event = _cid.get("supply_pages") or {}
+            cartridge_id_source = _cid.get("source") or "none"
+            cartridge_signal_quality = _cid.get("signal_quality") or {}
+            cartridge_identity_type = _cid.get("identity_type") or {}
+        # 🔍 کشف خودکار: اگر هنوز هیچ شناسه‌ای برای این دستگاه پیدا نشده و برند
+        # شناخته‌شده است، یک‌بار به صف کشف OID اضافه می‌شود (worker پس‌زمینه،
+        # dedup + cooldown — هیچ سرباری روی خود poll ندارد).
+        if not cartridge_ids_event and _cid_brand in ("hp", "canon", "brother", "toshiba"):
+            try:
+                from core.collectors.cartridge_discovery import queue_discovery
+                queue_discovery(ip, _cid_brand, community, snmp_version)
+            except Exception as exc:
+                log.debug("  [%s] cartridge discovery queue failed: %s", ip, exc)
     except Exception as exc:
         log.debug("  [%s] cartridge identity read failed: %s", ip, exc)
 
@@ -1521,11 +1550,22 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
         total_for_event = total
 
     # ✅ باگ #2: ثبت رویداد اول (قبل از نوشتن DB)
+    # استخراج نام supply از تونرها برای تشخیص تعویض از روی نام
+    _current_supply_names = {}
+    for _ck, _tv in (toners or {}).items():
+        if _ck in ('drum', 'opc'):
+            continue
+        _tn = _tv.get('name') if isinstance(_tv, dict) else None
+        if _tn:
+            _current_supply_names[_ck] = str(_tn).strip()
+
     _counters_event(ip, total_for_event, prev, alerts, [a["code"] for a in alerts],
                     full_color=color, black_white=bw_for_event, paper_size=paper_size,
                     current_toner_level=black_level, prev_toner_level=prev_toner,
                     toner_levels=toner_levels_for_events, legacy_toner_color=legacy_toner_color,
                     cartridge_ids=cartridge_ids_event, cartridge_supply_pages=cartridge_pages_event,
+                    signal_quality=cartridge_signal_quality,
+                    supply_names=_current_supply_names or None,
                     uptime=ut, a3_total=a3_total, a4_total=a4_total,
                     poll_timestamp=datetime.fromtimestamp(start_time).isoformat(),
                     paper_split=(toshiba_data or {}).get("paper_split"))
@@ -1657,4 +1697,9 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
         "trays": trays,
         "toners": toners,
         "alerts": alerts,
+        # شناسه‌ی یکتای کارتریج + منبع تشخیص (برای API/داشبورد)
+        "cartridge_ids": cartridge_ids_event or {},
+        "cartridge_id_source": cartridge_id_source,
+        "cartridge_signal_quality": cartridge_signal_quality or {},
+        "cartridge_identity_type": cartridge_identity_type or {},
     }

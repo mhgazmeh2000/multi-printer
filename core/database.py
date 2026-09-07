@@ -156,7 +156,7 @@ def _dump_json_list(value) -> str:
 
 
 def _load_cartridge_id_state(value):
-    """پارس JSON وضعیت شناسه‌های کارتریج → کلیدهای cartridge_ids / cart_supply_pages."""
+    """پارس وضعیت کارتریج شامل شناسه‌ها، شمارنده‌ها و state per-slot."""
     out = {}
     if not value:
         return out
@@ -169,23 +169,29 @@ def _load_cartridge_id_state(value):
                 out["cartridge_ids"] = ids
             if isinstance(pages, dict) and pages:
                 out["cart_supply_pages"] = pages
+            state = data.get("cartridge_state")
+            if isinstance(state, dict) and state:
+                out["cartridge_state"] = state
     except Exception:
         pass
     return out
 
 
 def _dump_cartridge_id_state(data: dict):
-    """ساخت JSON ستون از کلیدهای cartridge_ids / cart_supply_pages در data."""
+    """ساخت JSON ستون از snapshot کارتریج برای round-trip کامل state."""
     ids = data.get("cartridge_ids")
     pages = data.get("cart_supply_pages")
     if not isinstance(ids, dict):
         ids = {}
     if not isinstance(pages, dict):
         pages = {}
-    if not ids and not pages:
+    state = data.get("cartridge_state")
+    if not isinstance(state, dict):
+        state = {}
+    if not ids and not pages and not state:
         return None
     try:
-        return json.dumps({"ids": ids, "supply_pages": pages}, ensure_ascii=False)
+        return json.dumps({"ids": ids, "supply_pages": pages, "cartridge_state": state}, ensure_ascii=False)
     except Exception:
         return None
 
@@ -710,7 +716,10 @@ def add_event(ip: str, etype: str, details: dict):
         severity = details.get("severity", "info")
         paper_size = details.get("paper_size")
         username = details.get("username")
-        other = {k: v for k, v in details.items() if k not in _LOG_TOP_LEVEL_FIELDS}
+        # Keep the complete contract payload in JSON. The relational columns
+        # are indexes for existing consumers; details remains the lossless
+        # source for evidence and future event fields.
+        other = dict(details)
         printer_name = None
         with store.printers_lock:
             for p in store.PRINTERS:
@@ -722,14 +731,18 @@ def add_event(ip: str, etype: str, details: dict):
             # configurable via env var `DB_DEBOUNCE_WINDOW_SECS` (seconds)
             # default: 60s (short window). Set to 600 for 10 minutes if desired.
             DEBOUNCE_WINDOW_SECS = int(os.getenv("DB_DEBOUNCE_WINDOW_SECS", "60"))
+            # ALERT events get a longer debounce (4 hours) to prevent repeated
+            # toner low/empty notifications for the same printer+color
+            ALERT_DEBOUNCE_SECS = int(os.getenv("DB_ALERT_DEBOUNCE_SECS", "14400"))
             raw_types = os.getenv(
                 "DB_DEBOUNCE_TYPES",
                 "SNMP_COUNTER_READ_ERROR,SNMP_ERROR,COUNTER_ANOMALY,PRINT_OVERFLOW,PRINT_GAP,SNMP_TIMEOUT,SNMP_RETRY,TONER_ESTIMATE"
             ) or ""
             DEBOUNCE_TYPES = set([s.strip() for s in raw_types.split(",") if s.strip()])
 
-            if etype in DEBOUNCE_TYPES:
-                cutoff = (datetime.now() - timedelta(seconds=DEBOUNCE_WINDOW_SECS)).isoformat()
+            if etype in DEBOUNCE_TYPES or etype == 'ALERT':
+                debounce_secs = ALERT_DEBOUNCE_SECS if etype == 'ALERT' else DEBOUNCE_WINDOW_SECS
+                cutoff = (datetime.now() - timedelta(seconds=debounce_secs)).isoformat()
                 with db_connection() as conn:
                     # prefer code match when available (faster indexable comparison)
                     if code is not None:
@@ -754,6 +767,16 @@ def add_event(ip: str, etype: str, details: dict):
             log.debug("debounce check failed, proceeding to add event")
 
         with db_connection(commit=True) as conn:
+            if etype == "CARTRIDGE_CHANGED":
+                event_id = details.get("event_id") or details.get("id")
+                if event_id:
+                    existing = conn.execute(
+                        "SELECT 1 FROM logs WHERE printer_ip=? AND type='CARTRIDGE_CHANGED' AND json_extract(details, '$.event_id')=? LIMIT 1",
+                        (ip, str(event_id)),
+                    ).fetchone()
+                    if existing:
+                        log.debug("Skipped duplicate CARTRIDGE_CHANGED for %s with event_id=%s", ip, event_id)
+                        return
             if etype == "PRINT":
                 prev_total = details.get("prev_total")
                 current_total = details.get("current_total")
@@ -793,6 +816,29 @@ def add_event(ip: str, etype: str, details: dict):
                             ip, prev_total, current_total,
                         )
                         return
+            # ✅ Semantic dedup for COUNTER_RESET: same printer + same transition = skip
+            if etype == "COUNTER_RESET":
+                prev_total_cr = details.get("prev_total")
+                current_total_cr = details.get("current_total")
+                if prev_total_cr is not None and current_total_cr is not None:
+                    cutoff_cr = (datetime.now() - timedelta(seconds=300)).isoformat()
+                    dup_cr = conn.execute(
+                        """
+                        SELECT 1 FROM logs
+                        WHERE printer_ip = ? AND type = 'COUNTER_RESET' AND timestamp >= ?
+                          AND json_extract(details, '$.prev_total') = ?
+                          AND json_extract(details, '$.current_total') = ?
+                        LIMIT 1
+                        """,
+                        (ip, cutoff_cr, prev_total_cr, current_total_cr),
+                    ).fetchone()
+                    if dup_cr:
+                        log.debug(
+                            "Skipped duplicate COUNTER_RESET for %s (%s -> %s)",
+                            ip, prev_total_cr, current_total_cr,
+                        )
+                        return
+
             conn.execute('''
                 INSERT INTO logs (printer_ip, printer_name, timestamp, type, message,
                                   pages, color, code, severity, paper_size, username, details)
@@ -805,6 +851,7 @@ def add_event(ip: str, etype: str, details: dict):
 
 
 def _row_to_dict(row) -> dict:
+    details = json.loads(row[11] or "{}") if row[11] else {}
     return {
         "printer_ip":   row[0],
         "printer_name": row[1],
@@ -817,7 +864,8 @@ def _row_to_dict(row) -> dict:
         "severity":     row[8],
         "paper_size":   row[9],
         "username":     row[10],
-        **json.loads(row[11] or "{}"),
+        "details": details,
+        **details,
     }
 
 

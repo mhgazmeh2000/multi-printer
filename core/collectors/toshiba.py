@@ -236,6 +236,18 @@ def collect_toshiba(ip: str, name: str, community: str, start: float) -> dict:
         except Exception as e:
             _log_validation_error(ip, "walk_failed", str(e))
     
+    # خواندن نام کارتریج از standard MIB (prtMarkerSuppliesDescription)
+    supply_names = {}
+    _color_mib_idx = {"cyan": 2, "magenta": 3, "yellow": 4, "black": 1}
+    _g_toshiba = lambda oid, timeout=2.0: snmp_get_with_fallback(ip, oid, community, version=snmp_version, timeout=timeout)
+    for col, idx in _color_mib_idx.items():
+        try:
+            t_name = ss(_g_toshiba(f"1.3.6.1.2.1.43.11.1.1.6.1.{idx}"), "")
+            if t_name:
+                supply_names[col] = t_name
+        except Exception:
+            pass
+
     toners = {}
     for col, ne_key in [("cyan","toner_cyan_status"),("magenta","toner_magenta_status"),
                         ("yellow","toner_yellow_status"),("black","toner_black_status")]:
@@ -300,6 +312,7 @@ def collect_toshiba(ip: str, name: str, community: str, start: float) -> dict:
             "status": st,
             "usage": usage,
             "usage_m": round(usage / 1_000_000, 2),
+            "name": supply_names.get(col, f"{col} toner"),
             "source": source,
         }
 

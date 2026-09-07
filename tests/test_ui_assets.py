@@ -55,6 +55,13 @@ class UiAssetConsistencyTests(unittest.TestCase):
         self.assertIn("error", body)
         self.assertRegex(body, r"error:\s*'e'")
 
+    def test_cartridge_identity_display_uses_backend_value_only(self):
+        content = _read(os.path.join(os.path.dirname(__file__), "..", "web", "static", "js", "dashboard.js"))
+        self.assertIn("p.cartridge_identity_type", content)
+        self.assertIn("const identityValue = hasValidIdentity ? String(cartChipId) : 'N/A';", content)
+        self.assertIn("شناسه‌ی معتبر Chip ID/Serial برای این Cartridge در backend موجود نیست", content)
+        self.assertNotIn("title=\"سریال دستگاه (Toshiba — بدون شناسه‌ی تراشه)\"", content)
+
 
 if __name__ == "__main__":
     unittest.main()

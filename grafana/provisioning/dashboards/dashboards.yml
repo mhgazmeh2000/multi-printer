@@ -1,0 +1,16 @@
+# Grafana dashboard provisioning
+# Copy this to /etc/grafana/provisioning/dashboards/
+
+apiVersion: 1
+
+providers:
+  - name: "Printer Monitoring"
+    orgId: 1
+    folder: "Printer Fleet"
+    type: file
+    disableDeletion: false
+    editable: true
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

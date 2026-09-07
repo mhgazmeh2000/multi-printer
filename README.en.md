@@ -57,6 +57,12 @@ Built to track online/offline status, print counters, toner levels, paper trays,
 
 ### 📜 Events & logs
 - Automatic `PRINT` / `STATUS` / `ALERT` / `REFILL` / `SERVICE` events
+- `CARTRIDGE_CHANGED` — **definitive cartridge-change detection via unique supply identity (Chip ID / serial)**:
+  - **Automatic OID discovery:** on the first successful poll, `cartridge_discovery.py` walks the standard Printer-MIB supplies-description table (color mapping) plus vendor subtrees for all four brands (HP / Canon / Brother / Toshiba) and extracts serial-like values.
+  - **Stability gate:** a candidate OID is confirmed only if its value stays identical across 3 consecutive probes (dynamic values like toner levels are filtered out).
+  - Confirmed OIDs are persisted automatically to `config/cartridge_id_map.json` (the `learned` section); manual entries always take precedence and are never overwritten.
+  - An ID change fires an immediate `CARTRIDGE_CHANGED` event with previous/new ID and color; complementary signals: the “pages printed with this supply” reset and (fallback) the toner-level jump path.
+  - The current chip ID per cartridge is shown on the dashboard (overview card + per-supply card) with a 🧩 label.
 - `SENSOR_CHANGE` for meaningful sensor changes (temp ≥ 1°C, humidity ≥ 5%)
 - `paper_size` (`Large (A3/B4)` / `Small (A4/A5)` / `Mixed`) and `paper_split` stored in log details
 - `poll_timestamp` on `PRINT` events

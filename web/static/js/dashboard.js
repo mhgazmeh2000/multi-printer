@@ -94,6 +94,18 @@ function escapeHtml(str) {
   });
 }
 
+// نشان کیفیت سیگنال شناسه کارتریج
+const _SQ_BADGES = {
+  genuine:    { icon: '⚡', label: 'تراشه واقعی', color: 'var(--green)' },
+  generation: { icon: '📊', label: 'شمارشگر تعویض', color: 'var(--cyan)' },
+  static:     { icon: '🏷️', label: 'مدل/پارت (ایستا)', color: 'var(--text3)' },
+};
+function signalQualityBadge(quality) {
+  const sq = _SQ_BADGES[quality];
+  if (!sq) return '';
+  return `<span style="font-size:11px;margin-inline-start:3px" title="${sq.label}">${sq.icon}</span>`;
+}
+
 const SENSOR_THRESHOLDS = {
   tempWarning: 30,
   tempCritical: 35,
@@ -490,6 +502,22 @@ function renderPrinterCard(p) {
     </div>
   `;
 
+  // شناسه‌ی کارتریج روی کارت خلاصه — فقط مقدار معتبرِ استخراج‌شده از backend
+  const _OC_FALLBACK = ['model:', 'toner_gen:', 'part:'];
+  const cartIds = p.cartridge_ids || {};
+  const cartIdEntries = Object.entries(cartIds).filter(([,v]) => v && !_OC_FALLBACK.some(p => String(v).startsWith(p)));
+  const sq = p.cartridge_signal_quality || {};
+  // بهترین کیفیت سیگنال برای نمایش badge
+  const bestQuality = ['genuine','generation','static'].find(q => Object.values(sq).includes(q));
+  const qualityBadge = signalQualityBadge(bestQuality);
+  let cartIdHtml = '';
+  if (cartIdEntries.length) {
+    // شناسه‌ی واقعی تراشه موجود است
+    cartIdHtml = `<div class="oc-cart-id" style="margin-top:4px;font-size:10px;color:var(--text3);font-family:var(--mono);direction:ltr;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${cartIdEntries.map(([c,v])=>c+': '+v).join(' | ')}">🧩 ${cartIdEntries.map(([,v])=>escapeHtml(v)).join(' · ')} ${qualityBadge}</div>`;
+  } else {
+    cartIdHtml = `<div class="oc-cart-id" style="margin-top:4px;font-size:10px;color:var(--text3);font-family:var(--mono);direction:ltr;text-align:left;white-space:normal;overflow-wrap:anywhere" title="شناسه‌ی معتبر کارتریج از backend موجود نیست">N/A</div>`;
+  }
+
   return `
     <div class="overview-card ${warnCls}" data-ip="${p.ip}" onclick="switchTab('${p.ip}')">
       <div class="oc-header">
@@ -497,6 +525,7 @@ function renderPrinterCard(p) {
           <div class="oc-ip">${p.ip} ${typeBadge}</div>
           <div class="oc-name">${displayName}</div>
           <div class="oc-model">${p.device?.model || 'TOSHIBA'} · ${officeName}</div>
+          ${cartIdHtml}
         </div>
         ${online === true
           ? `<div class="oc-pill pill-on"><span class="pill-dot" style="background:var(--green);box-shadow:0 0 5px var(--green)"></span>ONLINE</div>`
@@ -537,7 +566,59 @@ function renderPrinterCard(p) {
 // ══════════════════════════════════════════════════
 // FETCH & UPDATE
 // ══════════════════════════════════════════════════
+
+// --- Connection resilience ----------------------------------------
+// اگر fetch شکست بخورد، حلقه‌ی Live هرگز نباید برای همیشه بمیرد (رفع باگ
+// «باید دستی رفرش کنم»). با backoff نمایی ۵ث تا سقف ۶۰ث تلاش مجدد می‌شود،
+// بنر وضعیت نمایش داده می‌شود و با بازگشت تب/شبکه بلافاصله رفرش می‌گیریم.
+let _fetchInFlight = false;
+let _retryTimer = null;
+let _retryDelay = 5000;
+const RETRY_DELAY_BASE = 5000;
+const RETRY_DELAY_MAX  = 60000;
+let _lastFetchOkAt = 0;
+let _errToastShown = false;
+let _connBanner = null;
+
+function _getConnBanner() {
+  if (_connBanner && document.body && document.body.contains(_connBanner)) return _connBanner;
+  const b = document.createElement('div');
+  b.id = 'conn-retry-banner';
+  b.style.cssText = 'position:fixed;bottom:12px;left:12px;z-index:9999;background:#7f1d1d;color:#fff;padding:8px 14px;border-radius:8px;font-size:12px;box-shadow:0 2px 8px rgba(0,0,0,.35);display:none;direction:rtl;';
+  b.textContent = '⚠ اتصال به سرور قطع شده — تلاش مجدد خودکار…';
+  (document.body || document.documentElement).appendChild(b);
+  _connBanner = b;
+  return b;
+}
+function _showConnBanner() { _getConnBanner().style.display = 'block'; }
+function _hideConnBanner() { if (_connBanner) _connBanner.style.display = 'none'; }
+
+function scheduleFetchRetry() {
+  if (_retryTimer) return; // جلوگیری از تایمر تکراری
+  _showConnBanner();
+  const delay = _retryDelay;
+  _retryDelay = Math.min(_retryDelay * 2, RETRY_DELAY_MAX);
+  _retryTimer = setTimeout(() => { _retryTimer = null; fetchData(); }, delay);
+}
+
+function _immediateRefreshIfStale() {
+  if (_fetchInFlight) return;
+  if (Date.now() - _lastFetchOkAt >= 15000) fetchData();
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') _immediateRefreshIfStale();
+});
+window.addEventListener('online', () => {
+  _retryDelay = RETRY_DELAY_BASE;
+  _immediateRefreshIfStale();
+});
+
 async function fetchData() {
+  if (_fetchInFlight) return; // جلوگیری از fetch همزمان
+  _fetchInFlight = true;
+  // fetch دستی/برنامه‌ریزی‌شده، retry زمان‌دار معلق را لغو می‌کند
+  if (_retryTimer) { clearTimeout(_retryTimer); _retryTimer = null; }
   setDot('fetch');
   try {
     const responses = await Promise.all([
@@ -570,11 +651,20 @@ async function fetchData() {
     setDot('on');
     if (!isFirst) toast('آپدیت شد','s');
     isFirst = false;
+    // موفقیت ⇒ ریست backoff/بنر؛ چرخه‌ی عادی با resetCountdown ادامه می‌یابد
+    _retryDelay = RETRY_DELAY_BASE;
+    _errToastShown = false;
+    _lastFetchOkAt = Date.now();
+    _hideConnBanner();
     resetCountdown();
   } catch(e) {
     console.error(e);
     setDot('err');
-    toast('خطا در اتصال به سرور','e');
+    // toast فقط برای شروع قطعی — در هر تلاش تکرار نشود (ضد اسپم)
+    if (!_errToastShown) { toast('خطا در اتصال به سرور','e'); _errToastShown = true; }
+    scheduleFetchRetry(); // حلقه‌ی Live هیچ‌وقت نمی‌میرد
+  } finally {
+    _fetchInFlight = false;
   }
 }
 
@@ -1088,6 +1178,21 @@ function buildPrinterDetail(p) {
       const unsupportedHint = (status === 'not_supported' || status === 'no_sensor')
         ? `<div class="supply-card-hint">این دستگاه سطح این مصرفی را از طریق SNMP گزارش نمی‌کند.</div>`
         : '';
+      // identity دقیق همان رنگ از backend؛ fallbackهای مدل/نسل/نام supply معتبر نیستند.
+      const _FALLBACK_PREFIXES = ['model:', 'toner_gen:', 'part:'];
+      const cartChipId = (p.cartridge_ids || {})[col];
+      const chipQuality = (p.cartridge_signal_quality || {})[col];
+      const identityType = (p.cartridge_identity_type || {})[col] || 'chip_id';
+      const hasValidIdentity = Boolean(cartChipId)
+        && (identityType === 'chip_id' || identityType === 'serial')
+        && chipQuality !== 'static'
+        && !_FALLBACK_PREFIXES.some(prefix => String(cartChipId).startsWith(prefix));
+      const identityLabel = identityType === 'serial' ? 'Serial کارتریج' : 'Chip ID کارتریج';
+      const identityValue = hasValidIdentity ? String(cartChipId) : 'N/A';
+      const identityTitle = hasValidIdentity
+        ? `${identityLabel} (مقدار دقیق backend: ${identityValue})\nکیفیت سیگنال: ${chipQuality || 'نامشخص'}`
+        : 'شناسه‌ی معتبر Chip ID/Serial برای این Cartridge در backend موجود نیست';
+      const chipIdHtml = `<div class="supply-chip-id" style="margin-top:6px;font-size:10.5px;color:var(--text2);font-family:var(--mono);direction:ltr;text-align:left;white-space:normal;overflow-wrap:anywhere" title="${escapeHtml(identityTitle)}">${escapeHtml(identityValue)}</div>`;
 
       return `
         <article class="supply-card">
@@ -1106,6 +1211,7 @@ function buildPrinterDetail(p) {
             <span>باقی‌مانده: <strong style="color:${statusColor}">${escapeHtml(remainingText)}</strong></span>
             ${hasLevel ? `<span class="supply-card-level num">${level}%</span>` : ''}
           </div>
+          ${chipIdHtml}
 
           <div class="supply-card-progress">
             <div class="supply-card-progress-fill${hasLevel ? '' : ' is-empty'}" style="width:${hasLevel ? level : 0}%;background:${hasLevel ? `linear-gradient(90deg,${progressGradient})` : 'linear-gradient(90deg, rgba(123,134,160,.2), rgba(123,134,160,.08))'}"></div>
@@ -1507,6 +1613,28 @@ function _buildRows(events, hasPrinter, hasUser) {
       : '';
 
     let message = e.message ? escapeHtml(e.message) : '—';
+    // ✅ tooltip جزئیات تشخیص برای رویدادهای CARTRIDGE_CHANGED
+    let msg_tooltip = '';
+    if (e.type === 'CARTRIDGE_CHANGED' && e.detection) {
+      const DET_FA = { chip_id: 'شناسه تراشه', supply_name_change: 'نام supply', supply_pages_reset: 'شمارنده صفحات', toner_jump: 'جهش سطح تونر' };
+      const detLabel = DET_FA[e.detection] || e.detection;
+      const ttLines = [`روش تشخیص: ${detLabel}`];
+      if (e.detection === 'chip_id' && e.prev_cartridge_id && e.cartridge_id) {
+        ttLines.push(`قبل: ${e.prev_cartridge_id}`);
+        ttLines.push(`بعد: ${e.cartridge_id}`);
+      } else if (e.detection === 'supply_name_change' && e.prev_supply_name && e.supply_name) {
+        ttLines.push(`قبل: ${e.prev_supply_name}`);
+        ttLines.push(`بعد: ${e.supply_name}`);
+      } else if (e.detection === 'supply_pages_reset' && e.prev_supply_pages !== undefined && e.supply_pages !== undefined) {
+        ttLines.push(`قبل: ${fmtN(e.prev_supply_pages)} صفحه`);
+        ttLines.push(`بعد: ${fmtN(e.supply_pages)} صفحه`);
+      } else if (e.detection === 'toner_jump' && e.prev_toner !== undefined && e.new_toner !== undefined) {
+        ttLines.push(`قبل: ${e.prev_toner}%`);
+        ttLines.push(`بعد: ${e.new_toner}%`);
+      }
+      if (e.color_fa) ttLines.push(`رنگ: ${e.color_fa}`);
+      msg_tooltip = ` title="${escapeHtml(ttLines.join('\n'))}"`;
+    }
     let pages   = (e.pages !== undefined && e.pages !== null && e.pages !== '') ? escapeHtml(String(e.pages)) : '—';
     let color   = e.color ? escapeHtml(e.color) : '—';
     let code    = e.code ? escapeHtml(e.code) : '—';
@@ -1573,7 +1701,7 @@ function _buildRows(events, hasPrinter, hasUser) {
       <td style="direction:ltr">${escapeHtml(ts)}</td>
       ${pCell}
       <td>${tbadge}</td>
-      <td style="color:var(--text)">${message}</td>
+      <td style="color:var(--text)"${msg_tooltip}>${message}</td>
       <td class="num"${pages_tooltip}>${pages_display}</td>
       <td>${color}</td>
       ${uCell}

@@ -19,9 +19,11 @@ from web.routes.security   import bp as bp_security_audit
 from web.routes.groups     import bp as bp_groups
 from web.routes.import_db import bp as bp_import_db
 from web.routes.yield_status import bp as bp_yield_status
+from web.routes.metrics import bp as bp_metrics
 from web.auth import auth_bp, init_auth, user_can_access_module
 from web.security import init_security, csrf
 from config import settings
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 # مسیر مطلق پوشه web/ (همین فایل در web/ قرار دارد)
 _WEB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -33,6 +35,15 @@ def create_app() -> Flask:
         template_folder=os.path.join(_WEB_DIR, "templates"),
         static_folder=os.path.join(_WEB_DIR, "static"),
     )
+
+    # --- Reverse proxy (nginx) -----------------------------------
+    # فقط وقتی TRUST_PROXY=1 باشد، هدرهای X-Forwarded-* از nginx که مستقیماً
+    # جلوی برنامه است معتبر شمرده می‌شوند — مهم‌ترین‌شان X-Forwarded-Proto است تا
+    # request.is_secure پشت TLS-termination درست باشد (CSRF SSL-strict، redirectها).
+    # بدون این flag هدرها نادیده گرفته می‌شوند تا در توسعه/دسترسی مستقیم قابل جعل نباشند.
+    # x_for/x_proto/x_host/x_port = 1 یعنی فقط یک لایه‌ی proxy مورد اعتماد است.
+    if os.getenv("TRUST_PROXY", "") in ("1", "true", "yes"):
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
 
     app.config.update(
         SECRET_KEY=settings.SECRET_KEY,
@@ -49,7 +60,7 @@ def create_app() -> Flask:
         GOOGLE_CLIENT_SECRET=settings.GOOGLE_CLIENT_SECRET,
         RECAPTCHA_SITE_KEY=settings.RECAPTCHA_SITE_KEY,
         RECAPTCHA_SECRET_KEY=settings.RECAPTCHA_SECRET_KEY,
-        ASSET_VERSION=os.getenv("ASSET_VERSION", "20260823-v3-ui-polish"),
+        ASSET_VERSION=os.getenv("ASSET_VERSION", "20260907-resilience-proxy"),
     )
 
     init_auth(app)
@@ -59,7 +70,7 @@ def create_app() -> Flask:
         auth_bp,
         bp_dashboard, bp_printers, bp_logs, bp_export,
         bp_scan, bp_discover, bp_stats, bp_validation, bp_system, bp_users,
-        bp_security_audit, bp_import_db, bp_yield_status, bp_groups,
+        bp_security_audit, bp_import_db, bp_yield_status, bp_groups, bp_metrics,
     ):
         app.register_blueprint(blueprint)
 
@@ -81,6 +92,7 @@ def create_app() -> Flask:
             "auth.reset_password",
             "auth.google_login",
             "auth.google_callback",
+            "metrics.prometheus_metrics",
             # NOTE: "system.api_status" عمداً از لیست عمومی حذف شد —
             # بدون login نباید آمار polling و وضعیت سرویس دیده شود.
         }

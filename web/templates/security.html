@@ -2,8 +2,7 @@
 
 {% block title %}امنیت سیستم{% endblock %}
 
-{% block head %}
-<style>
+{% block head %}  <style>
   .security-page {
     max-width: 1280px;
     margin: 0 auto;
@@ -11,6 +10,150 @@
     display: flex;
     flex-direction: column;
     gap: 18px;
+  }
+  .security-log-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+  }
+  .security-log-filters {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .security-log-filters .filter-btn {
+    background: rgba(255,255,255,.04);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 5px 12px;
+    font-size: 12px;
+    color: var(--text2);
+    cursor: pointer;
+    transition: all .15s;
+    font-family: inherit;
+  }
+  .security-log-filters .filter-btn:hover {
+    background: rgba(255,255,255,.08);
+    color: var(--text);
+  }
+  .security-log-filters .filter-btn.active {
+    background: rgba(0,212,255,.12);
+    border-color: rgba(0,212,255,.4);
+    color: var(--cyan);
+  }
+  .pg-counter {
+    font-size: 11px;
+    color: var(--text3);
+    font-family: var(--mono);
+    white-space: nowrap;
+  }
+  .sec-log-table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 980px;
+  }
+  .sec-log-table th,
+  .sec-log-table td {
+    padding: 10px 8px;
+    border-bottom: 1px solid var(--border);
+    text-align: right;
+    vertical-align: top;
+    font-size: 12px;
+  }
+  .sec-log-table th {
+    background: rgba(255,255,255,.03);
+    color: var(--text3);
+    font-family: var(--mono);
+    letter-spacing: .4px;
+  }
+  .sec-log-table td {
+    color: var(--text);
+  }
+  .sec-log-table tr:hover td {
+    background: rgba(255,255,255,.02);
+  }
+  .log-pagination {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 10px 0;
+    flex-wrap: wrap;
+  }
+  .pg-btn {
+    background: rgba(255,255,255,.04);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+    color: var(--text2);
+    cursor: pointer;
+    font-family: var(--mono);
+    min-width: 28px;
+    text-align: center;
+    transition: all .15s;
+  }
+  .pg-btn:hover:not(:disabled) {
+    background: rgba(255,255,255,.08);
+    color: var(--text);
+  }
+  .pg-btn:disabled {
+    opacity: .3;
+    cursor: not-allowed;
+  }
+  .pg-btn.pg-active {
+    background: rgba(0,212,255,.15);
+    border-color: rgba(0,212,255,.4);
+    color: var(--cyan);
+  }
+  .pg-arrow {
+    font-size: 16px;
+    min-width: 30px;
+  }
+  .pg-info {
+    font-size: 11px;
+    color: var(--text3);
+    margin: 0 6px;
+    font-family: var(--mono);
+  }
+  .log-empty {
+    padding: 24px;
+    text-align: center;
+    color: var(--text2);
+    font-size: 13px;
+  }
+  .sec-timestamp {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text2);
+    white-space: nowrap;
+  }
+  .sec-ip {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--cyan);
+    direction: ltr;
+  }
+  .sec-endpoint {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text3);
+    direction: ltr;
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .sec-details {
+    font-size: 11px;
+    color: var(--text2);
+    max-width: 240px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .security-header,
   .security-card {
@@ -287,24 +430,24 @@
       </div>
     </div>
 
-    <div class="security-table-wrap" style="margin-top:16px">
-      <table class="security-table">
-        <thead>
-          <tr>
-            <th>زمان</th>
-            <th>نوع رویداد</th>
-            <th>شدت</th>
-            <th>وضعیت</th>
-            <th>کاربر</th>
-            <th>IP</th>
-            <th>Endpoint</th>
-            <th>جزئیات</th>
-          </tr>
-        </thead>
-        <tbody id="events-tbody">
-          <tr><td colspan="8" class="security-empty">در حال بارگذاری...</td></tr>
-        </tbody>
-      </table>
+    <div class="security-log-toolbar">
+      <div class="security-log-filters" id="security-log-filters">
+        <button class="filter-btn active" onclick="secFilterLog('all',this)">همه</button>
+        <button class="filter-btn" onclick="secFilterLog('failed_login',this)">🔴 ناموفق</button>
+        <button class="filter-btn" onclick="secFilterLog('successful_login',this)">🟢 موفق</button>
+        <button class="filter-btn" onclick="secFilterLog('account_locked',this)">🔒 قفل</button>
+        <button class="filter-btn" onclick="secFilterLog('suspicious_activity',this)">⚠ مشکوک</button>
+        <button class="filter-btn" onclick="secFilterLog('user_created',this)">👤 کاربر</button>
+        <button class="filter-btn" onclick="secFilterLog('user_role_changed',this)">🔑 نقش</button>
+        <button class="filter-btn" onclick="secFilterLog('rate_limit_hit',this)">🚫 محدودیت</button>
+      </div>
+      <div class="pg-counter" id="sec-log-count"></div>
+    </div>
+
+    <div class="security-table-wrap" style="margin-top:12px">
+      <div id="events-tbody">
+        <div class="security-empty">در حال بارگذاری...</div>
+      </div>
     </div>
   </section>
 </main>
@@ -312,6 +455,24 @@
 
 {% block scripts %}
 <script>
+  // ═══════════════════════════════════════════════════════════════════════
+  // Constants & State
+  // ═══════════════════════════════════════════════════════════════════════
+  const SEC_PAGE_SIZE = 25;
+  const _pgState = {};  // containerId -> {events, page, filterType, counterId}
+
+  const SEC_TYPE_ICONS = {
+    failed_login: '🔴', successful_login: '🟢', account_locked: '🔒',
+    suspicious_activity: '⚠', rate_limit_hit: '🚫',
+    user_created: '👤', user_deleted: '🗑', user_role_changed: '🔑',
+    user_verification_changed: '✉', user_access_changed: '🔐',
+    password_reset_requested: '🔑', password_reset_completed: '✅',
+    oauth_login: '🌐', oauth_failure: '❌', logout: '🚪',
+  };
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // Utilities
+  // ═══════════════════════════════════════════════════════════════════════
   function escapeHtml(value) {
     if (value === null || value === undefined) return '';
     return String(value)
@@ -327,8 +488,7 @@
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return escapeHtml(value);
     return new Intl.DateTimeFormat('fa-IR', {
-      dateStyle: 'short',
-      timeStyle: 'medium'
+      dateStyle: 'short', timeStyle: 'medium'
     }).format(date);
   }
 
@@ -339,12 +499,13 @@
   async function fetchJson(url) {
     const res = await fetch(url, { headers: { 'Accept': 'application/json' }, credentials: 'same-origin' });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      throw new Error(data.error || data.message || 'خطا در دریافت اطلاعات');
-    }
+    if (!res.ok) throw new Error(data.error || data.message || 'خطا در دریافت اطلاعات');
     return data;
   }
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // Stats & Top IPs
+  // ═══════════════════════════════════════════════════════════════════════
   async function loadStats() {
     const data = await fetchJson('/api/security/stats');
     document.getElementById('stat-failed-24h').textContent = data.failed_logins_24h ?? 0;
@@ -359,10 +520,9 @@
     topIpStatus.textContent = rows.length ? `${rows.length} IP ثبت شد` : 'بدون IP مشکوک';
 
     if (!rows.length) {
-      topIpList.innerHTML = '<div class="security-empty">در ۷ روز اخیر IP پرتکراری برای failed login ثبت نشده است.</div>';
+      topIpList.innerHTML = '<div class="security-empty">در ۷ روز اخیر IP پرتکراری ثبت نشده.</div>';
       return;
     }
-
     topIpList.innerHTML = rows.map((row, index) => `
       <div class="security-list-item">
         <div>#${index + 1} — ${escapeHtml(row.ip || 'نامشخص')}</div>
@@ -371,11 +531,129 @@
     `).join('');
   }
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // Events — pagination + client-side filtering (same pattern as dashboard)
+  // ═══════════════════════════════════════════════════════════════════════
+  function _secBuildRow(ev) {
+    const icon = SEC_TYPE_ICONS[ev.event_type] || '📋';
+    const badge = `<span class="security-badge ${badgeClass(ev.severity)}">${escapeHtml(ev.severity || 'info')}</span>`;
+    const status = ev.success
+      ? '<span class="security-status ok">موفق</span>'
+      : '<span class="security-status fail">ناموفق</span>';
+    const user = escapeHtml(ev.user_identifier || (ev.user_id ? 'user#' + ev.user_id : '—'));
+    const ip = escapeHtml(ev.ip_address || '—');
+    const endpoint = escapeHtml(ev.endpoint || '—');
+    const details = escapeHtml(ev.details_text || ev.details || '—');
+
+    return `<tr>
+      <td class="sec-timestamp">${formatTimestamp(ev.timestamp)}</td>
+      <td>${icon} ${escapeHtml(ev.event_type_fa || ev.event_type || '—')}</td>
+      <td>${badge}</td>
+      <td>${status}</td>
+      <td>${user}</td>
+      <td class="sec-ip">${ip}</td>
+      <td class="sec-endpoint" title="${endpoint}">${endpoint}</td>
+      <td class="sec-details" title="${details}">${details}</td>
+    </tr>`;
+  }
+
+  function _secBuildPagination(containerId, total, page, pageSize) {
+    const totalPages = Math.ceil(total / pageSize);
+    if (totalPages <= 1) return '';
+    const start = (page - 1) * pageSize + 1;
+    const end = Math.min(page * pageSize, total);
+
+    let btns = '';
+    const maxVisible = 7;
+    let startP = Math.max(1, page - Math.floor(maxVisible / 2));
+    let endP = Math.min(totalPages, startP + maxVisible - 1);
+    if (endP - startP < maxVisible - 1) startP = Math.max(1, endP - maxVisible + 1);
+
+    if (startP > 1) {
+      btns += `<button class="pg-btn" onclick="_secGoto('${containerId}',1)">1</button>`;
+      if (startP > 2) btns += '<span class="pg-info">…</span>';
+    }
+    for (let i = startP; i <= endP; i++) {
+      btns += `<button class="pg-btn${i===page?' pg-active':''}" onclick="_secGoto('${containerId}',${i})">${i}</button>`;
+    }
+    if (endP < totalPages) {
+      if (endP < totalPages - 1) btns += '<span class="pg-info">…</span>';
+      btns += `<button class="pg-btn" onclick="_secGoto('${containerId}',${totalPages})">${totalPages}</button>`;
+    }
+
+    return `<div class="log-pagination">
+      <button class="pg-btn pg-arrow" onclick="_secGoto('${containerId}',${page-1})" ${page<=1?'disabled':''}>&#8249;</button>
+      ${btns}
+      <button class="pg-btn pg-arrow" onclick="_secGoto('${containerId}',${page+1})" ${page>=totalPages?'disabled':''}>&#8250;</button>
+      <span class="pg-info">${start}–${end} از ${total}</span>
+    </div>`;
+  }
+
+  function _secRender(containerId, counterId) {
+    const st = _pgState[containerId];
+    const el = document.getElementById(containerId);
+    const cnt = document.getElementById(counterId);
+    if (!st || !el) return;
+
+    const filtered = st.filterType === 'all'
+      ? st.events
+      : st.events.filter(e => e.event_type === st.filterType);
+
+    if (!filtered.length) {
+      el.innerHTML = '<div class="log-empty">رویدادی یافت نشد</div>';
+      if (cnt) cnt.textContent = '';
+      return;
+    }
+
+    const totalPages = Math.ceil(filtered.length / SEC_PAGE_SIZE);
+    if (st.page > totalPages) st.page = totalPages;
+
+    const slice = filtered.slice((st.page - 1) * SEC_PAGE_SIZE, st.page * SEC_PAGE_SIZE);
+    const rows = slice.map(_secBuildRow).join('');
+    const tableHTML = `<table class="sec-log-table"><thead><tr>
+      <th>زمان</th><th>نوع رویداد</th><th>شدت</th><th>وضعیت</th><th>کاربر</th><th>IP</th><th>Endpoint</th><th>جزئیات</th>
+    </tr></thead><tbody>${rows}</tbody></table>`;
+    const pgHTML = _secBuildPagination(containerId, filtered.length, st.page, SEC_PAGE_SIZE);
+
+    el.innerHTML = tableHTML + pgHTML;
+    if (cnt) cnt.textContent = `${filtered.length} رویداد — صفحه ${st.page} از ${totalPages}`;
+  }
+
+  function _secGoto(containerId, page) {
+    const st = _pgState[containerId];
+    if (!st) return;
+    const filtered = st.filterType === 'all'
+      ? st.events
+      : st.events.filter(e => e.event_type === st.filterType);
+    const totalPages = Math.ceil(filtered.length / SEC_PAGE_SIZE);
+    st.page = Math.max(1, Math.min(page, totalPages));
+    const el = document.getElementById(containerId);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    _secRender(containerId, st.counterId);
+  }
+
+  function secFilterLog(type, btn) {
+    const parent = document.getElementById('security-log-filters');
+    if (parent) {
+      parent.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    }
+    const st = _pgState['events-tbody'];
+    if (!st) return;
+    st.filterType = type;
+    st.page = 1;
+    _secRender('events-tbody', st.counterId);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // Load events from API and populate _pgState
+  // ═══════════════════════════════════════════════════════════════════════
   async function loadEvents() {
-    const tbody = document.getElementById('events-tbody');
+    const el = document.getElementById('events-tbody');
     const status = document.getElementById('events-status');
+    const countEl = document.getElementById('sec-log-count');
     status.textContent = 'در حال دریافت...';
-    tbody.innerHTML = '<tr><td colspan="8" class="security-empty">در حال بارگذاری...</td></tr>';
+    el.innerHTML = '<div class="log-empty">در حال بارگذاری...</div>';
 
     const params = new URLSearchParams();
     const eventType = document.getElementById('filter-event-type').value;
@@ -393,8 +671,9 @@
       const events = Array.isArray(data.events) ? data.events : [];
       status.textContent = `${events.length} رویداد نمایش داده شد`;
 
+      // Populate event type select
       const select = document.getElementById('filter-event-type');
-      const knownValues = new Set(Array.from(select.options).map(option => option.value));
+      const knownValues = new Set(Array.from(select.options).map(o => o.value));
       (data.available_types || []).forEach(item => {
         const value = typeof item === 'string' ? item : item.value;
         const label = typeof item === 'string' ? item : item.label;
@@ -406,26 +685,19 @@
         }
       });
 
-      if (!events.length) {
-        tbody.innerHTML = '<tr><td colspan="8" class="security-empty">رویدادی با این فیلترها پیدا نشد.</td></tr>';
-        return;
-      }
-
-      tbody.innerHTML = events.map(event => `
-        <tr>
-          <td>${formatTimestamp(event.timestamp)}</td>
-          <td><span class="security-event-label">${escapeHtml(event.event_type_fa || event.event_type || '—')}</span></td>
-          <td><span class="security-badge ${badgeClass(event.severity)}">${escapeHtml(event.severity || 'info')}</span></td>
-          <td><span class="security-status ${event.success ? 'ok' : 'fail'}">${event.success ? 'موفق' : 'ناموفق'}</span></td>
-          <td>${escapeHtml(event.user_identifier || (event.user_id ? 'user#' + event.user_id : '—'))}</td>
-          <td>${escapeHtml(event.ip_address || '—')}</td>
-          <td>${escapeHtml(event.endpoint || '—')}</td>
-          <td>${escapeHtml(event.details_text || event.details || '—')}</td>
-        </tr>
-      `).join('');
+      // Store in _pgState and render
+      const curPage = _pgState['events-tbody']?.page || 1;
+      const curFilter = _pgState['events-tbody']?.filterType || 'all';
+      _pgState['events-tbody'] = {
+        events: events,
+        page: curPage,
+        filterType: curFilter,
+        counterId: 'sec-log-count',
+      };
+      _secRender('events-tbody', 'sec-log-count');
     } catch (error) {
       status.textContent = error.message;
-      tbody.innerHTML = `<tr><td colspan="8" class="security-empty">${escapeHtml(error.message)}</td></tr>`;
+      el.innerHTML = `<div class="log-empty">${escapeHtml(error.message)}</div>`;
     }
   }
 

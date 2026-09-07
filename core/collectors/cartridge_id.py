@@ -52,7 +52,7 @@ CONFIG_PATH = os.path.join(_REPO_ROOT, "config", "cartridge_id_map.json")
 _BAD_TOKENS = {
     "", "-", "--", "0", "00", "000", "0000", "000000", "n/a", "na", "none",
     "null", "unknown", "not available", "notAvailable".lower(), "(not available)",
-    "serial", "sn", "s/n", "serialnumber",
+    "serial", "sn", "s/n", "serialnumber", "number", "no", "num", "id",
 }
 
 
@@ -98,8 +98,12 @@ def load_id_config(force: bool = False):
       {
         "brands":   {"hp": {"snmp": {"black": "1.3.6.1...."}}, ...},
         "printers": {"172.16.8.52": {"snmp": {"black": "1.3.6.1...."}}},
+        "learned":  {"printers": {"10.0.0.5": {"snmp": {"black": "1.3.6.1...."},
+                                                 "meta": {...}}}},
         "hp_web": true
       }
+    بخش ``learned`` به‌صورت خودکار توسط cartridge_discovery.py پر می‌شود؛
+    اولویت نهایی: printers (دستی) > brands (دستی) > learned (خودکار).
     """
     now = time.time()
     if not force and _config_cache["data"] is not None and now - _config_cache["ts"] < _CONFIG_TTL:
@@ -119,9 +123,15 @@ def load_id_config(force: bool = False):
 
 
 def _snmp_oids_for(ip: str, brand: str, cfg: dict):
-    """ترکیب نقشه‌ی برند + override دستگاه؛ override اولویت دارد."""
+    """ترکیب نقشه‌ی برند + override دستگاه + بخش learned خودکار.
+
+    اولویت (آخری می‌نشیند و می‌برد): learned < brands < printers.
+    یعنی ورودی دستی کاربر همیشه بر OID کشف‌شده‌ی خودکار اولویت دارد.
+    """
     out = {}
     try:
+        learned = (((cfg.get("learned") or {}).get("printers") or {}).get(ip) or {}).get("snmp") or {}
+        out.update({str(k).lower(): str(v) for k, v in learned.items() if v})
         out.update(((cfg.get("brands") or {}).get(brand or "") or {}).get("snmp") or {})
         out.update(((cfg.get("printers") or {}).get(ip) or {}).get("snmp") or {})
     except Exception:
@@ -134,7 +144,8 @@ def _read_snmp_ids(ip: str, oids_by_color: dict, community: str, snmp_version=No
     ids = {}
     if not oids_by_color:
         return ids
-    g = (lambda oid: snmp_get_with_fallback(ip, oid, community, version=snmp_version, timeout=timeout))
+    import core.snmp.protocol as _p
+    g = (lambda oid: _p.snmp_get_with_fallback(ip, oid, community, version=snmp_version, timeout=timeout))
     for color, oid in oids_by_color.items():
         try:
             sid = normalize_id(g(oid))
@@ -160,9 +171,13 @@ _HP_URLS = (
 
 # سریال: نزدیکِ برچسب Serial/Serial Number (در HTML و XML)
 # نکته: مقدار ممکن است بعد از چند تگ‌بستن/بازکردن بیاید: <td>Serial:</td><td>VAL</td>
+# و در بعضی EWSها برچسب دوپاره است: Serial</span><span>Number</span> — پس بعد از
+# پرش تگ‌ها هم یک توکن اختیاری Number/No/# رد می‌شود تا خودِ برچسب گرفته نشود
+# (باگ واقعی ناوگان: مقدار «Number» به‌عنوان سریال ثبت می‌شد).
 _HP_SERIAL_PATTERNS = (
     re.compile(
         r"Serial\s*(?:Number|No\.?|#)?\s*[:：]?\s*(?:</\w+>\s*)?(?:<[^>]*>\s*){0,3}"
+        r"(?:Number|No\.?|#)?\s*[:：]?\s*"
         r"([A-Za-z0-9][A-Za-z0-9\-]{3,30})", re.IGNORECASE),
     re.compile(r"<[A-Za-z0-9:]*SerialNumber>\s*([A-Za-z0-9][A-Za-z0-9\-]{3,30})\s*<", re.IGNORECASE),
 )
@@ -183,11 +198,27 @@ def _first_int(text: str):
         return None
 
 
+def _search_serial(text: str):
+    """جستجوی سریال با الگوها؛ اولین مقدار معتبر (گذرنده از normalize) برمی‌گردد."""
+    for pat in _HP_SERIAL_PATTERNS:
+        m = pat.search(text)
+        if m:
+            sid = normalize_id(m.group(1))
+            if sid:
+                return sid
+    return None
+
+
 def _read_hp_web_ids(ip: str, timeout: float = 3.5):
     """خواندن سریال/شمارنده‌ی کارتریج HP از EWS؛ نبود → دیکشنری خالی.
 
     توجه: ناوگان فعلی HPها مونو است؛ نتیجه روی کلید ``black`` می‌نشیند. برای
     مدل‌های رنگی (اگر بعداً اضافه شوند) باید بخش‌بندی per-color اضافه شود.
+
+    سریال اول روی «متن ساده» (تگ‌ها → فاصله) جستجو می‌شود — روی HTML خام،
+    backtracking الگو باعث می‌شد خودِ واژه‌ی «Number» از برچسب دوپاره‌ی
+    Serial</span><span>Number به‌عنوان سریال گرفته شود (باگ واقعی ناوگان).
+    الگوی XML مستقیماً روی متن خام اعمال می‌شود.
     """
     from core.collectors.base import fetch_first_web_page
 
@@ -195,13 +226,10 @@ def _read_hp_web_ids(ip: str, timeout: float = 3.5):
     if not html:
         return {}
     ids, pages = {}, {}
-    for pat in _HP_SERIAL_PATTERNS:
-        m = pat.search(html)
-        if m:
-            sid = normalize_id(m.group(1))
-            if sid:
-                ids["black"] = sid
-                break
+    plain = re.sub(r"<[^>]+>", " ", html)
+    sid = _search_serial(plain) or _search_serial(html)
+    if sid:
+        ids["black"] = sid
     for pat in _HP_SUPPLY_PAGES_PATTERNS:
         m = pat.search(html)
         if m:
@@ -212,7 +240,8 @@ def _read_hp_web_ids(ip: str, timeout: float = 3.5):
     if ids or pages:
         log.info("  [%s] شواهد EWS کارتریج HP: سریال=%s صفحات‌باکارتریج=%s",
                  ip, ids.get("black"), pages.get("black"))
-    return {"ids": ids, "supply_pages": pages} if (ids or pages) else {}
+        return {"ids": ids, "supply_pages": pages,
+            "identity_type": {color: "serial" for color in ids}} if (ids or pages) else {}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -253,6 +282,81 @@ def _read_other_web_ids(ip: str, brand: str, timeout: float = 3.0):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# شناسه‌ی جایگزین برای پرینترهای بدون chip ID
+# ─────────────────────────────────────────────────────────────────────────────
+def _read_fallback_identity(ip: str, brand: str, community: str = "public",
+                            snmp_version=None) -> dict:
+    """برای پرینترهایی که chip ID اختصاصی ندارند، سیگنال جایگزین برمی‌گرداند.
+
+    Brothr: Toner Replace Count (هر بار تعویض +۱)
+    HP قدیمی: شماره پارت کارتریج از Printer-MIB (ایستا اما مفید)
+    Canon LBP: مدل کارتریج از Printer-MIB
+
+    خروجی مشابه get_cartridge_identity_data: {"ids": {}, "supply_pages": {}, "source": str}
+    """
+    ids, pages, source = {}, {}, ""
+    # از ماژول بخوان (نه import局部) تا monkeypatch در تست‌ها کار کند
+    import core.snmp.protocol as _snmp_mod
+    _sg = _snmp_mod.snmp_get_with_fallback
+
+    if brand == "brother":
+        # Toner Replace Count: هر بار تعویض تونر +۱
+        # OID: 1.3.6.1.4.1.2435.2.3.9.4.2.1.5.1.1.6.0
+        val = _sg(ip, "1.3.6.1.4.1.2435.2.3.9.4.2.1.5.1.1.6.0", community,
+                  version=snmp_version, timeout=2.0)
+        if val is not None:
+            try:
+                count = int(str(val).strip())
+                # ذخیره به‌صورت generation counter — motor CARTRIDGE_CHANGED
+                # با افزایش این مقدار تشخیص می‌دهد
+                ids["black"] = f"toner_gen:{count}"
+                source = "brother_snmp_gen"
+                log.info("  [%s] Brother toner generation count: %s", ip, count)
+            except (ValueError, TypeError):
+                pass
+
+    elif brand == "hp":
+        # شماره پارت کارتریج از Printer-MIB (برای مدل‌های قدیمی بدون EWS)
+        # OID: 1.3.6.1.2.1.43.11.1.1.6.1.1 (prtMarkerSuppliesDescription)
+        val = _sg(ip, "1.3.6.1.2.1.43.11.1.1.6.1.1", community,
+                  version=snmp_version, timeout=2.0)
+        if val:
+            v = str(val).strip()
+            # فقط شماره‌های پارت (مثل CC388A) — رد کردن سریال‌های عددی خالص
+            if v and not v.isdigit() and len(v) >= 4:
+                ids["black"] = f"part:{v}"
+                source = "hp_mib_part"
+                log.info("  [%s] HP toner part number: %s", ip, v)
+
+    elif brand == "canon":
+        # مدل کارتریج از Printer-MIB (فقط اگر شماره serial وجود نداشته باشد)
+        # OID: 1.3.6.1.2.1.43.11.1.1.6.1.1
+        val = _sg(ip, "1.3.6.1.2.1.43.11.1.1.6.1.1", community,
+                  version=snmp_version, timeout=2.0)
+        if val:
+            v = str(val).strip()
+            if v and not v.isdigit() and len(v) >= 5:
+                ids["black"] = f"model:{v}"
+                source = "canon_mib_model"
+                log.info("  [%s] Canon cartridge model: %s", ip, v)
+
+    if ids:
+        # کیفیت سیگنال: genuine=unique per cartridge, generation=counter, static=model/part
+        quality = {}
+        for ck, val in ids.items():
+            if val.startswith("toner_gen:"):
+                quality[ck] = "generation"
+            elif val.startswith(("part:", "model:")):
+                quality[ck] = "static"
+            else:
+                quality[ck] = "genuine"
+        return {"ids": ids, "supply_pages": pages, "source": source,
+            "signal_quality": quality,
+            "identity_type": {color: "fallback" for color in ids}}
+    return {}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # نقطه‌ی تجمیع (با کش TTL)
 # ─────────────────────────────────────────────────────────────────────────────
 def get_cartridge_identity_data(ip: str, brand: str = None, community: str = "public",
@@ -271,7 +375,7 @@ def get_cartridge_identity_data(ip: str, brand: str = None, community: str = "pu
 
     cfg = load_id_config()
     brand_key = (brand or "").lower()
-    ids, pages, sources = {}, {}, []
+    ids, pages, sources, signal_quality, identity_type = {}, {}, [], {}, {}
 
     # ۱) SNMP بر اساس نقشه‌ی تأییدشده (پرینتر-خاص یا برند-عمومی)
     oids = _snmp_oids_for(ip, brand_key, cfg)
@@ -283,6 +387,9 @@ def get_cartridge_identity_data(ip: str, brand: str = None, community: str = "pu
             snmp_ids = {}
         if snmp_ids:
             ids.update(snmp_ids)
+            for ck in snmp_ids:
+                signal_quality[ck] = "genuine"
+                identity_type[ck] = "chip_id"
             sources.append("snmp")
 
     # ۲) پنل وب (HP همیشه‌تلاش؛ بقیه اگر web=true در تنظیمات یا پیش‌فرض محدود)
@@ -297,13 +404,39 @@ def get_cartridge_identity_data(ip: str, brand: str = None, community: str = "pu
         web = {}
     if web.get("ids"):
         for ck, sid in web["ids"].items():
-            ids.setdefault(ck, sid)
+            if ck not in ids:
+                ids[ck] = sid
+                signal_quality[ck] = "genuine"
+                identity_type[ck] = web.get("identity_type", {}).get(ck, "serial")
         sources.append(f"{brand_key}_web")
     if web.get("supply_pages"):
         pages.update(web["supply_pages"])
 
+    # ۳) جایگزین‌های SNMP برای پرینترهایی که chip ID ندارند:
+    #    a) Brother: Toner Replace Count — هر بار تعویض +۱
+    #    b) HP قدیمی: شماره پارت کارتریج از Printer-MIB
+    #    c) Canon LBP: مدل کارتریج از Printer-MIB
+    if not ids and brand_key in ("brother", "hp", "canon"):
+        try:
+            _fallback = _read_fallback_identity(ip, brand_key, community, snmp_version)
+            if _fallback:
+                if _fallback.get("ids"):
+                    ids.update(_fallback["ids"])
+                if _fallback.get("supply_pages"):
+                    pages.update(_fallback["supply_pages"])
+                if _fallback.get("source"):
+                    sources.append(_fallback["source"])
+                if _fallback.get("signal_quality"):
+                    signal_quality.update(_fallback["signal_quality"])
+                if _fallback.get("identity_type"):
+                    identity_type.update(_fallback["identity_type"])
+        except Exception as exc:
+            log.debug("cartridge-id fallback read failed for %s: %s", ip, exc)
+
     result = {"ids": ids, "supply_pages": pages,
-              "source": "+".join(sources) if sources else "none"}
+              "source": "+".join(sources) if sources else "none",
+              "signal_quality": signal_quality or None,
+              "identity_type": identity_type or None}
     ttl = _TTL_FOUND if (ids or pages) else _TTL_MISS
     _cache[ip] = (now + ttl, result)
     return result

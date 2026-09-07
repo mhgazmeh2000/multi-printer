@@ -250,7 +250,9 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
                     paper_split: dict = None,
                     paper_detail: dict = None, func_split: dict = None,
                     toner_levels: dict = None, legacy_toner_color: str = None,
-                    cartridge_ids: dict = None, cartridge_supply_pages: dict = None):
+                    cartridge_ids: dict = None, cartridge_supply_pages: dict = None,
+                    signal_quality: dict = None,
+                    supply_names: dict = None):
     """
     ثبت رویدادهای چاپ/هشدار با محافظت در برابر داده‌های مشکوک SNMP.
 
@@ -261,6 +263,14 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
     prev = prev or {}
     alerts = alerts or []
     curr_codes = curr_codes or []
+    cart_id_changed_colors = set()
+    cart_id_merged = dict((prev.get("cartridge_ids") or {})) if isinstance(prev.get("cartridge_ids"), dict) else {}
+    cart_pages_merged = dict((prev.get("cart_supply_pages") or {})) if isinstance(prev.get("cart_supply_pages"), dict) else {}
+
+    try:
+        from core.cartridge_change_engine import evaluate_cartridge_change
+    except Exception:
+        evaluate_cartridge_change = None
 
     def _to_int(value, default=None):
         try:
@@ -299,7 +309,7 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
             "prev_uptime": prev_uptime,
             "current_uptime": uptime,
         })
-        store._prev.set(ip, {
+        snapshot = {
             "print_total": prev_total,
             "full_color": prev_fc,
             "black_white": prev_bw,
@@ -308,7 +318,12 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
             "last_alert_codes": curr_codes,
             "uptime": uptime if uptime is not None else prev_uptime,
             "reset_prev_total": prev.get("reset_prev_total"),
-        })
+        }
+        if cartridge_ids is not None:
+            snapshot["cartridge_ids"] = dict((cartridge_ids or {}))
+        if cartridge_supply_pages is not None:
+            snapshot["cart_supply_pages"] = dict((cartridge_supply_pages or {}))
+        store._prev.set(ip, snapshot)
         return
 
     # ─── ثبت رویدادهای هشدار جدید با جلوگیری از تکرار ───────────────
@@ -332,7 +347,7 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
     # ─── اولین poll: baseline بگیر، لاگ چاپ نزن ─────────────────────
     if prev_total is None:
         log.warning(f"  [{ip}] جلوگیری از ثبت رویداد PRINT در اولین poll (total={total:,})")
-        store._prev.set(ip, {
+        baseline = {
             "print_total": total,
             "toner_level": current_toner_level,
             "full_color": full_color,
@@ -344,7 +359,41 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
             "a4_total": a4_total,
             "pending_overflow_total": None,
             "pending_refill_new_toner": None,
-        })
+        }
+        if cartridge_ids is not None:
+            baseline["cartridge_ids"] = dict((cartridge_ids or {}))
+        if cartridge_supply_pages is not None:
+            baseline["cart_supply_pages"] = dict((cartridge_supply_pages or {}))
+        if supply_names is not None:
+            baseline["supply_names"] = dict((supply_names or {}))
+        if toner_levels is not None:
+            baseline["toner_levels"] = dict((toner_levels or {}))
+        if cartridge_ids is not None or cartridge_supply_pages is not None or toner_levels is not None or supply_names is not None:
+            candidate_colors = set()
+            for mapping in (cartridge_ids, cartridge_supply_pages, toner_levels, supply_names):
+                if isinstance(mapping, dict):
+                    candidate_colors.update(mapping.keys())
+            if legacy_toner_color:
+                candidate_colors.add(legacy_toner_color)
+            state_by_color = {}
+            for color in sorted(candidate_colors):
+                state_by_color[color] = {
+                    "printer_ip": ip,
+                    "brand": prev.get("brand") or "",
+                    "model": prev.get("model") or "",
+                    "color": color,
+                    "chip_id": (cartridge_ids or {}).get(color) if isinstance(cartridge_ids, dict) else None,
+                    "serial": (cartridge_ids or {}).get(color) if isinstance(cartridge_ids, dict) else None,
+                    "cartridge_model": (supply_names or {}).get(color) if isinstance(supply_names, dict) else None,
+                    "supply_description": (supply_names or {}).get(color) if isinstance(supply_names, dict) else None,
+                    "supply_counter": (cartridge_supply_pages or {}).get(color) if isinstance(cartridge_supply_pages, dict) else None,
+                    "page_counter": total,
+                    "remaining_level": (toner_levels or {}).get(color) if isinstance(toner_levels, dict) else None,
+                    "supply_life": (toner_levels or {}).get(color) if isinstance(toner_levels, dict) else None,
+                    "generation": None,
+                }
+            baseline["cartridge_state"] = state_by_color
+        store._prev.set(ip, baseline)
         return
 
     # ─── محافظ اصلی: total=0 یا کاهش counter بدون reboot = خطای SNMP، نه reset ───
@@ -553,17 +602,8 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
         except (TypeError, ValueError):
             pass
 
-    # ─── تشخیص تعویض کارتریج بر اساس شناسه‌ی یکتا (سیگنال قطعی) ──────────
-    # تغییر Chip ID / سریال کارتریج، یا ریست «صفحات چاپ‌شده با این کارتریج»،
-    # تعویض را قطعی می‌کند: رویداد همان poll ثبت می‌شود (بدون انتظار ۲poll) و
-    # pendingهای مسیر جهشِ سطح برای آن رنگ پاک می‌شود تا رویداد دوم ساخته نشود.
-    # بدون داده‌ی قبلی (اولین مشاهده) فقط baseline ساخته می‌شود — رویداد نه.
-    # خواندن ناموفق (کلید نبود) مقدار قبلی را پاک نمی‌کند (merge نگه‌داشته).
-    cart_id_changed_colors = set()
-    cart_id_merged = None
-    cart_pages_merged = None
+    # ─── Generic evidence-based cartridge detection ─────────────────────
     if cartridge_ids is not None or cartridge_supply_pages is not None:
-        cid_colors = {"black": "مشکی", "cyan": "آبی", "magenta": "سرخابی", "yellow": "زرد"}
         prev_ids = prev.get("cartridge_ids") or {}
         prev_pages = prev.get("cart_supply_pages") or {}
         if not isinstance(prev_ids, dict):
@@ -572,66 +612,267 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
             prev_pages = {}
         cart_id_merged = dict(prev_ids)
         cart_pages_merged = dict(prev_pages)
-        if not prev.get("manual_override"):
+        if cartridge_ids is not None:
             for ck, raw_sid in (cartridge_ids or {}).items():
-                if ck not in cid_colors:
-                    continue
                 try:
                     sid = str(raw_sid).strip()
                 except Exception:
                     continue
-                if not sid:
-                    continue
-                cart_id_merged[ck] = sid
-                prev_sid = prev_ids.get(ck)
-                if prev_sid and sid != prev_sid:
-                    cart_id_changed_colors.add(ck)
-                    add_event(ip, "CARTRIDGE_CHANGED", {
-                        "message": (f"تشخیص قطعی تعویض کارتریج {cid_colors[ck]}: "
-                                    f"شناسه‌ی تراشه تغییر کرد ({prev_sid} → {sid})"),
-                        "severity": "info",
-                        "auto_detected": True, "confirmed": True,
-                        "detection": "chip_id",
-                        "color": ck, "color_fa": cid_colors[ck],
-                        "prev_cartridge_id": prev_sid, "cartridge_id": sid,
-                    })
+                if sid:
+                    cart_id_merged[ck] = sid
+        if cartridge_supply_pages is not None:
             for ck, val in (cartridge_supply_pages or {}).items():
-                if ck not in cid_colors:
-                    continue
                 try:
                     cur_p = int(val)
                 except (TypeError, ValueError):
                     continue
                 cart_pages_merged[ck] = cur_p
-                try:
-                    prev_p = int(prev_pages[ck]) if prev_pages.get(ck) is not None else None
-                except (TypeError, ValueError):
-                    prev_p = None
-                if (prev_p is not None and prev_p >= CART_ID_RESET_MIN_PAGES
-                        and cur_p < prev_p * CART_ID_RESET_RATIO):
-                    cart_id_changed_colors.add(ck)
-                    add_event(ip, "CARTRIDGE_CHANGED", {
-                        "message": (f"تشخیص تعویض کارتریج {cid_colors[ck]}: شمارش «صفحات "
-                                    f"با کارتریج» ریست شد ({prev_p:,} → {cur_p:,})"),
-                        "severity": "info",
-                        "auto_detected": True, "confirmed": True,
-                        "detection": "supply_pages_reset",
-                        "color": ck, "color_fa": cid_colors[ck],
-                        "prev_supply_pages": prev_p, "supply_pages": cur_p,
-                    })
 
-        # پاکسازی pendingهای مسیر سطح برای رنگ‌های تعویض‌شده تا دفعه‌ی بعد
-        # تأیید دوپالی، همین تعویض را بار دوم گزارش نکند (رویداد یک‌شوت).
-        if cart_id_changed_colors:
-            pend_prev = prev.get("cart_change_pending")
-            if isinstance(pend_prev, dict):
-                for ck in cart_id_changed_colors:
-                    pend_prev.pop(ck, None)
-            if legacy_toner_color in cart_id_changed_colors:
-                prev["pending_refill_new_toner"] = None
-                prev["pending_refill_prev_toner"] = None
-                prev["pending_refill_total"] = None
-                prev["pending_refill_hits"] = None
+    if evaluate_cartridge_change is not None and not prev.get("manual_override"):
+        prev_cartridge_state = prev.get("cartridge_state") or {}
+        if not isinstance(prev_cartridge_state, dict):
+            prev_cartridge_state = {}
+        prev_ids = prev.get("cartridge_ids") or {}
+        prev_pages = prev.get("cart_supply_pages") or {}
+        prev_names = prev.get("supply_names") or {}
+        prev_levels = prev.get("toner_levels") or {}
+        if not isinstance(prev_ids, dict):
+            prev_ids = {}
+        if not isinstance(prev_pages, dict):
+            prev_pages = {}
+        if not isinstance(prev_names, dict):
+            prev_names = {}
+        if not isinstance(prev_levels, dict):
+            prev_levels = {}
+        current_cartridge_state = {}
+        cart_id_changed_colors = set()
+        candidate_colors = set()
+        for color in (cartridge_ids or {}):
+            candidate_colors.add(color)
+        for color in (cartridge_supply_pages or {}):
+            candidate_colors.add(color)
+        for color in (toner_levels or {}):
+            candidate_colors.add(color)
+        for color in (supply_names or {}):
+            candidate_colors.add(color)
+        if legacy_toner_color:
+            candidate_colors.add(legacy_toner_color)
+        cid_colors = {"black": "مشکی", "cyan": "آبی", "magenta": "سرخابی", "yellow": "زرد"}
+        for color in sorted(candidate_colors):
+            if color not in cid_colors and color != legacy_toner_color:
+                continue
+            prev_slot = prev_cartridge_state.get(color) or {
+                "printer_ip": ip,
+                "color": color,
+                "chip_id": prev_ids.get(color),
+                "serial": prev_ids.get(color),
+                "cartridge_model": prev_names.get(color),
+                "supply_description": prev_names.get(color),
+                "supply_counter": prev_pages.get(color),
+                "page_counter": prev.get("print_total"),
+                "remaining_level": prev_levels.get(color),
+                "supply_life": prev_levels.get(color),
+            }
+            curr_slot = {
+                "printer_ip": ip,
+                "brand": prev.get("brand") or "",
+                "model": prev.get("model") or "",
+                "color": color,
+                "chip_id": (cartridge_ids or {}).get(color) if isinstance(cartridge_ids, dict) else None,
+                "serial": (cartridge_ids or {}).get(color) if isinstance(cartridge_ids, dict) else None,
+                "cartridge_model": (supply_names or {}).get(color) if isinstance(supply_names, dict) else None,
+                "supply_description": (supply_names or {}).get(color) if isinstance(supply_names, dict) else None,
+                "supply_counter": (cartridge_supply_pages or {}).get(color),
+                "page_counter": total,
+                "remaining_level": (
+                    toner_levels.get(color)
+                    if isinstance(toner_levels, dict)
+                    else (current_toner_level if color == legacy_toner_color else None)
+                ),
+                "supply_life": (
+                    toner_levels.get(color)
+                    if isinstance(toner_levels, dict)
+                    else (current_toner_level if color == legacy_toner_color else None)
+                ),
+                "generation": prev_slot.get("generation") if isinstance(prev_slot, dict) else None,
+                "signal_quality": (signal_quality or {}).get(color) if isinstance(signal_quality, dict) else None,
+            }
+            if curr_slot.get("supply_counter") is None and prev_slot.get("supply_counter") is not None:
+                curr_slot["supply_counter"] = prev_slot.get("supply_counter")
+            if curr_slot.get("remaining_level") is None and prev_slot.get("remaining_level") is not None:
+                curr_slot["remaining_level"] = prev_slot.get("remaining_level")
+            if curr_slot.get("supply_life") is None and prev_slot.get("supply_life") is not None:
+                curr_slot["supply_life"] = prev_slot.get("supply_life")
+            if curr_slot.get("chip_id") is None and prev_slot.get("chip_id") is not None:
+                curr_slot["chip_id"] = prev_slot.get("chip_id")
+            if curr_slot.get("serial") is None and prev_slot.get("serial") is not None:
+                curr_slot["serial"] = prev_slot.get("serial")
+            if curr_slot.get("cartridge_model") is None and prev_slot.get("cartridge_model") is not None:
+                curr_slot["cartridge_model"] = prev_slot.get("cartridge_model")
+            if curr_slot.get("supply_description") is None and prev_slot.get("supply_description") is not None:
+                curr_slot["supply_description"] = prev_slot.get("supply_description")
+            result = evaluate_cartridge_change(prev_slot, curr_slot, reboot_detected=bool(reboot_detected), poll_gap_ok=True)
+            if result.get("should_emit"):
+                event = result.get("event") or {}
+                event_payload = {
+                    "message": event.get("old_identity") and f"Cartridge change detected for {color}: {event.get('old_identity')} -> {event.get('new_identity')}" or "Cartridge change detected",
+                    "severity": "info",
+                    "auto_detected": True,
+                    "confirmed": result.get("confidence") in {"CONFIRMED", "PROBABLE"},
+                    "confidence": result.get("confidence"),
+                    "detection": result.get("detection_method") or "generic_evidence",
+                    "detection_method": result.get("detection_method"),
+                    "detection_methods": result.get("detection_methods", []),
+                    "color": color,
+                    "color_fa": cid_colors.get(color, color),
+                    "printer_ip": ip,
+                    "brand": prev.get("brand") or "",
+                    "model": prev.get("model") or "",
+                    "old_identity": result.get("old_identity"),
+                    "new_identity": result.get("new_identity"),
+                    "evidence": result.get("evidence"),
+                    "evidence_source": event.get("evidence_source"),
+                    "timestamp": event.get("timestamp"),
+                    "event_id": event.get("event_id"),
+                }
+                if result.get("detection_method") == "chip_id":
+                    event_payload["prev_cartridge_id"] = result.get("old_identity")
+                    event_payload["cartridge_id"] = result.get("new_identity")
+                add_event(ip, "CARTRIDGE_CHANGED", event_payload)
+                cart_id_changed_colors.add(color)
+                current_cartridge_state[color] = {**curr_slot, "event_id": event_payload.get("event_id"), "confidence": result.get("confidence"), "last_seen_at": event_payload.get("timestamp")}
+            else:
+                current_cartridge_state[color] = {**curr_slot, "confidence": result.get("confidence"), "last_seen_at": datetime.now().isoformat()}
+        if current_cartridge_state:
+            prev["cartridge_state"] = current_cartridge_state
+            pending_map = prev.get("cart_change_pending") or {}
+            if isinstance(pending_map, dict):
+                for color in cart_id_changed_colors:
+                    pending_map.pop(color, None)
+                prev["cart_change_pending"] = pending_map or None
+        cart_id_changed_colors = set(cart_id_changed_colors)
+    else:
+        cart_id_changed_colors = set()
+        cid_colors = {"black": "مشکی", "cyan": "آبی", "magenta": "سرخابی", "yellow": "زرد"}
+        if cartridge_ids is not None or cartridge_supply_pages is not None:
+            prev_ids = prev.get("cartridge_ids") or {}
+            prev_pages = prev.get("cart_supply_pages") or {}
+            if not isinstance(prev_ids, dict):
+                prev_ids = {}
+            if not isinstance(prev_pages, dict):
+                prev_pages = {}
+            if not prev.get("manual_override"):
+                for ck, raw_sid in (cartridge_ids or {}).items():
+                    if ck not in cid_colors:
+                        continue
+                    try:
+                        sid = str(raw_sid).strip()
+                    except Exception:
+                        continue
+                    if not sid:
+                        continue
+                    cart_id_merged[ck] = sid
+                    prev_sid = prev_ids.get(ck)
+                    if prev_sid and sid != prev_sid:
+                        sq = (signal_quality or {}).get(ck)
+                        if sq == "static":
+                            log.debug("  [%s] cartridge ID changed for %s but quality=static — skipping event", ip, ck)
+                        else:
+                            cart_id_changed_colors.add(ck)
+                            add_event(ip, "CARTRIDGE_CHANGED", {
+                                "message": (f"تشخیص قطعی تعویض کارتریج {cid_colors[ck]}: "
+                                            f"شناسه‌ی تراشه تغییر کرد ({prev_sid} → {sid})"),
+                                "severity": "info",
+                                "auto_detected": True, "confirmed": True,
+                                "detection": "chip_id",
+                                "color": ck, "color_fa": cid_colors[ck],
+                                "prev_cartridge_id": prev_sid, "cartridge_id": sid,
+                            })
+                for ck, val in (cartridge_supply_pages or {}).items():
+                    if ck not in cid_colors:
+                        continue
+                    try:
+                        cur_p = int(val)
+                    except (TypeError, ValueError):
+                        continue
+                    cart_pages_merged[ck] = cur_p
+                    try:
+                        prev_p = int(prev_pages[ck]) if prev_pages.get(ck) is not None else None
+                    except (TypeError, ValueError):
+                        prev_p = None
+                    if (prev_p is not None and prev_p >= CART_ID_RESET_MIN_PAGES
+                            and cur_p < prev_p * CART_ID_RESET_RATIO):
+                        cart_id_changed_colors.add(ck)
+                        add_event(ip, "CARTRIDGE_CHANGED", {
+                            "message": (f"تشخیص تعویض کارتریج {cid_colors[ck]}: شمارش «صفحات "
+                                        f"با کارتریج» ریست شد ({prev_p:,} → {cur_p:,})"),
+                            "severity": "info",
+                            "auto_detected": True, "confirmed": True,
+                            "detection": "supply_pages_reset",
+                            "color": ck, "color_fa": cid_colors[ck],
+                            "prev_supply_pages": prev_p, "supply_pages": cur_p,
+                        })
+            if cart_id_changed_colors:
+                pend_prev = prev.get("cart_change_pending")
+                if isinstance(pend_prev, dict):
+                    for ck in cart_id_changed_colors:
+                        pend_prev.pop(ck, None)
+                if legacy_toner_color in cart_id_changed_colors:
+                    prev["pending_refill_new_toner"] = None
+                    prev["pending_refill_prev_toner"] = None
+                    prev["pending_refill_total"] = None
+                    prev["pending_refill_hits"] = None
+
+    # ─── تشخیص تعویض بر اساس تغییر نام supply (กัน因为你你不电脑) ─────────
+    # وقتی Chip ID در دسترس نیست یا کیفیتش static است، تغییر نام کارتریج
+    # (مثلاً HP 87A → CC388A) سیگنال قوی تعویض است.
+    # فقط برای رنگ‌هایی که قبلاً chip_id_changed نشده‌اند بررسی می‌شود
+    # تا رویداد تکراری ساخته نشود.
+    prev_supply_names = prev.get("supply_names") or {}
+    prev_name_pending = prev.get("supply_name_pending") or {}
+    if supply_names and not prev.get("manual_override"):
+        for ck, cur_name in supply_names.items():
+            if ck not in cid_colors:
+                continue
+            if not cur_name:
+                continue
+            norm_cur = cur_name.strip().lower()
+            prev_name = prev_supply_names.get(ck)
+            if not prev_name:
+                continue
+            norm_prev = prev_name.strip().lower()
+            # فقط وقتی نام واقعاً تغییر کرده
+            if norm_cur == norm_prev:
+                # نام یکسان → pending را پاک کن
+                if prev_name_pending.get(ck):
+                    prev_name_pending.pop(ck, None)
+                continue
+            # اگر قبلاً رویداد chip_id برای این رنگ ثبت شده، نادیده بگیر
+            if ck in cart_id_changed_colors:
+                continue
+            # اگر chip_id واقعی (genuine) فعال است، تغییر نام مهم نیست
+            cid = (cartridge_ids or {}).get(ck, "")
+            sq = (signal_quality or {}).get(ck)
+            if cid and sq == "genuine":
+                continue
+            # دروازه ثبات: نام جدید باید ۲ poll متوالی یکسان باشد
+            pending_info = prev_name_pending.get(ck)
+            if pending_info and pending_info.get("name") == norm_cur:
+                # تایید شد — رویداد ثبت کن
+                prev_name_pending.pop(ck, None)
+                cart_id_changed_colors.add(ck)
+                add_event(ip, "CARTRIDGE_CHANGED", {
+                    "message": (f"تشخیص تعویض کارتریج {cid_colors[ck]}: "
+                                f"نام supply تغییر کرد ({prev_name} → {cur_name})"),
+                    "severity": "info",
+                    "auto_detected": True, "confirmed": True,
+                    "detection": "supply_name_change",
+                    "color": ck, "color_fa": cid_colors[ck],
+                    "prev_supply_name": prev_name, "supply_name": cur_name,
+                })
+            else:
+                # اولین مشاهده تغییر — ثبت pending
+                prev_name_pending[ck] = {"name": norm_cur, "prev_name": prev_name}
 
     # ─── REFILL خودکار دو مرحله‌ای: با یک poll قطعی ثبت نکن ─────────
     refill_confirmed = False
@@ -732,6 +973,7 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
                             "severity": "info",
                             "auto_detected": True,
                             "confirmed": True,
+                            "detection": "toner_jump",
                             "color": color_key,
                             "color_fa": fa_colors[color_key],
                             "prev_toner": pend.get("prev"),
@@ -866,6 +1108,21 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
 
     # ─── ثبت PRINT ────────────────────────────────────────────────
     if total_delta > 0:
+        # ✅ Invariant: pages must equal current_total - prev_total.
+        # If total_delta drifted from actual_delta (e.g. split_delta != actual),
+        # force consistency so the event is auditable.
+        snapshot_delta = total - prev_total
+        if snapshot_delta != total_delta and snapshot_delta > 0:
+            log.warning(
+                "  [%s] snapshot invariant: total_delta=%s but snapshot=%s-%s=%s; correcting",
+                ip, total_delta, total, prev_total, snapshot_delta,
+            )
+            total_delta = snapshot_delta
+            # Regenerate message from corrected total_delta
+            delta_fc = 0
+            delta_bw = total_delta
+            color_unknown = True
+            counter_mismatch = True
         if color_unknown:
             msg = f"{total_delta} صفحه چاپ شد (تفکیک رنگ نامطمئن)"
             color = "نامشخص"
@@ -895,8 +1152,11 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
         }
         # ✅ تفکیک دقیق دسته‌ی کاغذ: در حالت Mixed (و PRINT_GAP) فقط برچسب کلی
         # کافی نیست؛ تعداد دقیق هر دسته در details ذخیره می‌شود تا لاگ قابل حسابرسی باشد.
+        # ✅ Fix: paper_split هرگز نباید مقدار منفی داشته باشد (Toshiba split نامطمئن).
         if paper_split and (paper_split.get("large") or paper_split.get("small")):
-            event_data["paper_split"] = paper_split
+            _ps_large = max(0, paper_split.get("large", 0))
+            _ps_small = max(0, paper_split.get("small", 0))
+            event_data["paper_split"] = {"large": _ps_large, "small": _ps_small}
         # ✅ حسابرسی کامل‌تر (گزارش کاربر از فلت واقعی): تفکیک خانواده‌ی سایز
         # به‌همراه زیرگروه «پرینت رایانه‌ای» و تفکیک عملکرد (ضبط در details و
         # مرج خودکار در API از طریق _row_to_dict) — مخصوصاً برای پاسخ به سؤال
@@ -973,6 +1233,28 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
         # مقایسه‌ی آخرین شناسه‌ی ذخیره‌شده در اولین poll برخورد شود.
         new_prev["cartridge_ids"] = cart_id_merged
         new_prev["cart_supply_pages"] = cart_pages_merged
+    if "cartridge_state" in prev or "cartridge_state" in locals():
+        persisted_cartridge_state = prev.get("cartridge_state") or {}
+        if not isinstance(persisted_cartridge_state, dict):
+            persisted_cartridge_state = {}
+        if not persisted_cartridge_state:
+            persisted_cartridge_state = locals().get("current_cartridge_state") or {}
+        if persisted_cartridge_state:
+            new_prev["cartridge_state"] = persisted_cartridge_state
+    # ذخیره نام supply برای مقایسه در poll بعدی (تشخیص تعویض از روی نام)
+    # ⚠️ نام رنگ‌هایی که تغییرشان در انتظار تأیید (pending) است باقی می‌ماند
+    # تا در poll بعدی همان نام قبلی با نام جدید مقایسه شود.
+    if supply_names:
+        merged_names = dict(prev.get("supply_names") or {})
+        for ck, v in supply_names.items():
+            if v and ck not in prev_name_pending:
+                merged_names[ck] = v
+        new_prev["supply_names"] = merged_names
+    # ذخیره pending تغییر نام supply (دروازه ثبات ۲ poll)
+    if prev_name_pending:
+        new_prev["supply_name_pending"] = prev_name_pending
+    elif "supply_name_pending" in prev:
+        new_prev["supply_name_pending"] = None
     if a3_total is not None:
         new_prev["a3_total"] = a3_total
     if a4_total is not None:
