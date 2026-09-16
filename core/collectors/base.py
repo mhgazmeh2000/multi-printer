@@ -182,51 +182,126 @@ def _learn_yield_per_page(ip: str, delta_pages: int, prev_toner_level: int, curr
     })
 
 
+# ─── اسلات‌های override دستی تونر (per-color) ──────────────────
+# ✅ فیکس باگ «بازگشت مقدار دستی به پیش‌فرض»: قبلاً فقط یک اسلات تک‌مقداری
+# (override_color/override_start_total/override_start_toner) وجود داشت؛ reset
+# رنگ جدید، override رنگ قبلی را پاک می‌کرد و پس از یک poll مقدار خام SNMP
+# برمی‌گشت. حالا هر رنگ اسلات مستقل خودش را در prev["toner_overrides"] دارد.
+def _normalize_overrides(prev: dict) -> dict:
+    """بازگرداندن اسلات‌های override به‌صورت dict per-color با مهاجرت از فرمت قدیمی.
+
+    فرمت جدید: {"<color>": {"start_total": int, "start_toner": int}, ...}
+    فرمت قدیمی (تک‌اسلات) فقط برای سازگاری با stateهای موجود خوانده می‌شود.
+    """
+    prev = prev or {}
+    raw = prev.get("toner_overrides")
+    if isinstance(raw, dict) and raw:
+        out = {}
+        for color, entry in raw.items():
+            if isinstance(entry, dict) and entry:
+                out[str(color)] = entry
+        if out:
+            return out
+    # مهاجرت از اسلات قدیمی تک‌مقداری
+    if prev.get("manual_override") and prev.get("override_color"):
+        return {str(prev["override_color"]): {
+            "start_total": prev.get("override_start_total"),
+            "start_toner": prev.get("override_start_toner"),
+        }}
+    return {}
+
+
+def _overrides_valid_after_total(overrides: dict, total) -> dict:
+    """حذف اسلات‌هایی که شمارنده دستگاه از نقطه‌ی شروعشان عقب رفته (سرویس/ریست)."""
+    out = {}
+    for color, entry in (overrides or {}).items():
+        start_total = (entry or {}).get("start_total")
+        try:
+            if start_total is not None and total is not None and int(total) < int(start_total):
+                continue
+        except (TypeError, ValueError):
+            pass
+        out[color] = entry
+    return out
+
+
+def _mirror_legacy_override_keys(new_prev: dict, overrides: dict):
+    """همگام نگه‌داشتن کلیدهای قدیمی تک‌اسلاتی با جدیدترین اسلات (سازگاری عقب)."""
+    if overrides:
+        try:
+            last_color = next(reversed(overrides))
+        except (TypeError, StopIteration):
+            last_color = None
+        entry = overrides.get(last_color) or {}
+        new_prev["manual_override"] = 1
+        new_prev["override_color"] = last_color
+        new_prev["override_start_total"] = entry.get("start_total")
+        new_prev["override_start_toner"] = entry.get("start_toner")
+    else:
+        new_prev["manual_override"] = 0
+        new_prev["override_color"] = None
+        new_prev["override_start_total"] = None
+        new_prev["override_start_toner"] = None
+
+
 def get_pages_since_last_reset(prev: dict, total: int):
-    """محاسبه تعداد صفحات چاپ‌شده از زمان آخرین تنظیم مجدد کارتریج."""
-    if not prev or not prev.get("manual_override"):
+    """محاسبه تعداد صفحات چاپ‌شده از زمان آخرین تنظیم مجدد کارتریج.
+
+    با اسلات‌های per-color، «آخرین reset» یعنی کمترین فاصله از نقاط شروع
+    (جدیدترین reset فعال).
+    """
+    overrides = _normalize_overrides(prev)
+    if not overrides:
         return None
-    override_start_total = prev.get("override_start_total")
-    if override_start_total is None:
-        return None
-    try:
-        pages_since_override = int(total) - int(override_start_total)
-    except Exception:
-        return None
-    if pages_since_override < 0:
-        return None
-    return pages_since_override
+    best = None
+    for _color, entry in overrides.items():
+        override_start_total = (entry or {}).get("start_total")
+        if override_start_total is None:
+            continue
+        try:
+            pages_since_override = int(total) - int(override_start_total)
+        except (TypeError, ValueError):
+            continue
+        if pages_since_override < 0:
+            continue
+        best = pages_since_override if best is None else min(best, pages_since_override)
+    return best
 
 
 
 def apply_toner_override(ip: str, total: int, snmp_level: int = None, color: str = None):
-    """محاسبه مجدد سطح تونر بر اساس override دستی و میزان صفحات چاپ‌شده."""
+    """محاسبه مجدد سطح تونر بر اساس override دستیِ «همان رنگ» و صفحات چاپ‌شده.
+
+    هر رنگ اسلات مستقل دارد؛ reset رنگ دیگر روی این محاسبه اثر ندارد.
+    """
+    if color is None:
+        return None
     prev = store._prev.get(ip) or {}
-    if not prev.get("manual_override") or color is None:
+    overrides = _normalize_overrides(prev)
+    entry = overrides.get(color)
+    if not entry:
         return None
 
-    if prev.get("override_color") != color:
-        return None
-
-    override_start_total = prev.get("override_start_total")
-    override_start_toner = prev.get("override_start_toner")
-    yield_per_page = prev.get("yield_per_page", DEFAULT_YIELD_PER_PAGE)
-
+    override_start_total = entry.get("start_total")
+    override_start_toner = entry.get("start_toner")
     if override_start_total is None or override_start_toner is None:
         return None
 
-    pages_since_override = get_pages_since_last_reset(prev, total)
-
-    # 🔥 اصلاح: اگر total کمتر از override_start_total باشد، یعنی دستگاه
-    # ریست شده و override دیگر معتبر نیست → برگرداندن مقدار خام سنسور
-    if pages_since_override is None:
-        log.debug(f"  [{ip}] Toner override invalidated: total({total}) < start({override_start_total}). "
+    # 🔥 اگر total کمتر از override_start_total باشد، یعنی دستگاه
+    # ریست شده و این override دیگر معتبر نیست → برگرداندن مقدار خام سنسور
+    try:
+        pages_since_override = int(total) - int(override_start_total)
+    except (TypeError, ValueError):
+        return snmp_level
+    if pages_since_override < 0:
+        log.debug(f"  [{ip}] Toner override[{color}] invalidated: total({total}) < start({override_start_total}). "
                   f"Returning raw SNMP level: {snmp_level}")
         return snmp_level
 
     if pages_since_override == 0:
         return override_start_toner
 
+    yield_per_page = prev.get("yield_per_page", DEFAULT_YIELD_PER_PAGE)
     if not isinstance(yield_per_page, int) or yield_per_page <= 0:
         yield_per_page = DEFAULT_YIELD_PER_PAGE
 
@@ -463,26 +538,10 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
             "a4_total": a4_total,
             "reset_prev_total": prev_total,
             # ✅ فیکس: ریست شمارنده دیگر yield یادگرفته‌شده و تنظیم دستی تونر را
-            # نابود نمی‌کند. override فقط وقتی بی‌اعتبار است که شمارنده واقعاً
-            # به کمتر از نقطه‌ی شروع آن رفته باشد.
-            "manual_override": (
-                0 if (prev.get("override_start_total") is not None
-                      and total < int(prev.get("override_start_total") or 0))
-                else prev.get("manual_override", 0)
-            ),
-            "override_color": (
-                None if (prev.get("override_start_total") is not None
-                         and total < int(prev.get("override_start_total") or 0))
-                else prev.get("override_color")
-            ),
-            "override_base_level": prev.get("override_base_level"),
-            "override_start_total": (
-                None if (prev.get("override_start_total") is not None
-                         and total < int(prev.get("override_start_total") or 0))
-                else prev.get("override_start_total")
-            ),
-            "override_start_toner": prev.get("override_start_toner"),
+            # نابود نمی‌کند. اسلات‌های per-color فقط وقتی حذف می‌شوند که شمارنده
+            # واقعاً به کمتر از نقطه‌ی شروع آن‌ها رفته باشد.
             "yield_per_page": prev.get("yield_per_page", 2000),
+            "toner_overrides": _overrides_valid_after_total(_normalize_overrides(prev), total),
         })
         return
 
@@ -1196,6 +1255,11 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
         "pending_overflow_delta": None,
         "reset_prev_total": reset_ref,
         "last_counter_error": None,
+        # ✅ حفظ اسلات‌های override دستی per-color: هر رنگ که reset نشده و
+        # شمارنده از نقطه‌ی شروعش عقب نرفته، باید زنده بماند (فیکس بازگشت به
+        # مقدار پیش‌فرض پس از چند ثانیه).
+        "toner_overrides": _overrides_valid_after_total(
+            _normalize_overrides(prev), total),
     }
     if current_toner_level is not None and prev_toner_level is not None:
         try:

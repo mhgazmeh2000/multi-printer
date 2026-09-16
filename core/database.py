@@ -210,6 +210,19 @@ def _load_json_list(value):
     return [str(item) for item in parsed if str(item).strip()]
 
 
+def _load_json_dict(value):
+    """بارگذاری یک ستون JSON به‌صورت dict؛ در نبود داده dict خالی برمی‌گردد."""
+    if not value:
+        return {}
+    if isinstance(value, dict):
+        return value
+    try:
+        parsed = json.loads(value)
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def init_db():
     conn = sqlite3.connect(DB_PATH, timeout=30.0)
     c = conn.cursor()
@@ -1002,6 +1015,7 @@ def ensure_printer_counters_columns():
         "ALTER TABLE printer_counters ADD COLUMN yield_learning_failures INTEGER DEFAULT 0",
         "ALTER TABLE printer_counters ADD COLUMN last_alert_codes TEXT DEFAULT NULL",
         "ALTER TABLE printer_counters ADD COLUMN cartridge_id_state TEXT DEFAULT NULL",
+        "ALTER TABLE printer_counters ADD COLUMN toner_overrides TEXT DEFAULT NULL",
     )
     try:
         with db_connection(commit=True) as conn:
@@ -1034,7 +1048,7 @@ _COUNTERS_COLS = (
     "device_type, print_total, full_color, black_white, toner_level, manual_override, "
     "override_color, override_base_level, override_start_total, override_start_toner, "
     "yield_per_page, force_estimate, yield_learning_failures, last_alert_codes, "
-    "a3_total, a4_total, alert_codes, cartridge_id_state, updated_at"
+    "a3_total, a4_total, alert_codes, cartridge_id_state, toner_overrides, updated_at"
 )
 
 
@@ -1067,7 +1081,8 @@ def load_printer_counters(ip: str) -> Optional[dict]:
             "a4_total": row[15],
             "alert_codes": _load_json_list(row[16]),
             **_load_cartridge_id_state(row[17]),
-            "updated_at": row[18],
+            "toner_overrides": _load_json_dict(row[18]),
+            "updated_at": row[19],
         }
     except Exception as e:
         log.exception(f"Error loading counters for {ip}: {e}")
@@ -1085,8 +1100,8 @@ def save_printer_counters(ip: str, data: dict):
                 (ip, device_type, print_total, full_color, black_white, toner_level, manual_override,
                  override_color, override_base_level, override_start_total, override_start_toner,
                  yield_per_page, force_estimate, yield_learning_failures,
-                 last_alert_codes, a3_total, a4_total, alert_codes, cartridge_id_state, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 last_alert_codes, a3_total, a4_total, alert_codes, cartridge_id_state, toner_overrides, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 ip,
                 data.get("device_type"),
@@ -1107,6 +1122,7 @@ def save_printer_counters(ip: str, data: dict):
                 data.get("a4_total"),
                 json.dumps(data.get("alert_codes", [])),
                 _dump_cartridge_id_state(data),
+                json.dumps(data.get("toner_overrides") or {}),
                 updated_at,
             ))
     except Exception as e:

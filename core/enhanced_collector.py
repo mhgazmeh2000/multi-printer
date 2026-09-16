@@ -1380,21 +1380,33 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
 
     override_color = prev_override.get('override_color')
     pages_since_last_reset = get_pages_since_last_reset(prev_override, total)
-    if prev_override.get('manual_override') and override_color and override_color in toners:
-        snmp_level = toners[override_color].get('level')
-        final_level = apply_toner_override(ip, total, snmp_level, color=override_color)
+    # ✅ فیکس «بازگشت مقدار دستی به پیش‌فرض»: همه‌ی رنگ‌های دارای override فعال
+    # مقدار نمایشی خودشان را از اسلات per-color می‌گیرند — نه فقط آخرین رنگ.
+    # ردیابی اسلات‌های منقضی (شمارنده عقب‌رفته) برای پاکسازی در همان‌جا.
+    try:
+        from core.collectors.base import _normalize_overrides as _norm_ov, _overrides_valid_after_total as _ov_valid
+        _active_overrides = _ov_valid(_norm_ov(prev_override), total)
+    except Exception:
+        _active_overrides = {}
+    if _active_overrides != dict(_norm_ov(prev_override)):
+        store._prev.set(ip, {"toner_overrides": _active_overrides})
+    for ov_color in list(_active_overrides.keys()):
+        if ov_color not in toners:
+            continue
+        snmp_level = toners[ov_color].get('level')
+        final_level = apply_toner_override(ip, total, snmp_level, color=ov_color)
         if final_level is not None:
-            toners[override_color]['level'] = final_level
+            toners[ov_color]['level'] = final_level
             if prev_override.get('force_estimate'):
-                toners[override_color]['source'] = 'forced_estimate'
+                toners[ov_color]['source'] = 'forced_estimate'
             if final_level == 0:
-                toners[override_color]['status'] = 'empty'
+                toners[ov_color]['status'] = 'empty'
             elif final_level <= 5:
-                toners[override_color]['status'] = 'critical'
+                toners[ov_color]['status'] = 'critical'
             elif final_level <= 15:
-                toners[override_color]['status'] = 'low'
+                toners[ov_color]['status'] = 'low'
             else:
-                toners[override_color]['status'] = 'ok'
+                toners[ov_color]['status'] = 'ok'
 
     # ─── هشدارها ─────────────────────────────────────────────────
     alerts = []

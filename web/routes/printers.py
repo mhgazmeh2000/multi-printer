@@ -576,13 +576,25 @@ def toner_reset(ip):
             ]
         else:
             cleared_alert_codes = prev.get('alert_codes', [])
+
+        # ✅ فیکس باگ «بازگشت مقدار دستی به پیش‌فرض پس از چند ثانیه»:
+        # هر رنگ اسلات override مستقل خودش را دارد (toner_overrides). reset یک
+        # رنگ دیگر override رنگ‌های قبلی را نابود نمی‌کند و poll بعدی مقدار
+        # نمایشی همه‌ی رنگ‌های reset‌شده را از روی صفحات چاپ‌شده ادامه می‌دهد.
+        from core.collectors.base import _normalize_overrides as _norm_ov
+        overrides = _norm_ov(prev)
+        overrides[color] = {
+            'start_total': current_total,
+            'start_toner': new_level,
+        }
+
         new_prev = {
             # reset دستی باید baseline شمارنده را با snapshot فعلی sync کند؛
             # وگرنه poll بعدی ممکن است PRINT یا COUNTER_RESET اشتباه بسازد.
             'print_total': current_total,
             'full_color': current_full_color if current_full_color is not None else prev.get('full_color'),
             'black_white': current_black_white if current_black_white is not None else prev.get('black_white'),
-            'toner_level': new_level,
+            'toner_level': new_level if color == 'black' else prev.get('toner_level'),
             'manual_override': 1,
             'override_color': color,
             'override_base_level': new_level,
@@ -594,6 +606,7 @@ def toner_reset(ip):
             'alert_codes': cleared_alert_codes,
             'last_alert_codes': cleared_alert_codes,
             'uptime': prev.get('uptime'),
+            'toner_overrides': overrides,
         }
         store._prev.set(ip, new_prev)
 
