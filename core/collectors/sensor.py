@@ -12,12 +12,12 @@ from __future__ import annotations
 import os
 import time
 import logging
-from datetime import datetime
 
 from core.snmp.protocol import snmp_get
 from core import store
 from core.database import add_event, record_sensor_readings
 from core.sensor_alert import check_and_send_sensor_alert
+from core.time_utils import utc_now_iso
 
 log = logging.getLogger("PrinterMonitor")
 
@@ -186,7 +186,7 @@ def collect_sensor(ip: str, name: str, community: str, start: float) -> dict:
             return {
                 "ip": ip, "name": name, "brand": "sensor", "device_type": "sensor",
                 "online": False,
-                "last_poll": datetime.now().isoformat(),
+                "last_poll": utc_now_iso(),
                 "poll_ms": elapsed,
                 "error": "No SNMP response",
                 "device": {"model": "ECS100G", "serial": "N/A", "firmware": "N/A", "uptime_str": "N/A"},
@@ -242,7 +242,7 @@ def collect_sensor(ip: str, name: str, community: str, start: float) -> dict:
         counters["temp_ports"] = temp_ports
         counters["hum_ports"] = hum_ports
 
-        timestamp = datetime.now().isoformat()
+        timestamp = utc_now_iso()
         with store.data_lock:
             previous = store.printer_data.get(ip, {}) or {}
         _register_sensor_changes(ip, previous, readings)
@@ -281,7 +281,7 @@ def collect_sensor(ip: str, name: str, community: str, start: float) -> dict:
         return {
             "ip": ip, "name": name, "brand": "sensor", "device_type": "sensor",
             "online": False,
-            "last_poll": datetime.now().isoformat(),
+            "last_poll": utc_now_iso(),
             "poll_ms": elapsed,
             "device": {"model": "ECS100G", "serial": "N/A", "firmware": "N/A", "uptime_str": "N/A"},
             "counters": {},

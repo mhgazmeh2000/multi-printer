@@ -1,0 +1,121 @@
+name: tests
+
+# =====================================================
+# فاز C — کار ۶: تور ایمنی CI
+# =====================================================
+# سه چیز را تضمین می‌کند:
+#   ۱) ۲۳۴ تست سبز روی پایتون ۳.۱۰ / ۳.۱۱ / ۳.۱۲ / ۳.۱۳
+#   ۲) بدون دوبارشماری: ۲۱ تست pytest-only (۳ فایل marker‌دار) + ۲۱۳ تست
+#      unittest — هر تست دقیقاً یک بار شمرده می‌شود (گارد اختصاصی پایین‌تر)
+#   ۳) fixtureهای golden بایت‌به‌بایت ثابت (تفاضل-صفر)
+#
+# تست‌ها hermetic هستند: بدون شبکه/ساعت واقعی/سرویس خارجی. هیچ سرویس جانبی
+# (PostgreSQL/Exporter) در این ورک‌فلو لازم نیست.
+# =====================================================
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: py${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: نصب وابستگی‌ها
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      # ---------- مسیر ۱: pytest (فقط ۳ فایل marker‌دار = ۲۱ تست) ----------
+      - name: pytest — فایل‌های pytest-only (۲۱ تست)
+        run: python -m pytest tests/ -m pytest_only -q --color=no
+
+      # ---------- مسیر ۲: unittest (۲۱۳ تست باقی‌مانده) ----------
+      # فایل‌های pytest-only با load_tests خالی از این مسیر کنار گذاشته شده‌اند.
+      - name: unittest — سایر تست‌ها (۲۱۳ تست)
+        run: |
+          python -m unittest discover -s tests -p "test_*.py" 2>&1 | tee "${{ runner.temp }}/unittest.log"
+
+      # ---------- گارد ضد دوبارشماری ----------
+      # هیچ تستی نباید حذف یا دوبار شمرده شود. تعداد unittest-discovered باید
+      # دقیقاً برابر مجموعه‌ی pytest بدون marker باشد (مقایسه‌ی مستقل از عدد ثابت).
+      - name: گارد ضد دوبارشماری
+        shell: python
+        env:
+          UNITTEST_LOG: ${{ runner.temp }}/unittest.log
+        run: |
+          import os
+          import re
+          import subprocess
+          import sys
+
+          def pytest_collected(marker):
+              out = subprocess.run(
+                  [sys.executable, "-m", "pytest", "tests/", "-m", marker,
+                   "--collect-only", "-q", "--color=no"],
+                  capture_output=True, text=True,
+              )
+              if out.returncode != 0:
+                  sys.exit("pytest --collect-only شکست خورد:\n" + out.stdout + out.stderr)
+              return sum(1 for line in out.stdout.splitlines() if "::" in line)
+
+          only = pytest_collected("pytest_only")
+          rest = pytest_collected("not pytest_only")
+          total = only + rest
+
+          log = open(os.environ["UNITTEST_LOG"], encoding="utf-8", errors="replace").read()
+          m = re.search(r"^Ran (\d+) tests?", log, re.M)
+          if not m:
+              sys.exit("سطر «Ran N tests» در لاگ unittest پیدا نشد")
+          unittest_n = int(m.group(1))
+
+          print(f"pytest_only={only} | unittest={unittest_n} | pytest کل={total}")
+          if only == 0:
+              sys.exit("هیچ تست pytest_onlyای کشف نشد (marker/load_tests خراب است)")
+          if rest != unittest_n:
+              sys.exit(f"دوبارشماری/حذف تست: pytest(بدون marker)={rest} ولی unittest={unittest_n}")
+          print(f"✔ بدون دوبارشماری: {only} + {unittest_n} = {total} تست، هر کدام یک بار")
+
+      # ---------- گارد رگرسیون golden ----------
+      - name: golden fixtures — تفاضل-صفر (۱۰/۱۰)
+        run: python tools/record_golden.py --only all --check
+
+      # ---------- پوشش کد (اختیاری، بدون threshold) ----------
+      # فایل‌های پوشش بیرون از مخزن نوشته می‌شوند تا workspace آلوده نشود.
+      - name: پوشش کد (اختیاری — بدون threshold)
+        continue-on-error: true
+        env:
+          COVERAGE_FILE: ${{ runner.temp }}/.coverage
+        run: |
+          python -m pytest tests/ -q --color=no \
+            --cov=core --cov=web --cov-report=term-missing \
+            --cov-report=xml:${{ runner.temp }}/coverage.xml

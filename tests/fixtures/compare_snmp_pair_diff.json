@@ -1,0 +1,84 @@
+{
+ "_comment": "fixtureِ مصنوعیِ G.6 — همان pair_ok با چهار تغییرِ عمدی (سه diff و یک زیرِ تلورانس). هیچ عددی از دستگاه واقعی نیست.",
+ "expect_exit": 1,
+ "expect_rel_diff_pct": {
+  "counters.total": 8.56,
+  "toners.black.level": 16.0,
+  "trays.0.level": 3.7
+ },
+ "expect_rows": {
+  "counters.total": "diff",
+  "device.model": "diff",
+  "toners.black.level": "diff",
+  "trays.0.level": "ok"
+ },
+ "expect_summary": {
+  "diff": 3,
+  "ok_min": 20
+ },
+ "expect_tolerate_at": {
+  "expect_diff_paths": [
+   "device.model"
+  ],
+  "expect_exit": 1,
+  "note": "با تلورانس ۱۷٪ هر دو عددِ diff زیرِ آستانه می‌روند ولی نابرابریِ *رشته* به تلورانس ربطی ندارد و می‌ماند — پس exit همچنان ۱ است.",
+  "tolerance": 17.0
+ },
+ "exporter_capture": "# PrintGuard fixture — synthetic, hand-written (گام G.5.1)\n#\n# What this file is: the Prometheus exposition text that `snmp_exporter` 0.26.0 is\n# expected to return for one module-scrape of a mono HP LaserJet:\n#\n#     GET /snmp?target=172.16.0.5&module=printer_hp&auth=public_v2\n#\n# What this file is NOT: a capture. No exporter was run anywhere in this phase (the\n# phase rules forbid downloading the binary and running real SNMP), so every number and\n# every string below was chosen by hand from `monitoring/snmp.yml` (module printer_hp:\n# 14 metrics) and is labelled accordingly in tests. Treat it as a *format* fixture:\n# the shapes it pins are the ones derived from the exporter source in this session —\n#   * a metric name is exactly the `name:` field of snmp.yml — no `printer_hp_` prefix;\n#   * text-valued metrics (DisplayString) carry the value in a label named after the\n#     metric and value 1 (collector.go: \"For strings we put the value as a label with the\n#     same name as the metric\", value = 1.0);\n#   * the five self-metrics carry the const label module=\"printer_hp\"\n#     (collector.go: moduleLabel) and NO `instance` label — 0.26.0 adds no instance\n#     label of its own (grep for \"instance\" in collector.go and main.go: 0 hits);\n#   * a value of -2/-3 on a metric whose snmp.yml entry has `# ignore_values:` is the\n#     \"device does not report this\" sentinel, not a measurement.\n#\n# hp_fax is deliberately absent (printer has no fax) and general_oids / hp_npcl_pct_oid\n# deliberately carry sentinels, so the missing-sentinel paths are exercised too.\n# TYPE snmp_scrape_duration_seconds gauge\n# HELP snmp_scrape_duration_seconds Total SNMP time scrape took (walk and processing).\nsnmp_scrape_duration_seconds{module=\"printer_hp\"} 0.0153\n# TYPE snmp_scrape_walk_duration_seconds gauge\nsnmp_scrape_walk_duration_seconds{module=\"printer_hp\"} 0.0121\n# TYPE snmp_scrape_packets_sent gauge\nsnmp_scrape_packets_sent{module=\"printer_hp\"} 3\n# TYPE snmp_scrape_packets_retried gauge\nsnmp_scrape_packets_retried{module=\"printer_hp\"} 0\n# TYPE snmp_scrape_pdus_returned gauge\nsnmp_scrape_pdus_returned{module=\"printer_hp\"} 14\n# TYPE hp_model gauge\n# HELP hp_model PrintGuard printer_hp: hp_model [core/oid/catalog.py:22]\nhp_model{hp_model=\"HP LaserJet Pro M402dn\"} 1\n# TYPE hp_serial gauge\nhp_serial{hp_serial=\"CNCVC0245A\"} 1\n# TYPE hp_firmware gauge\nhp_firmware{hp_firmware=\"20190418\"} 1\n# TYPE general_oids_2 gauge\ngeneral_oids_2 12\n# TYPE hp_scan_color counter\nhp_scan_color 400\n# TYPE hp_print_color counter\nhp_print_color 1200\n# TYPE hp_copy_color counter\nhp_copy_color 30\n# TYPE hp_copy_mono counter\nhp_copy_mono 900\n# TYPE hp_scan_mono counter\nhp_scan_mono 60\n# TYPE candidate_subtrees_hp gauge\ncandidate_subtrees_hp{candidate_subtrees_hp=\"4.1.11.2.3.9.4.2.1.1\"} 1\n# TYPE candidate_subtrees_hp_2 gauge\ncandidate_subtrees_hp_2{candidate_subtrees_hp_2=\"4.1.11.2.3.9.4.2.1.4\"} 1\n# TYPE general_oids gauge\ngeneral_oids -2\n# TYPE hp_npcl_pct_oid gauge\nhp_npcl_pct_oid -3\n\n# PrintGuard fixture — synthetic, hand-written (گام G.5.1)\n#\n# Expected response of the second module-scrape for the same mono HP device:\n#\n#     GET /snmp?target=172.16.0.5&module=printer_std&auth=public_v2\n#\n# Same caveats as exporter_response_sample.txt: not a capture. Shapes follow\n# `monitoring/snmp.yml` (module printer_std: 24 metrics — 11 get, 2 walk roots).\n#\n# Why this file exists: `printer_hp` has no toner, tray, cover or sys_* metric, so the\n# HP shape (toners/trays/alerts/uptime) can only be assembled from the standard MIB\n# module. The numbers are deliberately self-consistent with the hp fixture:\n#   bro_total 12345 − bro_color 1200 = 11145 = bw_std = bro_bw\n#   sys_uptime 9245678 ticks (1/100 s) → 92456 s → \"1d 01:40\"\n#   toner_remain_1 1344 / toner_max_1 3200 → 42 % → status ok\n#   tray1_level 130 / tray1_cap 250 → 52 % → status medium\n#   tray2_level −3 → empty (and −3 is an ignore_values sentinel on this metric, so the\n#   dropped value falls back to the collector default −9, which is also \"empty\")\n#   toner_remain_2 −2 → level None / status unknown (ignored sentinel ⇒ same result)\n#   cover_status 4 → no alert (4 = closed)\n# toner_name_2 is \"Imaging Drum\", which no colour keyword matches: it must land on the\n# generic toner_2 key, exactly like _hp_toner_key() in core/collectors/hp.py decides.\n# TYPE sys_descr gauge\n# HELP sys_descr PrintGuard printer_std: sys_descr [core/oid/catalog.py:8]\nsys_descr{sys_descr=\"HP HP LaserJet Pro M402dn  Series:V6.05.10  (lua)\"} 1\n# TYPE sys_object_id gauge\nsys_object_id{sys_object_id=\"1.3.6.1.4.1.11.5.3.8.1\"} 1\n# TYPE sys_uptime gauge\nsys_uptime 9245678\n# TYPE sys_hostname gauge\nsys_hostname{sys_hostname=\"hp-m402-05\"} 1\n# TYPE model_mib gauge\nmodel_mib{model_mib=\"HP LaserJet Pro M402dn\"} 1\n# TYPE serial_mib gauge\nserial_mib{serial_mib=\"CNCVC0245A\"} 1\n# TYPE cover_status gauge\ncover_status 4\n# TYPE bro_total counter\nbro_total 12345\n# TYPE bro_color counter\nbro_color 1200\n# TYPE bw_std counter\nbw_std 11145\n# TYPE bro_bw counter\nbro_bw 11145\n# TYPE standard gauge\nstandard{standard=\"Ordinary\"} 1\n# TYPE toner_name_1 gauge\ntoner_name_1{toner_name_1=\"Black Toner\"} 1\n# TYPE toner_max_1 gauge\ntoner_max_1 3200\n# TYPE toner_remain_1 gauge\ntoner_remain_1 1344\n# TYPE toner_name_2 gauge\ntoner_name_2{toner_name_2=\"Imaging Drum\"} 1\n# TYPE toner_max_2 gauge\ntoner_max_2 100\n# TYPE toner_remain_2 gauge\ntoner_remain_2 -2\n# TYPE tray1_cap gauge\ntray1_cap 250\n# TYPE tray1_level gauge\ntray1_level 130\n# TYPE tray1_name gauge\ntray1_name{tray1_name=\"Tray 1\"} 1\n# TYPE tray2_cap gauge\ntray2_cap 150\n# TYPE tray2_level gauge\ntray2_level -3\n# TYPE tray2_name gauge\ntray2_name{tray2_name=\"Manual Feed Tray\"} 1\n",
+ "snmp_snapshot": {
+  "alerts": [],
+  "brand": "hp",
+  "counters": {
+   "black_white": 11145,
+   "copy": 930,
+   "fax": null,
+   "full_color": 1200,
+   "printer": 12345,
+   "total": 13500
+  },
+  "device": {
+   "firmware": "20190418",
+   "model": "HP LaserJet Pro M402dw",
+   "serial": "CNCVC0245A",
+   "uptime_str": "1d 01:40"
+  },
+  "device_type": "printer",
+  "ip": "10.0.20.7",
+  "last_poll": "2026-10-06T00:00:00Z",
+  "name": "Studio",
+  "nickname": "HP-Studio",
+  "online": true,
+  "paper_sizes": {},
+  "poll_ms": 431,
+  "toners": {
+   "black": {
+    "level": 50,
+    "max": 3200,
+    "name": "Black Toner",
+    "remaining": 1344,
+    "status": "ok"
+   },
+   "toner_2": {
+    "level": null,
+    "max": 100,
+    "name": "Imaging Drum",
+    "remaining": -2,
+    "status": "unknown"
+   }
+  },
+  "trays": [
+   {
+    "capacity": 250,
+    "level": 135,
+    "name": "Tray 1",
+    "status": "medium"
+   },
+   {
+    "capacity": 150,
+    "level": -9,
+    "name": "Manual Feed Tray",
+    "status": "empty"
+   }
+  ]
+ }
+}

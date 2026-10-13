@@ -5,11 +5,12 @@ import time
 import logging
 import socket
 import errno
-from datetime import datetime
+from datetime import datetime, timezone
 
 from core.snmp.protocol import snmp_get_with_fallback
 from core.collectors.base import si, ss, _counters_event
 from core import store
+from core.time_utils import to_utc_z, utc_now_iso
 
 log = logging.getLogger("PrinterMonitor")
 
@@ -161,7 +162,7 @@ def collect_canon(ip: str, name: str, community: str, start: float) -> dict:
             return {
                 "ip": ip, "name": name, "brand": "canon",
                 "online": False,
-                "last_poll": datetime.now().isoformat(),
+                "last_poll": utc_now_iso(),
                 "poll_ms": elapsed,
                 "error": error_details,
                 "error_type": error_type,
@@ -412,13 +413,13 @@ def collect_canon(ip: str, name: str, community: str, start: float) -> dict:
                 full_color=full_color, black_white=black_white,
                 paper_size=None, username=last_user,
                 current_toner_level=black_level, prev_toner_level=prev_toner,
-                uptime=ut, poll_timestamp=datetime.fromtimestamp(start).isoformat())
+                uptime=ut, poll_timestamp=to_utc_z(datetime.fromtimestamp(start, tz=timezone.utc)))
 
         brand_tag = "canon-mf" if is_mf else "canon-lbp"
         log.info(f"  ✓ {name} [{brand_tag}] total={total:,} {elapsed}ms")
         return {
             "ip": ip, "name": name, "brand": "canon",
-            "online": True, "last_poll": datetime.now().isoformat(), "poll_ms": elapsed,
+            "online": True, "last_poll": utc_now_iso(), "poll_ms": elapsed,
             "device": {"model": model, "serial": serial, "firmware": firmware, "uptime_str": uptime_str},
             "counters": counters_data,
             "paper_sizes": {}, "trays": trays, "toners": toners, "alerts": alerts,
@@ -428,7 +429,7 @@ def collect_canon(ip: str, name: str, community: str, start: float) -> dict:
         log.error(f"  ✗ {name} [canon] error: {e}", exc_info=True)
         return {
             "ip": ip, "name": name, "brand": "canon",
-            "online": False, "last_poll": datetime.now().isoformat(), "poll_ms": elapsed,
+            "online": False, "last_poll": utc_now_iso(), "poll_ms": elapsed,
             "device": {"model": "Unknown", "serial": "N/A", "firmware": "N/A", "uptime_str": "N/A"},
             "counters": {"total": 0, "full_color": None, "black_white": None,
                          "printer": 0, "copy": None, "fax": None},

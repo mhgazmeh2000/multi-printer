@@ -35,14 +35,13 @@ import re
 import threading
 import time
 from collections import deque
-from datetime import datetime
-
 from core.collectors.cartridge_id import (
     normalize_id,
     load_id_config,
     CONFIG_PATH,
     clear_cache as clear_id_cache,
 )
+from core.time_utils import utc_now_iso
 
 log = logging.getLogger("PrinterMonitor")
 
@@ -290,7 +289,7 @@ def _save_learned(ip: str, confirmed: dict, brand: str = "", model: str = "") ->
             snmp_map[color] = cand["oid"]
             meta[color] = {
                 "value_at_confirm": cand["value"],
-                "confirmed_at": datetime.now().isoformat(),
+                "confirmed_at": utc_now_iso(),
                 "brand": brand or None,
                 "model": model or None,
             }

@@ -21,6 +21,7 @@ import re
 import threading
 import logging
 from datetime import datetime
+from core.time_utils import utc_now_iso
 
 log = logging.getLogger("PrinterMonitor")
 
@@ -98,7 +99,7 @@ def create_group(name: str, icon: str = None, color: str = None) -> dict:
         candidate = f"{gid}_{suffix}"
         suffix += 1
 
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
     group = {
         "id": candidate,
         "name": name,
@@ -122,7 +123,7 @@ def rename_group(group_id: str, new_name: str) -> bool:
     for g in groups:
         if g["id"] == group_id:
             g["name"] = new_name
-            g["updated_at"] = datetime.now().isoformat()
+            g["updated_at"] = utc_now_iso()
             save_groups(groups)
             return True
     return False

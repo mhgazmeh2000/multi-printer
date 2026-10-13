@@ -6,7 +6,6 @@
 
 import sys
 import os
-import sqlite3
 
 # اطمینان از مسیر پروژه
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -15,6 +14,7 @@ if ROOT not in sys.path:
 
 from config import settings  # noqa: trigger SECRET_KEY check
 from core.database import init_db
+from core.db import DatabaseConnectionError, DatabaseOperationalError
 from models import User
 
 
@@ -28,13 +28,18 @@ def main():
     # راه‌اندازی دیتابیس
     try:
         init_db()
-    except sqlite3.OperationalError as e:
+    # فاز E.4.4: خطاها با نوع مشترک از adapter می‌آیند — DatabaseOperationalError
+    # (قفل/دیسک/اتصال) و DatabaseConnectionError (ساخت اتصال). هیچ except
+    # مختص-backend در این فایل نمی‌ماند.
+    except (DatabaseOperationalError, DatabaseConnectionError) as e:
         # راهنمای کاربردی به‌جای Traceback خام (مورد واقعی: اجرا روی ویندوز با
         # درایو C:/‎%TEMP% پر → sqlite3.OperationalError: database or disk is full)
         print()
         print(f"  ❌ خطا در آماده‌سازی دیتابیس: {e}")
         print()
-        if "full" in str(e).lower():
+        # فاز E.4.4: اول SQLSTATE (روی PG: 53100 = disk_full)، بعد متن درایور
+        # (روی SQLite: «database or disk is full»). ترتیب: دقیق ⇒ تقریبی.
+        if getattr(e, "sqlstate", None) == "53100" or "full" in str(e).lower():
             print("  علت: دیسک یا پوشه TEMP پر است. گزینه‌ها:")
             print("   ۱) در درایو C:\\ جا باز کنید (Recycle Bin / %%TEMP%% / دانلودهای قدیمی)")
             print("   ۲) یا فایل‌های پروژه را به درایو جادار (مثل D:\\) منتقل کنید")

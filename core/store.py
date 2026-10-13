@@ -12,7 +12,7 @@ import os
 import threading
 import logging
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from config.settings import PRINTERS_FILE, DEFAULT_PRINTERS
 from core.database import (
@@ -22,6 +22,7 @@ from core.database import (
     update_missing_yield_list,
     record_toner_snapshot,
 )
+from core.time_utils import parse_utc, utc_now_iso
 
 log = logging.getLogger("PrinterMonitor")
 
@@ -75,7 +76,7 @@ class PrevStore:
         with self._lock:
             try:
                 existing = self._cache.get(ip) or load_printer_counters(ip) or {}
-                updated_at = data.get("updated_at") or datetime.now().isoformat()
+                updated_at = data.get("updated_at") or utc_now_iso()
                 normalized = {
                     "device_type": existing.get("device_type"),
                     "toner_level": existing.get("toner_level"),
@@ -131,7 +132,9 @@ class PrevStore:
                     old_updated = existing.get("updated_at")
                     elapsed = 999999
                     if old_updated:
-                        elapsed = (datetime.now() - datetime.fromisoformat(old_updated)).total_seconds()
+                        # فاز E.3: «الآن» آگاه به UTC و مقدار ذخیره‌شده (Z) تجزیه‌شده؛
+                        # مقدار مهاجرت‌نشده/خراب استثنا می‌دهد ⇒ همان fallback قبلی.
+                        elapsed = (datetime.now(timezone.utc) - parse_utc(old_updated)).total_seconds()
                     should_snapshot = changed or elapsed >= 1800
                 except Exception:
                     should_snapshot = True

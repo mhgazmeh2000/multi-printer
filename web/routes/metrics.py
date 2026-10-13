@@ -10,18 +10,52 @@ Exposes:
   - printer_cartridge_chip_id_known: 1 if genuine chip ID exists (by printer, color)
   - printer_supply_name: current supply name (by printer, color) — informational label
 
+حفاظت: اگر متغیر محیطی ``METRICS_TOKEN`` تنظیم شده باشد، درخواست باید هدر
+``Authorization: Bearer <token>`` را بفرستد؛ در غیر این صورت ۴۰۱ برمی‌گردد.
+اگر تنظیم نشده باشد، endpoint مثل قبل باز است (با هشدار در لاگ).
+
 No external dependencies required — generates Prometheus exposition text directly.
 """
 
-import sqlite3
+import os
+import secrets
 import logging
 from datetime import datetime
-from flask import Blueprint, Response
-from config.settings import DB_PATH
+from flask import Blueprint, Response, request
+from core.db import get_connection
 from core import store
 
 bp = Blueprint("metrics", __name__)
 log = logging.getLogger("PrinterMonitor")
+
+# هشدار «بدون توکن» فقط یک‌بار در طول عمر پروسه ثبت می‌شود.
+_METRICS_TOKEN_WARNED = False
+
+
+def _check_metrics_token():
+    """بررسی هدر Bearer در برابر ``METRICS_TOKEN``.
+
+    خروجی: ``(ok, required)``
+      • توکن تنظیم نشده  → (True, False)  → رفتار قبلی حفظ می‌شود (با هشدار یک‌باره)
+      • توکن تنظیم شده   → مقایسه‌ی ثابت‌زمان هدر با مقدار محیطی
+    """
+    global _METRICS_TOKEN_WARNED
+    expected = (os.getenv("METRICS_TOKEN") or "").strip()
+    if not expected:
+        if not _METRICS_TOKEN_WARNED:
+            _METRICS_TOKEN_WARNED = True
+            log.warning(
+                "⚠ METRICS_TOKEN تنظیم نشده است؛ /metrics بدون احراز هویت در دسترس "
+                "است. برای محیط تولید یک توکن تنظیم کنید."
+            )
+        return True, False
+
+    header = (request.headers.get("Authorization") or "").strip()
+    prefix = "Bearer "
+    if not header.startswith(prefix):
+        return False, True
+    provided = header[len(prefix):].strip()
+    return secrets.compare_digest(provided, expected), True
 
 
 def _escape_label(value: str) -> str:
@@ -51,7 +85,16 @@ def prometheus_metrics():
     """
     Prometheus exposition format endpoint.
     Grafana Prometheus datasource: http://<host>:<port>/metrics
+    (در صورت تنظیم METRICS_TOKEN: با هدر Authorization: Bearer <token>)
     """
+    token_ok, _token_required = _check_metrics_token()
+    if not token_ok:
+        return Response(
+            "unauthorized\n",
+            status=401,
+            mimetype="text/plain; version=0.0.4; charset=utf-8",
+        )
+
     lines = []
     help_seen = set()
 
@@ -64,15 +107,25 @@ def prometheus_metrics():
         lines.append(f"# TYPE {name} {t}")
 
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=10.0)
-        c = conn.cursor()
+        # فاز D: اتصال از لایه‌ی adapter (core.db)؛ همان timeout قبلی.
+        conn = get_connection(timeout=10.0)
 
         # ─── 1. cartridge_changes_total ─────────────────────────────────
         _help("cartridge_changes_total", "Total number of CARTRIDGE_CHANGED events detected")
         _type("cartridge_changes_total", "counter")
-        c.execute("""
-            SELECT printer_ip, printer_name,
-                   json_extract(details, '$.detection') as detection,
+        # فاز E.4.6: cursor خام حذف شد ⇒ ``conn.execute`` (همان قرارداد بقیه‌ی کوئری‌ها).
+        # فاز E.4.9: ``json_extract`` تابع SQLite است ⇒ قطعهٔ SQL از هِلپر adapter.
+        detection_sql = conn.json_extract("details", "detection")
+        # فاز E.4.9b: ``printer_name`` در فهرست ``GROUP BY`` نیست؛ SQLite این را
+        # می‌پذیرد، PostgreSQL نه — خطای 42803 «column logs.printer_name must
+        # appear in the GROUP BY clause or be used in an aggregate function»
+        # (سنجیده‌شده، E.4.9). تصمیم مالک: ``MAX(printer_name)`` انتخاب شد تا
+        # **تعداد سری امروز ثابت بماند** (افزودن ستون به GROUP BY اگر پرینتری
+        # تغییر نام داده باشد سری اضافه می‌کند). مزیت جانبی: مقدار برچسب دیگر
+        # به ترتیب تصادفی ردیف‌ها وابسته نیست.
+        c = conn.execute(f"""
+            SELECT printer_ip, MAX(printer_name) AS printer_name,
+                   {detection_sql} as detection,
                    color,
                    COUNT(*) as cnt
             FROM logs
@@ -105,10 +158,20 @@ def prometheus_metrics():
                         if p.get("ip") == ip:
                             printer_name = p.get("name", "")
                             break
-                toners = data.get("toners") or []
-                for t in toners:
+                # شکل واقعی collect_enhanced: {"black": {"level": …, "name": …}, …}
+                # (شیء قدیمی لیستی بود؛ هر دو پشتیبانی می‌شوند.)
+                toners = data.get("toners") or {}
+                if isinstance(toners, dict):
+                    toner_items = list(toners.items())
+                else:
+                    toner_items = [(None, t) for t in toners]
+                for color_key, t in toner_items:
+                    if not isinstance(t, dict):
+                        continue
                     level = t.get("level")
-                    color_name = t.get("color") or t.get("name", "")
+                    if level is None:
+                        level = t.get("remaining")
+                    color_name = color_key or t.get("color") or t.get("name", "")
                     if level is not None:
                         try:
                             level = int(level)
@@ -134,7 +197,13 @@ def prometheus_metrics():
                         if p.get("ip") == ip:
                             printer_name = p.get("name", "")
                             break
-                total = data.get("print_total")
+                # شکل واقعی: counters.total (با fallback به print_total قدیمی)
+                counters = data.get("counters")
+                total = None
+                if isinstance(counters, dict):
+                    total = counters.get("total")
+                if total is None:
+                    total = data.get("print_total")
                 if total is not None:
                     try:
                         total = int(total)
@@ -154,7 +223,11 @@ def prometheus_metrics():
                         if p.get("ip") == ip:
                             printer_name = p.get("name", "")
                             break
-                online = 1 if data and data.get("status") == "online" else 0
+                # شکل واقعی: کلید بولی online (fallback: status == "online")
+                if data and "online" in data:
+                    online = 1 if data.get("online") else 0
+                else:
+                    online = 1 if data and data.get("status") == "online" else 0
                 labels = {"printer_ip": ip, "printer_name": printer_name}
                 lines.append(_metric_line("printer_online", labels, online))
 

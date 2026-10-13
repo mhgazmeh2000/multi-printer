@@ -35,6 +35,12 @@
         <label>تکرار رمز عبور</label>
         <input class="form-input" type="password" name="confirm_password" required>
 
+        {% if admin_setup_token_required %}
+        <label>توکن راه‌اندازی ادمین</label>
+        <input class="form-input" type="password" name="admin_setup_token"
+               placeholder="ADMIN_SETUP_TOKEN" autocomplete="off" required>
+        {% endif %}
+
         {% if recaptcha_site_key %}
         <div class="g-recaptcha" data-sitekey="{{ recaptcha_site_key }}"></div>
         <script src="https://www.google.com/recaptcha/api.js" async defer></script>

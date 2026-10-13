@@ -18,6 +18,7 @@ from core.oid.catalog import OID_CATALOG
 from core.oid.validator import _validate_oid_value_strict, validate_oid_value, log_validation_error
 from core.device_classifier import classify_from_scan   # ← classifier مبتنی بر OIDهای اسکن‌شده
 from core import store
+from core.time_utils import utc_now_iso
 
 log = logging.getLogger("PrinterMonitor")
 
@@ -166,7 +167,7 @@ def scan_printer_oids(ip: str, community: str = "public", force: bool = False) -
         "ip":           ip,
         "brand":        brand,
         "device_type":  device_type,
-        "scanned_at":   datetime.now().isoformat(),
+        "scanned_at":   utc_now_iso(),
         "scan_ms":      elapsed,
         "oid_total":    len(OID_CATALOG),
         "oid_active":   len(active_oids),

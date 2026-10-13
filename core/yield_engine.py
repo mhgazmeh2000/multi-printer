@@ -21,11 +21,14 @@ import json
 import logging
 import os
 import re
-from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 from core.database import db_connection
+from core.db import BACKEND_POSTGRESQL
+from core.db import upsert_sql as _upsert_sql
+from core.db.schema import YIELD_TABLES as _PG_YIELD_TABLES, verify_postgres_tables
+from core.time_utils import as_utc_datetime, utc_now_iso
 
 log = logging.getLogger("PrinterMonitor")
 
@@ -59,7 +62,7 @@ _COLOR_ORDER = ("black", "cyan", "magenta", "yellow", "drum")
 
 
 def _now() -> str:
-    return datetime.now().isoformat()
+    return utc_now_iso()
 
 
 def _norm_text(value: str) -> str:
@@ -102,11 +105,18 @@ def _valid_device_capacity(value) -> Optional[int]:
 
 
 def _parse_dt(value: str):
+    """
+    رشته‌ی زمان ذخیره‌شده (UTC/Z) ⇒ datetime آگاه؛ خالی/نامعتبر ⇒ ``None``.
+
+    فاز E.3: قبلاً ``datetime.fromisoformat`` خام بود (naive برمی‌گرداند و با
+    مقدار آگاه قابل مقایسه نبود). این تابع امروز مصرف‌کننده‌ای در کد ندارد، ولی
+    چون نامش «تجزیه‌ی timestamp دیتابیس» است، هم‌قرارداد با بقیه‌ی خواننده‌ها شد.
+    """
     if not value:
         return None
     try:
-        return datetime.fromisoformat(value)
-    except Exception:
+        return as_utc_datetime(value)
+    except ValueError:
         return None
 
 
@@ -223,8 +233,15 @@ def _confidence_rank(conf: str) -> int:
 
 
 def ensure_yield_tables() -> None:
-    """ساخت جدول‌های Yield Engine. چندباره و امن قابل اجراست."""
+    """ساخت جدول‌های Yield Engine. چندباره و امن قابل اجراست.
+
+    روی PostgreSQL (فاز E.4.5) این تابع **no-op** است: اسکیما از Alembic می‌آید و
+    دو نسخه‌ی DDL واگرایی می‌سازد. فقط تأیید می‌کند چهار جدول موجودند.
+    """
     with db_connection(commit=True) as conn:
+        if conn.backend == BACKEND_POSTGRESQL:
+            verify_postgres_tables(conn, _PG_YIELD_TABLES, context="ensure_yield_tables")
+            return
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS cartridge_state (
@@ -406,33 +423,45 @@ def _load_profile(conn, cartridge_key: str) -> Optional[dict]:
     }
 
 
+#: ستون‌های ``cartridge_state`` که ``_upsert_state`` می‌نویسد — **هر ۳۱ ستون**
+#: جدول (قفل هم‌خوانی در tests/test_upsert_cross_backend.py). «INSERT OR REPLACE»
+#: تنها وقتی با «ON CONFLICT DO UPDATE» هم‌معناست که همهٔ ستون‌ها نوشته شوند.
+_STATE_UPSERT_COLUMNS = (
+    "printer_ip", "color", "printer_model", "cartridge_name", "cartridge_key",
+    "current_level", "last_valid_level", "last_counter", "anchor_counter", "anchor_level",
+    "anchor_timestamp", "yield_per_page", "yield_source", "confidence", "sample_count",
+    "total_weight", "learned_at", "last_refill_at", "last_refill_counter",
+    "pending_refill_level", "pending_refill_counter", "pending_refill_timestamp",
+    "cycle_start_counter", "cycle_start_level", "cycle_start_timestamp",
+    "zero_reached_counter", "zero_reached_timestamp", "pages_after_zero", "cycle_status",
+    "force_estimate", "updated_at",
+)
+
+
 def _upsert_state(conn, state: dict) -> None:
+    # فاز E.5: جمله از هِلپر cross-backend (روی PG «INSERT OR REPLACE» با 42601
+    # می‌شکست — ۲۰ شکست در سنجش E.5 از همین یک الگو بود).
     conn.execute(
-        """
-        INSERT OR REPLACE INTO cartridge_state (
-            printer_ip, color, printer_model, cartridge_name, cartridge_key,
-            current_level, last_valid_level, last_counter, anchor_counter, anchor_level,
-            anchor_timestamp, yield_per_page, yield_source, confidence, sample_count,
-            total_weight, learned_at, last_refill_at, last_refill_counter,
-            pending_refill_level, pending_refill_counter, pending_refill_timestamp,
-            cycle_start_counter, cycle_start_level, cycle_start_timestamp,
-            zero_reached_counter, zero_reached_timestamp, pages_after_zero, cycle_status,
-            force_estimate, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            state.get("printer_ip"), state.get("color"), state.get("printer_model"),
-            state.get("cartridge_name"), state.get("cartridge_key"), state.get("current_level"),
-            state.get("last_valid_level"), state.get("last_counter"), state.get("anchor_counter"),
-            state.get("anchor_level"), state.get("anchor_timestamp"), state.get("yield_per_page", DEFAULT_YIELD_PER_PAGE),
-            state.get("yield_source", "default"), state.get("confidence", "low"), state.get("sample_count", 0),
-            state.get("total_weight", 0.0), state.get("learned_at"), state.get("last_refill_at"),
-            state.get("last_refill_counter"), state.get("pending_refill_level"), state.get("pending_refill_counter"),
-            state.get("pending_refill_timestamp"), state.get("cycle_start_counter"), state.get("cycle_start_level"),
-            state.get("cycle_start_timestamp"), state.get("zero_reached_counter"), state.get("zero_reached_timestamp"),
-            state.get("pages_after_zero", 0), state.get("cycle_status", "active"),
-            state.get("force_estimate", 0), state.get("updated_at"),
-        ),
+        _upsert_sql("cartridge_state", _STATE_UPSERT_COLUMNS, ("printer_ip", "color"),
+                    backend=conn.backend),
+        _upsert_state_params(state),
+    )
+
+
+def _upsert_state_params(state: dict) -> tuple:
+    """مقادیر ``_STATE_UPSERT_COLUMNS``، به همان ترتیب (پیش‌فرض‌ها عیناً همان قبل)."""
+    return (
+        state.get("printer_ip"), state.get("color"), state.get("printer_model"),
+        state.get("cartridge_name"), state.get("cartridge_key"), state.get("current_level"),
+        state.get("last_valid_level"), state.get("last_counter"), state.get("anchor_counter"),
+        state.get("anchor_level"), state.get("anchor_timestamp"), state.get("yield_per_page", DEFAULT_YIELD_PER_PAGE),
+        state.get("yield_source", "default"), state.get("confidence", "low"), state.get("sample_count", 0),
+        state.get("total_weight", 0.0), state.get("learned_at"), state.get("last_refill_at"),
+        state.get("last_refill_counter"), state.get("pending_refill_level"), state.get("pending_refill_counter"),
+        state.get("pending_refill_timestamp"), state.get("cycle_start_counter"), state.get("cycle_start_level"),
+        state.get("cycle_start_timestamp"), state.get("zero_reached_counter"), state.get("zero_reached_timestamp"),
+        state.get("pages_after_zero", 0), state.get("cycle_status", "active"),
+        state.get("force_estimate", 0), state.get("updated_at"),
     )
 
 
@@ -474,7 +503,8 @@ def _record_sample(conn, *, ip: str, color: str, printer_model: str, cartridge_n
             ip, color, printer_model, cartridge_name, cartridge_key,
             start_counter, end_counter, start_level, end_level, pages_delta,
             toner_drop, estimated_yield, counter_basis, weight,
-            1 if accepted else 0, reject_reason, source, _now(),
+            # فاز E.4.1: accepted روی PG BOOLEAN است ⇒ bool، نه int.
+            bool(accepted), reject_reason, source, _now(),
         ),
     )
 
@@ -553,11 +583,13 @@ def _robust_learned_yield(conn, ip: str, color: str, cartridge_key: str,
     """
     try:
         rows = conn.execute(
+            # فاز E.4.1: «accepted=1» روی PG (ستون BOOLEAN) خطای نوع می‌دهد ⇒
+            # مقایسه با پارامتر bool؛ روی هر دو backend یک معنا دارد.
             """SELECT estimated_yield, confidence_weight FROM yield_samples
-               WHERE accepted=1 AND estimated_yield IS NOT NULL
+               WHERE accepted = ? AND estimated_yield IS NOT NULL
                  AND (cartridge_key = ? OR (printer_ip = ? AND color = ?))
                ORDER BY id DESC LIMIT ?""",
-            (cartridge_key, ip, color, int(limit)),
+            (True, cartridge_key, ip, color, int(limit)),
         ).fetchall()
     except Exception as exc:
         log.debug("robust yield query failed: %s", exc)
@@ -576,6 +608,23 @@ def _robust_learned_yield(conn, ip: str, color: str, cartridge_key: str,
         if acc >= total_w / 2.0:
             return y, total_w
     return pts[-1]
+
+
+#: ستون‌های ``cartridge_yield_profiles`` که ``_upsert_profile_if_high`` می‌نویسد
+#: (هر ۱۰ ستون جدول). ``confidence`` در ``VALUES`` مقدار ثابت ``'high'`` دارد و
+#: جای‌نما نیست؛ به همین دلیل ``values_sql`` صریح داده می‌شود.
+_PROFILE_UPSERT_COLUMNS = (
+    "cartridge_key", "printer_model", "cartridge_name", "color", "yield_per_page",
+    "confidence", "sample_count", "total_weight", "source_printer_ip", "updated_at",
+)
+_PROFILE_UPSERT_VALUES = "?, ?, ?, ?, ?, 'high', ?, ?, ?, ?"
+
+
+def _upsert_profile_sql(conn) -> str:
+    """جملهٔ upsert جدول profile، با backend **همان اتصال** (نه محیط)."""
+    return _upsert_sql(
+        "cartridge_yield_profiles", _PROFILE_UPSERT_COLUMNS, ("cartridge_key",),
+        values_sql=_PROFILE_UPSERT_VALUES, backend=conn.backend)
 
 
 def _upsert_profile_if_high(conn, state: dict) -> None:
@@ -610,12 +659,8 @@ def _upsert_profile_if_high(conn, state: dict) -> None:
         sample_count = int(state.get("sample_count") or 0)
 
     conn.execute(
-        """
-        INSERT OR REPLACE INTO cartridge_yield_profiles (
-            cartridge_key, printer_model, cartridge_name, color, yield_per_page,
-            confidence, sample_count, total_weight, source_printer_ip, updated_at
-        ) VALUES (?, ?, ?, ?, ?, 'high', ?, ?, ?, ?)
-        """,
+        # فاز E.5: هِلپر cross-backend؛ «'high'» عمداً در VALUES ثابت مانده است.
+        _upsert_profile_sql(conn),
         (
             cartridge_key, state.get("printer_model"), state.get("cartridge_name"),
             state.get("color"), ypp, sample_count, total_weight,

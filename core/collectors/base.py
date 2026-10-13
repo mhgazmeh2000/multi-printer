@@ -8,12 +8,13 @@
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from config.settings import POLL_INTERVAL, TONER_ALERT_THRESHOLDS
 from core.snmp.protocol import snmp_get_with_fallback
 from core import store
 from core.database import add_event
+from core.time_utils import parse_utc, utc_now_iso
 
 log = logging.getLogger("PrinterMonitor")
 DEFAULT_YIELD_PER_PAGE = 2000
@@ -37,7 +38,8 @@ def _elapsed_since_prev(prev: dict) -> float:
     if not updated_at:
         return float(POLL_INTERVAL)
     try:
-        elapsed = (datetime.now() - datetime.fromisoformat(updated_at)).total_seconds()
+        # فاز E.3: مقایسه‌ی آگاه به UTC با مقدار تجزیه‌شده‌ی ذخیره‌شده (Z).
+        elapsed = (datetime.now(timezone.utc) - parse_utc(updated_at)).total_seconds()
         return max(1.0, elapsed)
     except Exception:
         return float(POLL_INTERVAL)
@@ -801,7 +803,7 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
                 cart_id_changed_colors.add(color)
                 current_cartridge_state[color] = {**curr_slot, "event_id": event_payload.get("event_id"), "confidence": result.get("confidence"), "last_seen_at": event_payload.get("timestamp")}
             else:
-                current_cartridge_state[color] = {**curr_slot, "confidence": result.get("confidence"), "last_seen_at": datetime.now().isoformat()}
+                current_cartridge_state[color] = {**curr_slot, "confidence": result.get("confidence"), "last_seen_at": utc_now_iso()}
         if current_cartridge_state:
             prev["cartridge_state"] = current_cartridge_state
             pending_map = prev.get("cart_change_pending") or {}

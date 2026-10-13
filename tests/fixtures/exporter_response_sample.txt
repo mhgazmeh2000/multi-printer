@@ -1,0 +1,62 @@
+# PrintGuard fixture — synthetic, hand-written (گام G.5.1)
+#
+# What this file is: the Prometheus exposition text that `snmp_exporter` 0.26.0 is
+# expected to return for one module-scrape of a mono HP LaserJet:
+#
+#     GET /snmp?target=172.16.0.5&module=printer_hp&auth=public_v2
+#
+# What this file is NOT: a capture. No exporter was run anywhere in this phase (the
+# phase rules forbid downloading the binary and running real SNMP), so every number and
+# every string below was chosen by hand from `monitoring/snmp.yml` (module printer_hp:
+# 14 metrics) and is labelled accordingly in tests. Treat it as a *format* fixture:
+# the shapes it pins are the ones derived from the exporter source in this session —
+#   * a metric name is exactly the `name:` field of snmp.yml — no `printer_hp_` prefix;
+#   * text-valued metrics (DisplayString) carry the value in a label named after the
+#     metric and value 1 (collector.go: "For strings we put the value as a label with the
+#     same name as the metric", value = 1.0);
+#   * the five self-metrics carry the const label module="printer_hp"
+#     (collector.go: moduleLabel) and NO `instance` label — 0.26.0 adds no instance
+#     label of its own (grep for "instance" in collector.go and main.go: 0 hits);
+#   * a value of -2/-3 on a metric whose snmp.yml entry has `# ignore_values:` is the
+#     "device does not report this" sentinel, not a measurement.
+#
+# hp_fax is deliberately absent (printer has no fax) and general_oids / hp_npcl_pct_oid
+# deliberately carry sentinels, so the missing-sentinel paths are exercised too.
+# TYPE snmp_scrape_duration_seconds gauge
+# HELP snmp_scrape_duration_seconds Total SNMP time scrape took (walk and processing).
+snmp_scrape_duration_seconds{module="printer_hp"} 0.0153
+# TYPE snmp_scrape_walk_duration_seconds gauge
+snmp_scrape_walk_duration_seconds{module="printer_hp"} 0.0121
+# TYPE snmp_scrape_packets_sent gauge
+snmp_scrape_packets_sent{module="printer_hp"} 3
+# TYPE snmp_scrape_packets_retried gauge
+snmp_scrape_packets_retried{module="printer_hp"} 0
+# TYPE snmp_scrape_pdus_returned gauge
+snmp_scrape_pdus_returned{module="printer_hp"} 14
+# TYPE hp_model gauge
+# HELP hp_model PrintGuard printer_hp: hp_model [core/oid/catalog.py:22]
+hp_model{hp_model="HP LaserJet Pro M402dn"} 1
+# TYPE hp_serial gauge
+hp_serial{hp_serial="CNCVC0245A"} 1
+# TYPE hp_firmware gauge
+hp_firmware{hp_firmware="20190418"} 1
+# TYPE general_oids_2 gauge
+general_oids_2 12
+# TYPE hp_scan_color counter
+hp_scan_color 400
+# TYPE hp_print_color counter
+hp_print_color 1200
+# TYPE hp_copy_color counter
+hp_copy_color 30
+# TYPE hp_copy_mono counter
+hp_copy_mono 900
+# TYPE hp_scan_mono counter
+hp_scan_mono 60
+# TYPE candidate_subtrees_hp gauge
+candidate_subtrees_hp{candidate_subtrees_hp="4.1.11.2.3.9.4.2.1.1"} 1
+# TYPE candidate_subtrees_hp_2 gauge
+candidate_subtrees_hp_2{candidate_subtrees_hp_2="4.1.11.2.3.9.4.2.1.4"} 1
+# TYPE general_oids gauge
+general_oids -2
+# TYPE hp_npcl_pct_oid gauge
+hp_npcl_pct_oid -3

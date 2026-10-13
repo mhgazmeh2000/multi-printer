@@ -1,0 +1,71 @@
+# PrintGuard fixture — synthetic, hand-written (گام G.5.1)
+#
+# Expected response of the second module-scrape for the same mono HP device:
+#
+#     GET /snmp?target=172.16.0.5&module=printer_std&auth=public_v2
+#
+# Same caveats as exporter_response_sample.txt: not a capture. Shapes follow
+# `monitoring/snmp.yml` (module printer_std: 24 metrics — 11 get, 2 walk roots).
+#
+# Why this file exists: `printer_hp` has no toner, tray, cover or sys_* metric, so the
+# HP shape (toners/trays/alerts/uptime) can only be assembled from the standard MIB
+# module. The numbers are deliberately self-consistent with the hp fixture:
+#   bro_total 12345 − bro_color 1200 = 11145 = bw_std = bro_bw
+#   sys_uptime 9245678 ticks (1/100 s) → 92456 s → "1d 01:40"
+#   toner_remain_1 1344 / toner_max_1 3200 → 42 % → status ok
+#   tray1_level 130 / tray1_cap 250 → 52 % → status medium
+#   tray2_level −3 → empty (and −3 is an ignore_values sentinel on this metric, so the
+#   dropped value falls back to the collector default −9, which is also "empty")
+#   toner_remain_2 −2 → level None / status unknown (ignored sentinel ⇒ same result)
+#   cover_status 4 → no alert (4 = closed)
+# toner_name_2 is "Imaging Drum", which no colour keyword matches: it must land on the
+# generic toner_2 key, exactly like _hp_toner_key() in core/collectors/hp.py decides.
+# TYPE sys_descr gauge
+# HELP sys_descr PrintGuard printer_std: sys_descr [core/oid/catalog.py:8]
+sys_descr{sys_descr="HP HP LaserJet Pro M402dn  Series:V6.05.10  (lua)"} 1
+# TYPE sys_object_id gauge
+sys_object_id{sys_object_id="1.3.6.1.4.1.11.5.3.8.1"} 1
+# TYPE sys_uptime gauge
+sys_uptime 9245678
+# TYPE sys_hostname gauge
+sys_hostname{sys_hostname="hp-m402-05"} 1
+# TYPE model_mib gauge
+model_mib{model_mib="HP LaserJet Pro M402dn"} 1
+# TYPE serial_mib gauge
+serial_mib{serial_mib="CNCVC0245A"} 1
+# TYPE cover_status gauge
+cover_status 4
+# TYPE bro_total counter
+bro_total 12345
+# TYPE bro_color counter
+bro_color 1200
+# TYPE bw_std counter
+bw_std 11145
+# TYPE bro_bw counter
+bro_bw 11145
+# TYPE standard gauge
+standard{standard="Ordinary"} 1
+# TYPE toner_name_1 gauge
+toner_name_1{toner_name_1="Black Toner"} 1
+# TYPE toner_max_1 gauge
+toner_max_1 3200
+# TYPE toner_remain_1 gauge
+toner_remain_1 1344
+# TYPE toner_name_2 gauge
+toner_name_2{toner_name_2="Imaging Drum"} 1
+# TYPE toner_max_2 gauge
+toner_max_2 100
+# TYPE toner_remain_2 gauge
+toner_remain_2 -2
+# TYPE tray1_cap gauge
+tray1_cap 250
+# TYPE tray1_level gauge
+tray1_level 130
+# TYPE tray1_name gauge
+tray1_name{tray1_name="Tray 1"} 1
+# TYPE tray2_cap gauge
+tray2_cap 150
+# TYPE tray2_level gauge
+tray2_level -3
+# TYPE tray2_name gauge
+tray2_name{tray2_name="Manual Feed Tray"} 1

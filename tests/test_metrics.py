@@ -2,17 +2,23 @@
 """
 تست‌های endpoint /metrics سازگار با Prometheus.
 
-پوشش:
-  ۱) فرمت خروجی (Content-Type, خطوط HELP/TYPE)
-  ۲) شمارنده cartridge_changes_total با برچسب‌های صحیح
-  ۳) گیج printer_toner_level
-  ۴) گیج printer_online
-  ۵) scrape_timestamp_seconds
-  ۶) خالی بودن در صورت نبود داده
-  ۷) نمایش printer_total_pages
-  ۸) نمایش printer_cartridge_chip_id_known
+⚠ شکل داده: fixtureها با **شکل واقعی خروجی ``collect_enhanced``** ساخته شده‌اند
+(همان چیزی که در golden fixtureهای ``tests/fixtures/golden/enhanced_*.json`` ثبت
+شده است):
+    - ``online``  بولی است (نه ``status`` رشته‌ای)
+    - شمارنده‌ها زیر ``counters`` هستند: ``counters.total`` (نه ``print_total``)
+    - ``toners`` یک دیکشنری ``{color: {"level": …, "name": …}}`` است (نه لیست)
+
+پوشش (۸ تست):
+  ۱) فرمت خروجی (Content-Type, HELP/TYPE) + نبود خط خطا با داده‌ی واقعی
+  ۲) خالی بودن در صورت نبود رویداد
+  ۳) شمارنده cartridge_changes_total با برچسب‌های صحیح
+  ۴) گیج printer_online (آنلاین/آفلاین)
+  ۵) گیج printer_toner_level (چند رنگ، از دیکشنری واقعی)
+  ۶) scrape_timestamp_seconds
+  ۷) گیج printer_total_pages (از counters.total)
+  ۸) گیج printer_cartridge_chip_id_known
 """
-import json
 import os
 import tempfile
 import unittest
@@ -46,8 +52,39 @@ def _parse_metrics(body: str) -> dict:
     return metrics
 
 
+def _live_printer(*, online=True, total=None, toners=None, cartridge_ids=None,
+                  signal_quality=None, brand="hp"):
+    """داده‌ی زنده به **شکل واقعی** خروجی ``collect_enhanced``."""
+    data = {
+        "online": bool(online),
+        "brand": brand,
+        "counters": {},
+        "toners": toners if toners is not None else {},
+        "trays": [],
+        "alerts": [],
+    }
+    if total is not None:
+        data["counters"]["total"] = total
+        data["counters"]["black_white"] = total
+    if cartridge_ids is not None:
+        data["cartridge_ids"] = cartridge_ids
+        data["cartridge_signal_quality"] = signal_quality or {}
+    if not online:
+        data["error"] = "No SNMP response"
+    return data
+
+
+# نمونه‌ی واقعی Toner (کلید = رنگ، مقدار = دیکشنری)
+_REAL_TONERS = {
+    "black": {"level": 75, "status": "ok", "name": "Black Cartridge HP CF287A"},
+    "cyan": {"level": 40, "status": "low", "name": "Cyan Cartridge HP CF031A"},
+    "magenta": {"level": 12, "status": "critical", "name": "Magenta Cartridge HP CF033A"},
+    "yellow": {"level": 0, "status": "empty", "name": "Yellow Cartridge HP CF032A"},
+}
+
+
 class MetricsEndpointTests(unittest.TestCase):
-    """تست endpoint /metrics با Flask test client."""
+    """تست endpoint /metrics با Flask test client (بدون توکن: رفتار پیش‌فرض)."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -70,11 +107,17 @@ class MetricsEndpointTests(unittest.TestCase):
         app = create_app()
         app.config["TESTING"] = True
         app.config["LOGIN_DISABLED"] = True
+        # خروجی /metrics نباید به تصادفِ وجود METRICS_TOKEN در محیط گره بخورد
+        os.environ.pop("METRICS_TOKEN", None)
         return app.test_client()
 
     # ─── ۱) فرمت خروجی ───
     def test_metrics_content_type_and_format(self):
-        """Content-Type باید text/plain باشد و خطوط HELP/TYPE داشته باشد."""
+        """Content-Type باید text/plain باشد، خطوط HELP/TYPE داشته باشد و با
+        داده‌ی واقعی هیچ خط خطایی تولید نشود (باگ قبلی: 'str' has no attribute 'get')."""
+        store.PRINTERS = [{"ip": "10.1.1.1", "name": "HP M527"}]
+        store.printer_data = {"10.1.1.1": _live_printer(total=50000, toners=_REAL_TONERS)}
+
         client = self._client()
         resp = client.get("/metrics")
         self.assertEqual(resp.status_code, 200)
@@ -85,6 +128,8 @@ class MetricsEndpointTests(unittest.TestCase):
         self.assertIn("# HELP printer_toner_level", body)
         self.assertIn("# TYPE printer_toner_level gauge", body)
         self.assertIn("scrape_timestamp_seconds", body)
+        self.assertNotIn("# ERROR generating metrics", body,
+                         "با شکل واقعی داده نباید خطا تولید شود")
 
     # ─── ۲) خالی بودن بدون داده ───
     def test_metrics_empty_when_no_events(self):
@@ -151,14 +196,14 @@ class MetricsEndpointTests(unittest.TestCase):
 
     # ─── ۴) گیج printer_online ───
     def test_printer_online_gauge(self):
-        """پرینتر آنلاین باید 1 و آفلاین باید 0 باشد."""
+        """پرینتر آنلاین 1 و پرینتر آفلاین (بدون پاسخ SNMP) صفر."""
         store.PRINTERS = [
             {"ip": "10.1.1.1", "name": "HP M527"},
             {"ip": "10.2.2.2", "name": "Canon MF220"},
         ]
         store.printer_data = {
-            "10.1.1.1": {"status": "online", "print_total": 50000},
-            "10.2.2.2": {},  # offline — no data
+            "10.1.1.1": _live_printer(online=True, total=50000),
+            "10.2.2.2": _live_printer(online=False),      # شکل واقعی دستگاه خاموش
         }
 
         client = self._client()
@@ -166,25 +211,19 @@ class MetricsEndpointTests(unittest.TestCase):
         body = resp.data.decode("utf-8")
         metrics = _parse_metrics(body)
         online = metrics.get("printer_online", [])
+        self.assertEqual(len(online), 2, "برای هر دو پرینتر باید یک نمونه باشد")
 
+        seen = {}
         for labels, value in online:
-            if labels.get("printer_ip") == "10.1.1.1":
-                self.assertEqual(value, "1")
-            elif labels.get("printer_ip") == "10.2.2.2":
-                self.assertEqual(value, "0")
+            seen[labels.get("printer_ip")] = value
+        self.assertEqual(seen.get("10.1.1.1"), "1")
+        self.assertEqual(seen.get("10.2.2.2"), "0")
 
     # ─── ۵) گیج printer_toner_level ───
     def test_toner_level_gauge(self):
-        """سطح تونر باید از داده‌ی زنده خوانده شود."""
+        """سطح تونر باید از دیکشنری واقعی toners خوانده شود (چند رنگ)."""
         store.PRINTERS = [{"ip": "10.1.1.1", "name": "HP M527"}]
-        store.printer_data = {
-            "10.1.1.1": {
-                "status": "online",
-                "toners": [
-                    {"color": "black", "level": 75, "name": "Black Toner"},
-                ],
-            },
-        }
+        store.printer_data = {"10.1.1.1": _live_printer(total=50000, toners=_REAL_TONERS)}
 
         client = self._client()
         resp = client.get("/metrics")
@@ -192,12 +231,11 @@ class MetricsEndpointTests(unittest.TestCase):
         metrics = _parse_metrics(body)
         levels = metrics.get("printer_toner_level", [])
 
-        found = False
-        for labels, value in levels:
-            if labels.get("printer_ip") == "10.1.1.1" and labels.get("color") == "black":
-                self.assertEqual(value, "75")
-                found = True
-        self.assertTrue(found, "سطح تونر ۷۵٪ برای black باید وجود داشته باشد")
+        by_color = {labels.get("color"): value for labels, value in levels
+                    if labels.get("printer_ip") == "10.1.1.1"}
+        self.assertEqual(by_color.get("black"), "75")
+        self.assertEqual(by_color.get("cyan"), "40")
+        self.assertEqual(by_color.get("yellow"), "0")
 
     # ─── ۶) scrape_timestamp_seconds ───
     def test_scrape_timestamp(self):
@@ -213,11 +251,9 @@ class MetricsEndpointTests(unittest.TestCase):
 
     # ─── ۷) printer_total_pages ───
     def test_total_pages_gauge(self):
-        """تعداد کل صفحات باید از داده‌ی زنده خوانده شود."""
+        """تعداد کل صفحات از counters.total خوانده شود."""
         store.PRINTERS = [{"ip": "10.1.1.1", "name": "HP M527"}]
-        store.printer_data = {
-            "10.1.1.1": {"status": "online", "print_total": 123456},
-        }
+        store.printer_data = {"10.1.1.1": _live_printer(total=123456)}
 
         client = self._client()
         resp = client.get("/metrics")
@@ -236,13 +272,11 @@ class MetricsEndpointTests(unittest.TestCase):
     def test_chip_id_known_gauge(self):
         """اگر chip ID موجود باشد، مقدار 1 باید نمایش داده شود."""
         store.PRINTERS = [{"ip": "10.1.1.1", "name": "HP M527"}]
-        store.printer_data = {
-            "10.1.1.1": {
-                "status": "online",
-                "cartridge_ids": {"black": "fde86d"},
-                "cartridge_signal_quality": {"black": "genuine"},
-            },
-        }
+        store.printer_data = {"10.1.1.1": _live_printer(
+            total=50000,
+            cartridge_ids={"black": "part:Black Cartridge HP CF287A"},
+            signal_quality={"black": "static"},
+        )}
 
         client = self._client()
         resp = client.get("/metrics")
@@ -254,7 +288,7 @@ class MetricsEndpointTests(unittest.TestCase):
         for labels, value in known:
             if labels.get("printer_ip") == "10.1.1.1" and labels.get("color") == "black":
                 self.assertEqual(value, "1")
-                self.assertEqual(labels.get("quality"), "genuine")
+                self.assertEqual(labels.get("quality"), "static")
                 found = True
         self.assertTrue(found, "chip_id_known برای black باید 1 باشد")
 

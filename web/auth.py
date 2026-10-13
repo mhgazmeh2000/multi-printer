@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 import json
+import os
 import re
+import secrets
 
 from authlib.integrations.flask_client import OAuth
 from flask import Blueprint, abort, current_app, flash, jsonify, redirect, render_template, request, url_for
@@ -25,6 +27,7 @@ from core.security_audit import (
     MAX_FAILED_ATTEMPTS_PER_USER, MAX_FAILED_ATTEMPTS_PER_IP,
     FAILED_ATTEMPT_WINDOW_MINUTES,
 )
+from core.time_utils import as_utc_datetime, to_utc_z
 
 
 def _audit_context():
@@ -41,7 +44,7 @@ oauth = OAuth()
 
 
 def _api_unauthorized():
-    login_url = url_for("auth.login", next=request.url)
+    login_url = login_redirect_url()
     if request.path.startswith("/api/") or request.is_json or "application/json" in request.headers.get("Accept", ""):
         return jsonify({"error": "unauthorized", "login_url": login_url}), 401
     return redirect(login_url)
@@ -89,14 +92,22 @@ def load_user(user_id):
 
 
 def _is_safe_next_url(target: str) -> bool:
-    """
+    r"""
     بررسی امن بودن URL مقصد برای جلوگیری از Open Redirect attack.
     فقط مسیرهای نسبی داخلی مجاز هستند (مثل /dashboard، /printers).
     مسیرهای زیر رد می‌شوند:
       - URL مطلق (http://...، https://...)
       - URLهای protocol-relative (//evil.com)
       - URLهای با scheme (javascript:، data:)
+      - هر مقدار شامل `\` — از جمله `/\evil.com`
       - مقادیر خالی یا None
+
+    **چرا `\` هم رد می‌شود (E.6.6):** در URL‌های «special scheme» مرورگرها (طبق
+    WHATWG URL) `\` معادل `/` خوانده می‌شود؛ پس `/\evil.example.com` در ظاهر یک
+    مسیر داخلی است، ولی `Location: /\evil.example.com` عملاً به
+    `//evil.example.com` — یعنی **بیرون از سایت** — باز می‌شود. پیش از این اصلاح،
+    همین حالت در `tests/test_auth_next_redirect.py::SafeNextUrlValidationTests`
+    پذیرفته می‌شد (شاهدِ زندهٔ حفره، نه فرض).
     """
     if not target:
         return False
@@ -108,6 +119,7 @@ def _is_safe_next_url(target: str) -> bool:
         and not parsed.netloc
         and target.startswith("/")
         and not target.startswith("//")
+        and "\\" not in target
     )
 
 
@@ -120,6 +132,39 @@ def _next_url(default_endpoint: str = "dashboard.index") -> str:
     if _is_safe_next_url(target):
         return target
     return url_for(default_endpoint)
+
+
+def same_site_next_target():
+    """
+    مقدار `next` برای URL صفحهٔ ورود — **فقط مسیر همین سایت** (E.6.6 / TD-002).
+
+    چرا `request.url` نه: آن مقدار (۱) scheme+host را در بدنهٔ پاسخ ۴۰۱ و در لاگ‌ها
+    بازتاب می‌دهد، (۲) در صفحهٔ ورود دوباره رندر می‌شود، و (۳) هیچ تضمینی ندارد
+    `_is_safe_next_url` بپذیردش؛ یعنی کاربر بی‌هویت `next`-ای می‌بیند که پس از ورود
+    **نادیده گرفته می‌شود**. این هلپر همان UX (بازگشت به همان صفحه، با query string)
+    را می‌دهد و نتیجه یا None است یا چیزی که همان validator پذیرفته است.
+
+    `query_string` خام (percent-encoded) برداشته می‌شود، پس کاراکتر کنترلی یا
+    newline از این مسیر وارد پاسخ/سردر Location نمی‌شود.
+
+    منطق ساخت در `_same_site_next_target(path, raw_query)` نشسته است تا بدون
+    request هم قابل آزمون باشد (Werkzeug مسیر خام `/\…` را نرمال می‌کند، پس برای
+    آزمودن حالت خطرناک به تابع خالص نیاز است).
+    """
+    raw_query = (request.query_string or b"").decode("latin-1", "replace")
+    return _same_site_next_target(request.path or "/", raw_query)
+
+
+def _same_site_next_target(path: str, raw_query: str):
+    """`(path, query)` خام را به `next` هم‌سایت تبدیل می‌کند؛ یا None."""
+    candidate = f"{path}?{raw_query}" if raw_query else path
+    return candidate if _is_safe_next_url(candidate) else None
+
+
+def login_redirect_url() -> str:
+    """`/login` با `next` هم‌سایت — تنها نقطهٔ ساخت این URL در گاردهای احراز هویت."""
+    target = same_site_next_target()
+    return url_for("auth.login", next=target) if target else url_for("auth.login")
 
 
 def has_role(user, *roles):
@@ -340,6 +385,9 @@ def register():
         return redirect(_next_url())
 
     error = None
+    # 🔒 اگر ADMIN_SETUP_TOKEN تنظیم شده باشد، فرم باید فیلد توکن را نشان دهد
+    # (همان شرطی که در POST برای اولین کاربر اعمال می‌شود).
+    admin_setup_token_required = bool((os.getenv("ADMIN_SETUP_TOKEN") or "").strip())
     if request.method == "POST":
         if not verify_recaptcha(request.form.get("g-recaptcha-response", ""), request.remote_addr):
             error = "کپچا معتبر نیست"
@@ -362,6 +410,35 @@ def register():
             else:
                 # ✅ خودکارسازی: اولین کاربر = ادمین تأیید‌شده
                 is_first_user = User.total_count() == 0
+                # 🔒 گارد راه‌اندازی: اگر ADMIN_SETUP_TOKEN تنظیم شده باشد، ثبت‌نام
+                # «اولین کاربر» (که خودکار admin می‌شود) فقط با همان توکن ممکن است.
+                # اگر تنظیم نشده باشد، رفتار قبلی حفظ می‌شود (با هشدار در لاگ).
+                setup_token = (os.getenv("ADMIN_SETUP_TOKEN") or "").strip()
+                if is_first_user and setup_token:
+                    provided_token = (request.form.get("admin_setup_token") or "").strip()
+                    if not secrets.compare_digest(provided_token, setup_token):
+                        log.warning(
+                            "ثبت‌نام اولین کاربر رد شد: ADMIN_SETUP_TOKEN نامعتبر (ip=%s)",
+                            request.remote_addr,
+                        )
+                        log_security_event(
+                            SecurityEvent.ACCOUNT_CREATED, severity=Severity.WARNING,
+                            user_identifier=username, success=False,
+                            details="invalid_admin_setup_token", **_audit_context(),
+                        )
+                        return render_template(
+                            "register.html",
+                            error="توکن راه‌اندازی ادمین نامعتبر است",
+                            recaptcha_site_key=current_app.config.get("RECAPTCHA_SITE_KEY", ""),
+                            admin_setup_token_required=admin_setup_token_required,
+                            load_dashboard_scripts=False,
+                        ), 403
+                elif is_first_user:
+                    log.warning(
+                        "⚠ ADMIN_SETUP_TOKEN تنظیم نشده است؛ اولین ثبت‌نام بدون توکن "
+                        "به حساب admin تبدیل می‌شود (ip=%s)",
+                        request.remote_addr,
+                    )
                 user_role = "admin" if is_first_user else "viewer"
                 user_verified = is_first_user
                 user = User.create(username=username, email=email, password=password, role=user_role, is_verified=user_verified)
@@ -384,6 +461,7 @@ def register():
         "register.html",
         error=error,
         recaptcha_site_key=current_app.config.get("RECAPTCHA_SITE_KEY", ""),
+        admin_setup_token_required=admin_setup_token_required,
         load_dashboard_scripts=False,
     )
 
@@ -410,7 +488,7 @@ def forgot_password():
         if user:
             token = generate_reset_token(user.id, user.email)
             token_hash = hash_token(token)
-            expires_at = (datetime.now() + timedelta(hours=1)).isoformat()
+            expires_at = to_utc_z(datetime.now(timezone.utc) + timedelta(hours=1))
             user.set_reset_token(token_hash, expires_at)
             reset_link = url_for("auth.reset_password", token=token, _external=True)
             text_body = (
@@ -448,7 +526,11 @@ def reset_password(token):
         expires_at = user.reset_token_expires
         if expires_at:
             try:
-                if datetime.fromisoformat(expires_at) < datetime.now():
+                # فاز E.3: نویسنده‌ی همین مقدار (بالاتر در همین فایل) از utc_now_iso
+                # استفاده می‌کند ⇒ خواننده هم باید آگاه به UTC مقایسه کند. قبلاً
+                # «naive < naive» بود؛ با فرمت Z هر دو طرف باید آگاه باشند وگرنه
+                # مقایسه TypeError می‌دهد و لینک معتبر «نامعتبر» اعلام می‌شود.
+                if as_utc_datetime(expires_at) < datetime.now(timezone.utc):
                     error = "لینک بازنشانی منقضی شده است"
             except Exception:
                 error = "لینک بازنشانی نامعتبر است"

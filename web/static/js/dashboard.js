@@ -94,6 +94,41 @@ function escapeHtml(str) {
   });
 }
 
+// ══════════════════════════════════════════════════
+// نمایش زمان (فاز E.3)
+// ══════════════════════════════════════════════════
+// از فاز E.3، API مقدار timestamp را همیشه UTC با پسوند Z و ۶ رقم میکروثانیه
+// می‌فرستد (طول ثابت ۲۷)؛ پیش از آن رشته‌ی naive محلی بود. نمایش باید ساعت محلی
+// تهران باشد، وگرنه هر ردیف ۳ ساعت و ۳۰ دقیقه جابه‌جا دیده می‌شود.
+const DISPLAY_TZ = 'Asia/Tehran';
+
+function apiTimeToMs(value) {
+  const raw = String(value == null ? '' : value).trim();
+  if (!raw) return NaN;
+  // میکروثانیه (۶ رقم) ⇒ میلی‌ثانیه (۳ رقم): تجزیه‌ی قطعی در همه‌ی مرورگرها.
+  return Date.parse(raw.replace(/(\.\d{3})\d+/, '$1'));
+}
+
+function formatEventTime(value) {
+  const raw = String(value == null ? '' : value).trim();
+  if (!raw) return '';
+  const ms = apiTimeToMs(raw);
+  if (!Number.isFinite(ms)) return raw.slice(0, 19).replace('T', ' ');  // ناخوانا ⇒ خام
+  try {
+    return new Intl.DateTimeFormat('sv-SE', {   // sv-SE ⇒ «YYYY-MM-DD HH:MM:SS»
+      timeZone: DISPLAY_TZ, year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
+    }).format(new Date(ms));
+  } catch (e) {
+    return raw.slice(0, 19).replace('T', ' ');
+  }
+}
+
+function _eventTimeValue(event) {
+  const ms = apiTimeToMs(event && event.timestamp);
+  return Number.isFinite(ms) ? ms : -Infinity;   // نامعتبر ⇒ قدیمی‌ترین
+}
+
 // نشان کیفیت سیگنال شناسه کارتریج
 const _SQ_BADGES = {
   genuine:    { icon: '⚡', label: 'تراشه واقعی', color: 'var(--green)' },
@@ -122,7 +157,12 @@ function latestSensorChange(ip, kind, port) {
   if (!Array.isArray(allEvents) || !ip || !kind || !port) return null;
   return allEvents
     .filter(e => e.printer_ip === ip && e.type === 'SENSOR_CHANGE' && e.sensor_kind === kind && Number(e.sensor_port) === Number(port))
-    .sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')))[0] || null;
+    .sort((a, b) => {
+      // فاز E.3: مقایسه‌ی زمانی واقعی (نه localeCompare روی رشته) — امن در برابر
+      // ردیف مهاجرت‌نشده و فرمت‌های مختلط.
+      const tb = _eventTimeValue(b), ta = _eventTimeValue(a);
+      return tb === ta ? 0 : (tb > ta ? 1 : -1);
+    })[0] || null;
 }
 
 function sensorValueMeta({ip, kind, port, value, status}) {
@@ -1596,7 +1636,7 @@ function buildSensorDetail(p) {
 function _buildRows(events, hasPrinter, hasUser) {
   const SEV = {error:'sev-error',warning:'sev-warning',success:'sev-success',info:'sev-info'};
   return events.map(e => {
-    const ts     = (e.timestamp || '').slice(0, 19).replace('T', ' ');
+    const ts     = formatEventTime(e.timestamp);   // فاز E.3: UTC ⇒ ساعت محلی تهران
     const sev    = e.severity || 'info';
     const badge  = `<span class="sev-badge ${SEV[sev] || 'sev-info'}">${escapeHtml(sev.toUpperCase())}</span>`;
     // ✅ خانواده‌ی صفحات با برچسب فارسی؛ PRINT_GAP رویداد «تخمینی» است و بصری جدا می‌شود

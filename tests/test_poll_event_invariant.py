@@ -2,6 +2,8 @@
 """Poll/Event invariant tests: dedup, snapshot consistency, poll serialization."""
 import json, os, sqlite3, sys, tempfile, threading, unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+import pytest
+
 from core.database import add_event, init_db
 from core import store
 
@@ -29,6 +31,9 @@ def _query_events(etype=None):
              "details": json.loads(r[3]) if r[3] else {}} for r in rows]
 
 
+# marker `sqlite_only`: این تست SQL/اسکیمای مختص SQLite می‌نویسد ⇒ زیر
+# `DB_BACKEND=postgresql` با auto-skip رد می‌شود (tests/conftest.py، docs/phase-e-plan.md §۵.۳).
+@pytest.mark.sqlite_only
 class TestPrintInvariant(unittest.TestCase):
     def setUp(self):
         self._d, self._old = _make_test_db()
@@ -52,6 +57,9 @@ class TestPrintInvariant(unittest.TestCase):
                          e[0]["details"]["pages"])
 
 
+# marker `sqlite_only`: این تست SQL/اسکیمای مختص SQLite می‌نویسد ⇒ زیر
+# `DB_BACKEND=postgresql` با auto-skip رد می‌شود (tests/conftest.py، docs/phase-e-plan.md §۵.۳).
+@pytest.mark.sqlite_only
 class TestPrintDedup(unittest.TestCase):
     def setUp(self):
         self._d, self._old = _make_test_db()
@@ -87,6 +95,9 @@ class TestPrintDedup(unittest.TestCase):
         self.assertEqual(len(_query_events("PRINT")), 1)
 
 
+# marker `sqlite_only`: این تست SQL/اسکیمای مختص SQLite می‌نویسد ⇒ زیر
+# `DB_BACKEND=postgresql` با auto-skip رد می‌شود (tests/conftest.py، docs/phase-e-plan.md §۵.۳).
+@pytest.mark.sqlite_only
 class TestCounterResetDedup(unittest.TestCase):
     def setUp(self):
         self._d, self._old = _make_test_db()
@@ -116,6 +127,9 @@ class TestCounterResetDedup(unittest.TestCase):
         self.assertEqual(len(_query_events("COUNTER_RESET")), 1)
 
 
+# marker `sqlite_only`: این تست SQL/اسکیمای مختص SQLite می‌نویسد ⇒ زیر
+# `DB_BACKEND=postgresql` با auto-skip رد می‌شود (tests/conftest.py، docs/phase-e-plan.md §۵.۳).
+@pytest.mark.sqlite_only
 class TestToshibaPaperSplit(unittest.TestCase):
     def setUp(self):
         self._d, self._old = _make_test_db()

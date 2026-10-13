@@ -1,0 +1,72 @@
+[
+  {
+    "id": 1,
+    "timestamp": "2026-08-25T11:09:58.746802",
+    "event_type": "1",
+    "severity": "info",
+    "user_identifier": "admin",
+    "user_id": 1,
+    "ip_address": "127.0.0.1",
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+    "endpoint": "users.api_system_settings_set",
+    "success": 1,
+    "details": "{\"target_user_id\": null, \"target_username\": null, \"changed_keys\": [\"GOOGLE_CLIENT_ID\", \"GOOGLE_CLIENT_SECRET\", \"MAIL_SERVER\", \"MAIL_PORT\", \"MAIL_USE_TLS\", \"MAIL_USERNAME\", \"MAIL_PASSWORD\", \"RECAPTCHA_SITE_KEY\", \"RECAPTCHA_SECRET_KEY\"]}",
+    "created_at": "2026-08-25T11:09:58.746802"
+  },
+  {
+    "id": 2,
+    "timestamp": "2026-08-25T11:10:09.759438",
+    "event_type": "1",
+    "severity": "info",
+    "user_identifier": "admin",
+    "user_id": 1,
+    "ip_address": "127.0.0.1",
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+    "endpoint": "users.api_system_settings_set",
+    "success": 1,
+    "details": "{\"target_user_id\": null, \"target_username\": null, \"changed_keys\": [\"GOOGLE_CLIENT_ID\", \"GOOGLE_CLIENT_SECRET\", \"MAIL_SERVER\", \"MAIL_PORT\", \"MAIL_USE_TLS\", \"MAIL_USERNAME\", \"MAIL_PASSWORD\", \"RECAPTCHA_SITE_KEY\", \"RECAPTCHA_SECRET_KEY\"]}",
+    "created_at": "2026-08-25T11:10:09.759438"
+  },
+  {
+    "id": 3,
+    "timestamp": "2026-08-25T11:10:10.510625",
+    "event_type": "1",
+    "severity": "info",
+    "user_identifier": "admin",
+    "user_id": 1,
+    "ip_address": "127.0.0.1",
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+    "endpoint": "users.api_system_settings_set",
+    "success": 1,
+    "details": "{\"target_user_id\": null, \"target_username\": null, \"changed_keys\": [\"GOOGLE_CLIENT_ID\", \"GOOGLE_CLIENT_SECRET\", \"MAIL_SERVER\", \"MAIL_PORT\", \"MAIL_USE_TLS\", \"MAIL_USERNAME\", \"MAIL_PASSWORD\", \"RECAPTCHA_SITE_KEY\", \"RECAPTCHA_SECRET_KEY\"]}",
+    "created_at": "2026-08-25T11:10:10.510625"
+  },
+  {
+    "id": 4,
+    "timestamp": "2026-08-25T11:10:11.669512",
+    "event_type": "1",
+    "severity": "info",
+    "user_identifier": "admin",
+    "user_id": 1,
+    "ip_address": "127.0.0.1",
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+    "endpoint": "users.api_system_settings_set",
+    "success": 1,
+    "details": "{\"target_user_id\": null, \"target_username\": null, \"changed_keys\": [\"GOOGLE_CLIENT_ID\", \"GOOGLE_CLIENT_SECRET\", \"MAIL_SERVER\", \"MAIL_PORT\", \"MAIL_USE_TLS\", \"MAIL_USERNAME\", \"MAIL_PASSWORD\", \"RECAPTCHA_SITE_KEY\", \"RECAPTCHA_SECRET_KEY\"]}",
+    "created_at": "2026-08-25T11:10:11.669512"
+  },
+  {
+    "id": 5,
+    "timestamp": "2026-08-25T11:10:55.864194",
+    "event_type": "1",
+    "severity": "info",
+    "user_identifier": "admin",
+    "user_id": 1,
+    "ip_address": "127.0.0.1",
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+    "endpoint": "users.api_system_settings_set",
+    "success": 1,
+    "details": "{\"target_user_id\": null, \"target_username\": null, \"changed_keys\": [\"GOOGLE_CLIENT_ID\", \"GOOGLE_CLIENT_SECRET\", \"MAIL_SERVER\", \"MAIL_PORT\", \"MAIL_USE_TLS\", \"MAIL_USERNAME\", \"MAIL_PASSWORD\", \"RECAPTCHA_SITE_KEY\", \"RECAPTCHA_SECRET_KEY\"]}",
+    "created_at": "2026-08-25T11:10:55.864194"
+  }
+]

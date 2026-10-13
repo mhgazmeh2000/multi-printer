@@ -99,6 +99,91 @@ echo   Press Ctrl+C to stop
 echo  ============================================================
 echo.
 
+:: --- Step 6: Database availability, migration & check ---
+:: اولویت متغیرها: متغیر محیطی شل > فایل .env > پیش‌فرض (sqlite)
+set "ENV_DB_BACKEND=%DB_BACKEND%"
+set "ENV_PG_DSN=%PG_DSN%"
+set "DB_BACKEND="
+if exist "%CD%\.env" for /f "usebackq tokens=1,* delims==" %%a in ("%CD%\.env") do (
+    if /i "%%a"=="DB_BACKEND" if not defined ENV_DB_BACKEND set "DB_BACKEND=%%~b"
+    if /i "%%a"=="PG_DSN"     if not defined ENV_PG_DSN     set "PG_DSN=%%~b"
+)
+if not defined DB_BACKEND set "DB_BACKEND=sqlite"
+
+echo  [DB] Checking database (DB_BACKEND=%DB_BACKEND%)...
+if /i "%DB_BACKEND%"=="postgresql" (
+    :: ۱) تشخیص خودکار سرویس PostgreSQL در حال اجرا (مستقل از نسخه 16، 17، 18 و ...)
+    set "PG_SERVICE="
+    for /f "tokens=2" %%s in ('sc query ^| findstr /i "SERVICE_NAME" ^| findstr /i "postgres"') do (
+        if not defined PG_SERVICE set "PG_SERVICE=%%s"
+    )
+    if not defined PG_SERVICE (
+        set "PG_STOPPED_SERVICE="
+        for /f "tokens=2" %%s in ('sc query state^= all ^| findstr /i "SERVICE_NAME" ^| findstr /i "postgres"') do (
+            if not defined PG_STOPPED_SERVICE set "PG_STOPPED_SERVICE=%%s"
+        )
+        if defined PG_STOPPED_SERVICE (
+            echo  [DB] ERROR: PostgreSQL service %PG_STOPPED_SERVICE% is stopped.
+            echo  [DB] خطا: سرویس PostgreSQL با نام %PG_STOPPED_SERVICE% متوقف است.
+            echo  [DB] Fix: net start %PG_STOPPED_SERVICE%
+            echo  [DB] راه‌حل: net start %PG_STOPPED_SERVICE%
+        ) else (
+            echo  [DB] ERROR: No running PostgreSQL service found on this machine.
+            echo  [DB] خطا: هیچ سرویس فعال PostgreSQL در این سیستم یافت نشد.
+            echo  [DB] Fix: Ensure PostgreSQL is installed and its service is running.
+            echo  [DB] راه‌حل: بررسی کنید که PostgreSQL نصب و سرویس آن فعال باشد.
+        )
+        popd
+        pause
+        exit /b 1
+    )
+    echo  [DB] PostgreSQL service '%PG_SERVICE%' is RUNNING / سرویس فعال است
+
+    :: ۲) بررسی وجود DSN
+    if not defined PG_DSN (
+        echo  [DB] ERROR: PG_DSN is not set - neither environment nor .env.
+        echo  [DB] خطا: متغیر PG_DSN تنظیم نشده است - نه در محیط، نه در .env.
+        echo  [DB] Example: PG_DSN=postgresql://postgres:123456@127.0.0.1:5432/printguard
+        popd
+        pause
+        exit /b 1
+    )
+
+    :: ۳) اجرای اسکیما و مایگریشن‌های Alembic
+    echo  [DB] Applying Alembic schema migrations...
+    echo  [DB] در حال اعمال اسکیمای پایگاه‌داده با Alembic...
+    set "ALEMBIC_DB_URL=%PG_DSN%"
+    "%PY_CMD%" -m alembic upgrade head
+    if errorlevel 1 (
+        echo  [DB] ERROR: Alembic schema migration failed!
+        echo  [DB] خطا: اعمال اسکیمای Alembic با خطا مواجه شد.
+        popd
+        pause
+        exit /b 1
+    )
+    echo  [DB] Alembic schema is ready / اسکیمای دیتابیس آماده است
+
+    :: ۴) اجرای مهاجرت خودکار و امن داده‌ها با بررسی ایمنی
+    echo  [DB] Checking data auto-migration (tools\auto_migrate.py)...
+    echo  [DB] در حال بررسی و مهاجرت امن داده‌ها...
+    "%PY_CMD%" "%CD%\tools\auto_migrate.py"
+    if errorlevel 1 (
+        echo  [DB] ERROR: Auto-migration failed or was stopped by safety checks!
+        echo  [DB] خطا: مهاجرت خودکار داده‌ها متوقف شد یا توسط بررسی امنیتی لغو شد!
+        popd
+        pause
+        exit /b 1
+    )
+    echo  [DB] PostgreSQL is fully ready / PostgreSQL کاملاً آماده است
+) else (
+    if not exist "%CD%\logs.db" (
+        echo  [DB] SQLite file logs.db does not exist; it will be created.
+        echo  [DB] فایل logs.db وجود ندارد، ساخته می‌شود
+    ) else (
+        echo  [DB] SQLite file logs.db is present / فایل logs.db موجود است
+    )
+)
+
 title PrintGuard [Port %USER_PORT%]
 
 start "" powershell -NoProfile -WindowStyle Hidden -Command "Start-Sleep 3; Start-Process 'http://localhost:%USER_PORT%/'"

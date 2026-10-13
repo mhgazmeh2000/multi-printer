@@ -1,0 +1,53 @@
+# PrintGuard fixture — synthetic, hand-written (گام G.5.1)
+#
+# Standard-MIB half of the Canon iR MF device (same target as
+# exporter_response_canon.txt):
+#
+#     GET /snmp?target=172.16.0.9&module=printer_std&auth=public_v2
+#
+# Not a capture; same caveats as exporter_response_sample.txt.
+#
+# Numbers are self-consistent so the expected adapter output can be written as literal
+# numbers in the test, not recomputed:
+#   sys_uptime 17280000 ticks ÷ 100 = 172800 s → "2d 00:00"
+#   toner NPG-86 Black: 62/100 → 62 % → ok ; NPG-86 Cyan: 18/100 → 18 % → low
+#   tray1: 500/700 → 71 % → medium ; tray2_* absent → cap 0 + level −9 → series skipped
+#   cover_status 3 → one alert («درب پرینتر باز است», code 3) — mirrors the hp rule,
+#   because printer_canon has no cover OID in our spec at all.
+#   bro_total 12000 − bro_color 4000 = 8000 = bw_std = bro_bw
+# TYPE sys_descr gauge
+sys_descr{sys_descr="Canon imageRUNNER 2224"} 1
+# TYPE sys_uptime gauge
+sys_uptime 17280000
+# TYPE model_mib gauge
+model_mib{model_mib="imageRUNNER 2224"} 1
+# TYPE serial_mib gauge
+serial_mib{serial_mib="A01234567"} 1
+# TYPE cover_status gauge
+cover_status 3
+# TYPE bro_total counter
+bro_total 12000
+# TYPE bro_color counter
+bro_color 4000
+# TYPE bw_std counter
+bw_std 8000
+# TYPE bro_bw counter
+bro_bw 8000
+# TYPE toner_name_1 gauge
+toner_name_1{toner_name_1="NPG-86 Black"} 1
+# TYPE toner_max_1 gauge
+toner_max_1 100
+# TYPE toner_remain_1 gauge
+toner_remain_1 62
+# TYPE toner_name_2 gauge
+toner_name_2{toner_name_2="NPG-86 Cyan"} 1
+# TYPE toner_max_2 gauge
+toner_max_2 100
+# TYPE toner_remain_2 gauge
+toner_remain_2 18
+# TYPE tray1_cap gauge
+tray1_cap 700
+# TYPE tray1_level gauge
+tray1_level 500
+# TYPE tray1_name gauge
+tray1_name{tray1_name="Cassette 1"} 1

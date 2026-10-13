@@ -1,0 +1,102 @@
+{
+ "_comment": "canon + شمارشگرهایِ snmp_scrape_* : سنجهٔ ستونِ PDU و alerts/رشته‌هایِ فارسی. هر دو 148 و 63 مصنوعی‌اند.",
+ "expect_exit": 0,
+ "expect_no_rows": [
+  "counters.fax",
+  "toners.magenta.level",
+  "toners.yellow.level"
+ ],
+ "expect_pdu": {
+  "exporter_packets_sent": 148,
+  "exporter_pdus_returned": "N/A",
+  "snapshot": 63
+ },
+ "expect_rows": {
+  "alerts.0.code": "ok",
+  "alerts.0.message": "ok",
+  "counters.total": "ok",
+  "toners.black.source": "ok",
+  "toners.cyan.status": "ok",
+  "toners.magenta.remaining": "ok",
+  "trays.0.capacity": "ok"
+ },
+ "expect_summary": {
+  "common_paths_min": 22,
+  "diff": 0
+ },
+ "exporter_capture": "# PrintGuard fixture — synthetic, hand-written (گام G.5.1)\n#\n# Expected response for a Canon iR MF device:\n#\n#     GET /snmp?target=172.16.0.9&module=printer_canon&auth=public_v2\n#\n# Same caveats as exporter_response_sample.txt: not a capture; metric names/types come\n# from `monitoring/snmp.yml` (module printer_canon: 16 metrics, 16 get, no walk).\n#\n# What this fixture pins about the *vendor precedence* (core/collectors/canon.py):\n#   canon_total (1.1602.1.11.2.1.1.3.1) is the MF total and wins over the LBP total,\n#   canon_print/canon_copy/canon_scan are the MF sub-counters, canon_lbp_total and\n#   canon_lbp_color are the LBP-side numbers, and the alt_* OIDs (…11.2.2.1.3.x) are\n#   the fallback for firmware that only answers there — they are deliberately absent\n#   here so the \"no alt data\" branch is the one under test.\n# canon_alternate_oids_2 carries the −2 sentinel (it has `# ignore_values:` in\n# snmp.yml) and must not become a measurement.\n# TYPE canon_model gauge\n# HELP canon_model PrintGuard printer_canon: canon_model [core/oid/catalog.py:65]\ncanon_model{canon_model=\"imageRUNNER 2224\"} 1\n# TYPE canon_firmware gauge\ncanon_firmware{canon_firmware=\"05.21\"} 1\n# TYPE canon_serial gauge\ncanon_serial{canon_serial=\"A01234567\"} 1\n# TYPE canon_alternate_oids gauge\ncanon_alternate_oids 5\n# TYPE canon_alternate_oids_2 gauge\ncanon_alternate_oids_2 -2\n# TYPE canon_lbp_total counter\ncanon_lbp_total 9000\n# TYPE canon_lbp_color counter\ncanon_lbp_color 400\n# TYPE canon_total counter\ncanon_total 12000\n# TYPE canon_copy counter\ncanon_copy 2500\n# TYPE canon_print counter\ncanon_print 9000\n# TYPE canon_scan counter\ncanon_scan 1100\n\n# PrintGuard fixture — synthetic, hand-written (گام G.5.1)\n#\n# Standard-MIB half of the Canon iR MF device (same target as\n# exporter_response_canon.txt):\n#\n#     GET /snmp?target=172.16.0.9&module=printer_std&auth=public_v2\n#\n# Not a capture; same caveats as exporter_response_sample.txt.\n#\n# Numbers are self-consistent so the expected adapter output can be written as literal\n# numbers in the test, not recomputed:\n#   sys_uptime 17280000 ticks ÷ 100 = 172800 s → \"2d 00:00\"\n#   toner NPG-86 Black: 62/100 → 62 % → ok ; NPG-86 Cyan: 18/100 → 18 % → low\n#   tray1: 500/700 → 71 % → medium ; tray2_* absent → cap 0 + level −9 → series skipped\n#   cover_status 3 → one alert («درب پرینتر باز است», code 3) — mirrors the hp rule,\n#   because printer_canon has no cover OID in our spec at all.\n#   bro_total 12000 − bro_color 4000 = 8000 = bw_std = bro_bw\n# TYPE sys_descr gauge\nsys_descr{sys_descr=\"Canon imageRUNNER 2224\"} 1\n# TYPE sys_uptime gauge\nsys_uptime 17280000\n# TYPE model_mib gauge\nmodel_mib{model_mib=\"imageRUNNER 2224\"} 1\n# TYPE serial_mib gauge\nserial_mib{serial_mib=\"A01234567\"} 1\n# TYPE cover_status gauge\ncover_status 3\n# TYPE bro_total counter\nbro_total 12000\n# TYPE bro_color counter\nbro_color 4000\n# TYPE bw_std counter\nbw_std 8000\n# TYPE bro_bw counter\nbro_bw 8000\n# TYPE toner_name_1 gauge\ntoner_name_1{toner_name_1=\"NPG-86 Black\"} 1\n# TYPE toner_max_1 gauge\ntoner_max_1 100\n# TYPE toner_remain_1 gauge\ntoner_remain_1 62\n# TYPE toner_name_2 gauge\ntoner_name_2{toner_name_2=\"NPG-86 Cyan\"} 1\n# TYPE toner_max_2 gauge\ntoner_max_2 100\n# TYPE toner_remain_2 gauge\ntoner_remain_2 18\n# TYPE tray1_cap gauge\ntray1_cap 700\n# TYPE tray1_level gauge\ntray1_level 500\n# TYPE tray1_name gauge\ntray1_name{tray1_name=\"Cassette 1\"} 1\n\n# scrape-bookkeeping (مصنوعی؛ از پیش‌فرض‌هایِ exporter)\nsnmp_scrape_packets_sent 148\n",
+ "snmp_snapshot": {
+  "SNMP_PDU_COUNT": 63,
+  "alerts": [
+   {
+    "code": 3,
+    "message": "درب پرینتر باز است"
+   }
+  ],
+  "brand": "canon",
+  "counters": {
+   "black_white": 8000,
+   "copy": 2500,
+   "fax": null,
+   "full_color": 4000,
+   "printer": 9000,
+   "total": 12000
+  },
+  "device": {
+   "firmware": "05.21",
+   "model": "imageRUNNER 2224",
+   "serial": "A01234567",
+   "uptime_str": "2d 00:00"
+  },
+  "device_type": "mfp",
+  "ip": "10.0.20.7",
+  "last_poll": "2026-10-06T00:00:00Z",
+  "name": "Studio",
+  "nickname": "Canon-MFP",
+  "online": true,
+  "paper_sizes": {},
+  "poll_ms": 512,
+  "toners": {
+   "black": {
+    "level": 62,
+    "max": 100,
+    "name": "NPG-86 Black",
+    "remaining": 62,
+    "source": "snmp",
+    "status": "ok"
+   },
+   "cyan": {
+    "level": 18,
+    "max": 100,
+    "name": "NPG-86 Cyan",
+    "remaining": 18,
+    "source": "snmp",
+    "status": "low"
+   },
+   "magenta": {
+    "level": null,
+    "max": -1,
+    "name": "Magenta Toner",
+    "remaining": -1,
+    "source": "snmp_unavailable",
+    "status": "unknown"
+   },
+   "yellow": {
+    "level": null,
+    "max": -1,
+    "name": "Yellow Toner",
+    "remaining": -1,
+    "source": "snmp_unavailable",
+    "status": "unknown"
+   }
+  },
+  "trays": [
+   {
+    "capacity": 700,
+    "level": 500,
+    "name": "Cassette 1",
+    "status": "medium"
+   }
+  ]
+ }
+}

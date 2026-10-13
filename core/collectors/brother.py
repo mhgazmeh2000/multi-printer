@@ -1,8 +1,9 @@
 """جمع‌آوری داده از Brother (مونو و رنگی) با fallback کامل"""
 import re, time, logging
-from datetime import datetime
+from datetime import datetime, timezone
 from core.collectors.base import si, ss, _g, _counters_event, fetch_first_web_page
 from core import store
+from core.time_utils import to_utc_z, utc_now_iso
 
 log = logging.getLogger("PrinterMonitor")
 
@@ -245,7 +246,7 @@ def collect_brother(ip: str, name: str, community: str, start: float) -> dict:
         _counters_event(ip, total, prev, alerts, [a["code"] for a in alerts],
                 full_color=full_color, black_white=bw, paper_size=None,
                 current_toner_level=black_level, prev_toner_level=prev_toner,
-                uptime=ut, poll_timestamp=datetime.fromtimestamp(start).isoformat())
+                uptime=ut, poll_timestamp=to_utc_z(datetime.fromtimestamp(start, tz=timezone.utc)))
 
         type_tag = "brother-color" if is_color else "brother"
         toner_pct_log = next(iter(toners.values()), {}).get("level")
@@ -254,7 +255,7 @@ def collect_brother(ip: str, name: str, community: str, start: float) -> dict:
 
         return {
             "ip": ip, "name": name, "brand": "brother",
-            "online": True, "last_poll": datetime.now().isoformat(), "poll_ms": elapsed,
+            "online": True, "last_poll": utc_now_iso(), "poll_ms": elapsed,
             "device": {"model": model, "serial": serial, "firmware": fw, "uptime_str": uptime_str},
             "counters": {
                 "total":       total,
@@ -271,7 +272,7 @@ def collect_brother(ip: str, name: str, community: str, start: float) -> dict:
         log.exception(f"  ✗ {name} [brother] error: {e} {elapsed}ms")
         return {
             "ip": ip, "name": name, "brand": "brother",
-            "online": True, "last_poll": datetime.now().isoformat(), "poll_ms": elapsed,
+            "online": True, "last_poll": utc_now_iso(), "poll_ms": elapsed,
             "device": {"model": "Unknown", "serial": "N/A", "firmware": "N/A", "uptime_str": "N/A"},
             "counters": {"total": 0, "full_color": None, "black_white": 0,
                          "printer": None, "copy": None, "fax": None},

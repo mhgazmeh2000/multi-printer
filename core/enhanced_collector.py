@@ -13,7 +13,7 @@
 import time
 import logging
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple, Any
 
 from config.settings import VALIDATION_LOG_FILE, TONER_ALERT_THRESHOLDS
@@ -22,10 +22,10 @@ from core.snmp.oid_map import OIDS
 from core import store
 from core.collectors.base import _counters_event, apply_toner_override, _bootstrap_yield_from_history, get_pages_since_last_reset, attribute_paper_size
 from core.database import add_event
+from core.time_utils import to_utc_z, utc_now_iso
 
 log = logging.getLogger("PrinterMonitor")
 
-import json
 import os
 
 # ─── تنظیمات ─────────────────────────────────────────────────────
@@ -195,59 +195,6 @@ def _log_validation_error(ip: str, error_type: str, details: str):
             f.write(f"  Details: {details}\n\n")
     except Exception as e:
         log.error(f"خطا در نوشتن validation log: {e}")
-
-
-def _save_counters_to_db(ip: str, total: int, color, bw, black_level, 
-                          prev_override: dict, device_type: str,
-                          toners: dict, supplies: list, alerts: list):
-    """✅ باگ #12: ذخیره امن در دیتابیس با context manager"""
-    try:
-        from core.database import db_connection
-        with db_connection(commit=True) as conn:
-            conn.execute('''
-                INSERT OR REPLACE INTO printer_counters 
-                (ip, print_total, full_color, black_white, toner_level, 
-                 manual_override, override_color, override_base_level, 
-                 override_start_total, override_start_toner, yield_per_page, 
-                 updated_at, device_type)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                ip,
-                total,
-                color if color else 0,
-                bw,
-                black_level,
-                prev_override.get('manual_override', 0),
-                prev_override.get('override_color'),
-                prev_override.get('override_base_level'),
-                prev_override.get('override_start_total'),
-                prev_override.get('override_start_toner'),
-                prev_override.get('yield_per_page', 2000),
-                datetime.now().isoformat(),
-                device_type
-            ))
-            
-            # ذخیره اطلاعات تونرها
-            toner_data = {
-                "toners": {
-                    k: {"level": v["level"], "status": v["status"], "name": v.get("name", "")}
-                    for k, v in toners.items()
-                },
-                "supplies": [
-                    {"name": s["name"], "percent": s["percent"], "status": s["status"], "type": s["type_name"]}
-                    for s in supplies if s["percent"] is not None
-                ]
-            }
-            # 🔥 اصلاح: ذخیره toner_data در alert_codes باعث آلودگی دیتابیس می‌شد
-            # در عوض فقط کدهای هشدار در alert_codes و لیست تونرها در last_alert_codes ذخیره می‌شود
-            alert_codes_json = json.dumps([a["code"] for a in alerts], ensure_ascii=False)
-            toner_data_json = json.dumps(toner_data, ensure_ascii=False)
-            
-            conn.execute('''
-                UPDATE printer_counters SET alert_codes = ?, last_alert_codes = ? WHERE ip = ?
-            ''', (alert_codes_json, toner_data_json, ip))
-    except Exception as e:
-        log.error(f"خطا در ذخیره enhanced data در دیتابیس: {e}")
 
 
 def detect_snmp_version(ip: str, community: str = "public", timeout: float = 2.0) -> Optional[int]:
@@ -703,7 +650,7 @@ def _save_oid_profile(ip: str, community: str, snmp_version: int, model: str,
             "ip": ip,
             "brand": (model or "unknown").split()[0].lower() if model else "unknown",
             "device_type": device_type or "unknown",
-            "scanned_at": datetime.now().isoformat(),
+            "scanned_at": utc_now_iso(),
             "scan_ms": scan_ms,
             "oid_total": sum(1 for _ in oids),
             "oid_active": active,
@@ -939,7 +886,7 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
         _log_to_toner_report(f"   ❌ بدون پاسخ SNMP")
         return {
             "ip": ip, "name": name, "nickname": nickname, "brand": brand,
-            "online": False, "last_poll": datetime.now().isoformat(), "poll_ms": elapsed,
+            "online": False, "last_poll": utc_now_iso(), "poll_ms": elapsed,
             "error": "No SNMP response",
         }
     
@@ -1579,7 +1526,7 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
                     signal_quality=cartridge_signal_quality,
                     supply_names=_current_supply_names or None,
                     uptime=ut, a3_total=a3_total, a4_total=a4_total,
-                    poll_timestamp=datetime.fromtimestamp(start_time).isoformat(),
+                    poll_timestamp=to_utc_z(datetime.fromtimestamp(start_time, tz=timezone.utc)),
                     paper_split=(toshiba_data or {}).get("paper_split"))
 
     # ─── Yield Engine جدید: یادگیری per-cartridge/per-color بر اساس history و anchor ───
@@ -1593,7 +1540,7 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
             counters={"total": total, "full_color": color, "black_white": bw},
             toners=toners,
             device_type=device_type,
-            timestamp=datetime.fromtimestamp(start_time).isoformat(),
+            timestamp=to_utc_z(datetime.fromtimestamp(start_time, tz=timezone.utc)),
             source="poll",
         )
     except Exception as exc:
@@ -1673,7 +1620,7 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
         "ip": ip, "name": name, "nickname": nickname, "brand": brand,
         "device_type": device_type,
         "online": True,
-        "last_poll": datetime.now().isoformat(),
+        "last_poll": utc_now_iso(),
         "poll_ms": elapsed,
         "device": {
             "model": model,

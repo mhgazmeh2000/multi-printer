@@ -3,14 +3,19 @@ Security Audit Module
 ثبت رویدادهای امنیتی مانند ورود ناموفق، حملات brute-force، و فعالیت‌های مشکوک.
 """
 
-import sqlite3
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Optional, List, Dict, Any
 from contextlib import contextmanager
 
-from config.settings import DB_PATH
+from core.db import db_connection as core_db_connection
+from core.db.schema import (
+    SECURITY_TABLES as _PG_SECURITY_TABLES,
+    is_postgres,
+    verify_postgres_tables,
+)
+from core.time_utils import to_filter_bound, to_utc_z, utc_now_iso
 
 log = logging.getLogger("PrinterMonitor")
 
@@ -44,30 +49,29 @@ class SecurityEvent(str, Enum):
     USER_DELETED = "user_deleted"
 
 # ─── اتصال دیتابیس ─────────────────────────────────────────────
+# توجه (فاز D): پیاده‌سازی به core.db منتقل شده است؛ این تابع فقط پوسته‌ی
+# سازگاری است تا نام و فراخوانی‌های موجود (`_db_conn(...)`) دست‌نخورده بماند.
 @contextmanager
 def _db_conn(timeout: float = 10.0, commit: bool = False):
-    """Context manager برای اتصال امن به دیتابیس security audit."""
-    conn = sqlite3.connect(DB_PATH, timeout=timeout)
-    try:
+    """Context manager برای اتصال امن به دیتابیس security audit (پوسته‌ی core.db)."""
+    with core_db_connection(timeout=timeout, commit=commit) as conn:
         yield conn
-        if commit:
-            conn.commit()
-    except Exception:
-        if commit:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-        raise
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
 
 # ─── راه‌اندازی جدول ─────────────────────────────────────────────
 def init_security_audit():
-    """ایجاد جدول security_events اگر وجود نداشته باشد."""
+    """ایجاد جدول security_events اگر وجود نداشته باشد (روی PG: فقط تأیید).
+
+    روی PostgreSQL (فاز E.4.5) هیچ DDLی اجرا نمی‌شود — اسکیما از Alembic می‌آید —
+    و در نبود جدول، خطای روشن می‌دهیم. این خطا **بیرون** از ``try`` زیر است تا
+    مثل گذشته در log سرکوب نشود (شکست بی‌صدا همان چیزی است که ردیف ۸ سند را
+    ماه‌ها پنهان کرده بود).
+    """
+    if is_postgres():
+        with _db_conn() as conn:
+            verify_postgres_tables(conn, _PG_SECURITY_TABLES, context="init_security_audit")
+        log.info("security_events: schema از Alembic تأیید شد (روی PG جدول ساخته نمی‌شود).")
+        return
+
     try:
         with _db_conn(commit=True) as conn:
             conn.execute('''
@@ -121,7 +125,7 @@ def log_security_event(
         details: توضیحات اضافی
     """
     try:
-        now = datetime.now().isoformat()
+        now = utc_now_iso()
         with _db_conn(commit=True) as conn:
             conn.execute('''
                 INSERT INTO security_events 
@@ -137,7 +141,8 @@ def log_security_event(
                 ip_address,
                 user_agent,
                 endpoint,
-                1 if success else 0,
+                # فاز E.4.1: ستون success روی PG BOOLEAN است ⇒ bool، نه int.
+                bool(success),
                 details,
                 now,
             ))
@@ -161,9 +166,15 @@ def count_recent_failed_logins(
     بازگشت: تعداد تلاش‌های ناموفق
     """
     try:
-        cutoff = (datetime.now() - timedelta(minutes=minutes)).isoformat()
-        conditions = ["event_type = ?", "success = 0", "timestamp >= ?"]
-        params = [SecurityEvent.FAILED_LOGIN.value, cutoff]
+        # فاز E.3: cutoff هم‌فرمت با داده‌ی ذخیره‌شده (UTC/Z) تا مقایسه‌ی رشته‌ای درست بماند.
+        cutoff = to_utc_z(datetime.now(timezone.utc) - timedelta(minutes=minutes))
+        # فاز E.4.1: مقایسه‌ی success با پارامتر انجام می‌شود، نه literal «0»:
+        # روی PG نوع ستون BOOLEAN است و «success = 0» خطای نوع می‌دهد
+        # (`operator does not exist: boolean = integer`)، در حالی که پارامتر bool
+        # روی هر دو backend یک معنا دارد (SQLite: 0/1 · PG: false/true).
+        # معنای فیلتر عوض نشده است: مقدار NULL در هر دو backend مطابقت نمی‌کند.
+        conditions = ["event_type = ?", "success = ?", "timestamp >= ?"]
+        params = [SecurityEvent.FAILED_LOGIN.value, False, cutoff]
         
         if ip_address:
             conditions.append("ip_address = ?")
@@ -210,6 +221,10 @@ def get_recent_events(
     بازگشت: لیست دیکشنری‌های رویداد
     """
     try:
+        # فاز E.3: فیلترهای بازه مثل /api/logs/all از ورودی کاربر می‌آیند ⇒ پیش از
+        # مقایسه‌ی رشته‌ای با ستون timestamp به فرمت استاندارد Z تبدیل می‌شوند.
+        start = to_filter_bound(start)
+        end = to_filter_bound(end)
         conditions = []
         params = []
         
@@ -276,7 +291,7 @@ def cleanup_old_events(days: int = 90) -> int:
     بازگشت: تعداد رکوردهای حذف شده
     """
     try:
-        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+        cutoff = to_utc_z(datetime.now(timezone.utc) - timedelta(days=days))
         with _db_conn(commit=True) as conn:
             cur = conn.execute(
                 "DELETE FROM security_events WHERE timestamp < ?",

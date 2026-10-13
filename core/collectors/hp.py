@@ -1,9 +1,10 @@
 """جمع‌آوری داده از HP LaserJet با افزایش timeout و تشخیص رنگ بهتر"""
 import re, time, logging
-from datetime import datetime
+from datetime import datetime, timezone
 from core.snmp.protocol import snmp_get_with_fallback
 from core.collectors.base import si, ss, _g, _counters_event, fetch_first_web_page
 from core import store
+from core.time_utils import to_utc_z, utc_now_iso
 
 log = logging.getLogger("PrinterMonitor")
 
@@ -142,9 +143,20 @@ _HP_TONER_COLOR_MAP = {
 }
 
 def _hp_toner_key(name: str) -> str:
-    n = name.lower()
+    """کلیدِ رنگِ کارتریج از نامِ SNMP (prtMarkerSuppliesDescription).
+
+    تطبیق با **مرزِ کلمه** — همان چیزی که `_key()` در `_scrape_hp_toners` برای
+    مسیرِ وب از قبل داشت. دلیل (TD-016، سنجهٔ G.5): تطبیقِ زیررشته «k/c/m/y» را هم
+    می‌خورد و نام‌های بی‌رنگ را به رنگ اشتباه می‌بست:
+        'Imaging Drum'          → magenta   (حرف m در «iMaging»)
+        'CF470A Imaging Drum'   → cyan      (حرف c در «CF470A»)
+        'Fuser Kit' / 'Maintenance Kit' → black (حرف k در «Kit»)
+    اثرِ آن روی پرینترهای تک‌رنگ: `has_color_toner` کاذب True ⇒ `full_color=None` و
+    `black_white=None` (جای `black_white=total`) و درایور/درام به‌عنوان تونر رنگی در UI.
+    """
+    n = (name or "").lower()
     for kw, key in _HP_TONER_COLOR_MAP.items():
-        if kw in n:
+        if re.search(rf"\b{re.escape(kw)}\b", n):
             return key
     return None
 
@@ -284,7 +296,7 @@ def collect_hp(ip: str, name: str, community: str, start: float) -> dict:
         _counters_event(ip, total, prev, alerts, [a["code"] for a in alerts],
                 full_color=full_color, black_white=bw, paper_size=None,
                 current_toner_level=black_level, prev_toner_level=prev_toner,
-                uptime=ut, poll_timestamp=datetime.fromtimestamp(start).isoformat())
+                uptime=ut, poll_timestamp=to_utc_z(datetime.fromtimestamp(start, tz=timezone.utc)))
 
         color_info = f"color={color_print}" if color_print >= 0 else ("has_color_toner" if has_color_toner else "mono")
         copies_str = f"copy={copy_total:,}" if copy_total > 0 else "nodata"
@@ -294,7 +306,7 @@ def collect_hp(ip: str, name: str, community: str, start: float) -> dict:
              f"toner={toner_pct_log}% {elapsed}ms")
         return {
             "ip": ip, "name": name, "brand": "hp",
-            "online": True, "last_poll": datetime.now().isoformat(), "poll_ms": elapsed,
+            "online": True, "last_poll": utc_now_iso(), "poll_ms": elapsed,
             "device": {"model": model, "serial": serial, "firmware": firmware, "uptime_str": uptime_str},
             "counters": {"total": total, "full_color": full_color, "black_white": bw,
                          "printer": total, "copy": copy_total if copy_total > 0 else None,
@@ -306,7 +318,7 @@ def collect_hp(ip: str, name: str, community: str, start: float) -> dict:
         log.exception(f"  ✗ {name} [hp] error: {e} {elapsed}ms")
         return {
             "ip": ip, "name": name, "brand": "hp",
-            "online": True, "last_poll": datetime.now().isoformat(), "poll_ms": elapsed,
+            "online": True, "last_poll": utc_now_iso(), "poll_ms": elapsed,
             "device": {"model": "Unknown", "serial": "N/A", "firmware": "N/A", "uptime_str": "N/A"},
             "counters": {"total": 0, "full_color": None, "black_white": 0,
                          "printer": 0, "copy": None, "fax": None},

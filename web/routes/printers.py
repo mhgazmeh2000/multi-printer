@@ -481,6 +481,7 @@ def api_update_printer(ip):
 
 
 @bp.route('/api/printer/<path:ip>/toner_reset', methods=['POST'])
+@admin_required  # 🔒 ریست دستی تونر: عملیات مدیریتی (admin)
 def toner_reset(ip):
     try:
         if not user_can_access_office(current_user, ip):

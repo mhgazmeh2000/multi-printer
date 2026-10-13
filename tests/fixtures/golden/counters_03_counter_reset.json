@@ -1,0 +1,296 @@
+{
+  "db_state_after": {
+    "cartridge_state": [],
+    "logs": [
+      {
+        "code": null,
+        "color": "سیاه‌سفید",
+        "details": "{\"color\": \"سیاه‌سفید\", \"current_total\": 10017, \"message\": \"17 صفحه سیاه‌سفید چاپ شد\", \"pages\": 17, \"paper_size\": \"Mixed\", \"prev_total\": 10000, \"severity\": \"info\", \"username\": \"print-room\"}",
+        "message": "17 صفحه سیاه‌سفید چاپ شد",
+        "pages": 17,
+        "paper_size": "Mixed",
+        "printer_ip": "192.0.2.10",
+        "printer_name": null,
+        "severity": "info",
+        "timestamp": "<TS_UTC>",
+        "type": "PRINT",
+        "username": "print-room"
+      },
+      {
+        "code": null,
+        "color": null,
+        "details": "{\"current_total\": 300, \"current_uptime\": 1000, \"delta\": -9717, \"is_reboot\": true, \"message\": \"شمارنده از 10,017 به 300 کاهش یافت (ریبوت دستگاه)\", \"prev_total\": 10017, \"prev_uptime\": 500100000, \"severity\": \"error\"}",
+        "message": "شمارنده از 10,017 به 300 کاهش یافت (ریبوت دستگاه)",
+        "pages": null,
+        "paper_size": null,
+        "printer_ip": "192.0.2.10",
+        "printer_name": null,
+        "severity": "error",
+        "timestamp": "<TS_UTC>",
+        "type": "COUNTER_RESET",
+        "username": null
+      }
+    ],
+    "printer_counters": [
+      {
+        "a3_total": 10,
+        "a4_total": 290,
+        "alert_codes": "[]",
+        "black_white": 300,
+        "cartridge_id_state": "{\"cartridge_state\": {\"black\": {\"brand\": \"\", \"cartridge_model\": \"Black Cartridge HP CF287A\", \"chip_id\": null, \"color\": \"black\", \"confidence\": \"UNKNOWN\", \"generation\": null, \"last_seen_at\": \"<TS_UTC>\", \"model\": \"\", \"page_counter\": 10017, \"printer_ip\": \"192.0.2.10\", \"remaining_level\": {\"level\": 58, \"name\": \"Black Cartridge HP CF287A\"}, \"serial\": null, \"signal_quality\": null, \"supply_counter\": null, \"supply_description\": \"Black Cartridge HP CF287A\", \"supply_life\": {\"level\": 58, \"name\": \"Black Cartridge HP CF287A\"}}}, \"ids\": {}, \"supply_pages\": {}}",
+        "device_type": null,
+        "force_estimate": 0,
+        "full_color": 0,
+        "ip": "192.0.2.10",
+        "last_alert_codes": "[]",
+        "manual_override": 0,
+        "override_base_level": null,
+        "override_color": null,
+        "override_start_toner": null,
+        "override_start_total": null,
+        "print_total": 300,
+        "toner_level": 58,
+        "toner_overrides": "{}",
+        "updated_at": "<TS_UTC>",
+        "yield_learning_failures": 0,
+        "yield_per_page": 2000
+      }
+    ],
+    "toner_snapshots_v2": [],
+    "yield_samples": []
+  },
+  "desc": "ریبوت/ریست واقعی: شمارنده به ۳۰۰ افتاده و uptime کم است",
+  "expected": {
+    "events": [
+      {
+        "details": {
+          "current_total": 300,
+          "current_uptime": 1000,
+          "delta": -9717,
+          "is_reboot": true,
+          "message": "شمارنده از 10,017 به 300 کاهش یافت (ریبوت دستگاه)",
+          "prev_total": 10017,
+          "prev_uptime": 500100000,
+          "severity": "error"
+        },
+        "ip": "192.0.2.10",
+        "type": "COUNTER_RESET"
+      }
+    ],
+    "new_prev": {
+      "a3_lagged": false,
+      "a3_total": 10,
+      "a4_lagged": false,
+      "a4_total": 290,
+      "alert_codes": [],
+      "black_white": 300,
+      "cart_change_pending": null,
+      "cartridge_state": {
+        "black": {
+          "brand": "",
+          "cartridge_model": "Black Cartridge HP CF287A",
+          "chip_id": null,
+          "color": "black",
+          "confidence": "UNKNOWN",
+          "generation": null,
+          "last_seen_at": "<TS_UTC>",
+          "model": "",
+          "page_counter": 10017,
+          "printer_ip": "192.0.2.10",
+          "remaining_level": {
+            "level": 58,
+            "name": "Black Cartridge HP CF287A"
+          },
+          "serial": null,
+          "signal_quality": null,
+          "supply_counter": null,
+          "supply_description": "Black Cartridge HP CF287A",
+          "supply_life": {
+            "level": 58,
+            "name": "Black Cartridge HP CF287A"
+          }
+        }
+      },
+      "device_type": null,
+      "force_estimate": 0,
+      "full_color": 0,
+      "last_alert_codes": [],
+      "last_counter_error": null,
+      "legacy_toner_color": null,
+      "manual_override": 0,
+      "override_base_level": null,
+      "override_color": null,
+      "override_start_toner": null,
+      "override_start_total": null,
+      "pending_overflow_delta": null,
+      "pending_overflow_total": null,
+      "pending_refill_hits": null,
+      "pending_refill_new_toner": null,
+      "pending_refill_prev_toner": null,
+      "pending_refill_total": null,
+      "print_total": 300,
+      "reset_prev_total": 10017,
+      "supply_names": {
+        "black": "Black Cartridge HP CF287A"
+      },
+      "toner_level": 58,
+      "toner_levels": {
+        "black": {
+          "level": 60,
+          "name": "Black Cartridge HP CF287A"
+        }
+      },
+      "toner_overrides": {},
+      "updated_at": "<TS_UTC>",
+      "uptime": 1000,
+      "yield_learning_failures": 0,
+      "yield_per_page": 2000
+    },
+    "return_value": null
+  },
+  "input": {
+    "args": {
+      "a3_total": 10,
+      "a4_total": 290,
+      "black_white": 300,
+      "current_toner_level": 58,
+      "full_color": 0,
+      "paper_split": {
+        "a3": 10,
+        "a4": 290
+      },
+      "prev_toner_level": 58,
+      "supply_names": {
+        "black": "Black Cartridge HP CF287A"
+      },
+      "toner_levels": {
+        "black": {
+          "level": 58,
+          "name": "Black Cartridge HP CF287A"
+        }
+      },
+      "total": 300,
+      "uptime": 1000
+    },
+    "db_seed": {
+      "cartridge_state": [],
+      "logs": [
+        {
+          "code": null,
+          "color": "سیاه‌سفید",
+          "details": "{\"message\": \"17 صفحه سیاه‌سفید چاپ شد\", \"pages\": 17, \"color\": \"سیاه‌سفید\", \"paper_size\": \"Mixed\", \"severity\": \"info\", \"prev_total\": 10000, \"current_total\": 10017, \"username\": \"print-room\"}",
+          "id": 1,
+          "message": "17 صفحه سیاه‌سفید چاپ شد",
+          "pages": 17,
+          "paper_size": "Mixed",
+          "printer_ip": "192.0.2.10",
+          "printer_name": null,
+          "severity": "info",
+          "timestamp": "2026-10-03T12:00:00.000000Z",
+          "type": "PRINT",
+          "username": "print-room"
+        }
+      ],
+      "printer_counters": [
+        {
+          "a3_total": 1005,
+          "a4_total": 9012,
+          "alert_codes": "[]",
+          "black_white": 10017,
+          "cartridge_id_state": "{\"ids\": {}, \"supply_pages\": {}, \"cartridge_state\": {\"black\": {\"printer_ip\": \"192.0.2.10\", \"brand\": \"\", \"model\": \"\", \"color\": \"black\", \"chip_id\": null, \"serial\": null, \"cartridge_model\": \"Black Cartridge HP CF287A\", \"supply_description\": \"Black Cartridge HP CF287A\", \"supply_counter\": null, \"page_counter\": 10017, \"remaining_level\": {\"level\": 58, \"name\": \"Black Cartridge HP CF287A\"}, \"supply_life\": {\"level\": 58, \"name\": \"Black Cartridge HP CF287A\"}, \"generation\": null, \"signal_quality\": null, \"confidence\": \"UNKNOWN\", \"last_seen_at\": \"2026-10-03T12:00:00.000000Z\"}}}",
+          "device_type": null,
+          "force_estimate": 0,
+          "full_color": 0,
+          "ip": "192.0.2.10",
+          "last_alert_codes": "[]",
+          "manual_override": 0,
+          "override_base_level": null,
+          "override_color": null,
+          "override_start_toner": null,
+          "override_start_total": null,
+          "print_total": 10017,
+          "toner_level": 58,
+          "toner_overrides": "{}",
+          "updated_at": "2026-10-03T12:00:00.000000Z",
+          "yield_learning_failures": 0,
+          "yield_per_page": 2000
+        }
+      ],
+      "toner_snapshots_v2": [],
+      "yield_samples": []
+    },
+    "ip": "192.0.2.10",
+    "prev": {
+      "a3_lagged": false,
+      "a3_total": 1005,
+      "a4_lagged": false,
+      "a4_total": 9012,
+      "alert_codes": [],
+      "black_white": 10017,
+      "cart_change_pending": null,
+      "cartridge_state": {
+        "black": {
+          "brand": "",
+          "cartridge_model": "Black Cartridge HP CF287A",
+          "chip_id": null,
+          "color": "black",
+          "confidence": "UNKNOWN",
+          "generation": null,
+          "last_seen_at": "2026-10-03T12:00:00.000000Z",
+          "model": "",
+          "page_counter": 10017,
+          "printer_ip": "192.0.2.10",
+          "remaining_level": {
+            "level": 58,
+            "name": "Black Cartridge HP CF287A"
+          },
+          "serial": null,
+          "signal_quality": null,
+          "supply_counter": null,
+          "supply_description": "Black Cartridge HP CF287A",
+          "supply_life": {
+            "level": 58,
+            "name": "Black Cartridge HP CF287A"
+          }
+        }
+      },
+      "device_type": null,
+      "force_estimate": 0,
+      "full_color": 0,
+      "last_alert_codes": [],
+      "last_counter_error": null,
+      "legacy_toner_color": null,
+      "manual_override": 0,
+      "override_base_level": null,
+      "override_color": null,
+      "override_start_toner": null,
+      "override_start_total": null,
+      "pending_overflow_delta": null,
+      "pending_overflow_total": null,
+      "pending_refill_hits": null,
+      "pending_refill_new_toner": null,
+      "pending_refill_prev_toner": null,
+      "pending_refill_total": null,
+      "print_total": 10017,
+      "reset_prev_total": null,
+      "supply_names": {
+        "black": "Black Cartridge HP CF287A"
+      },
+      "toner_level": 58,
+      "toner_levels": {
+        "black": {
+          "level": 60,
+          "name": "Black Cartridge HP CF287A"
+        }
+      },
+      "toner_overrides": {},
+      "updated_at": "2026-10-03T12:00:00.000000Z",
+      "uptime": 500100000,
+      "yield_learning_failures": 0,
+      "yield_per_page": 2000
+    }
+  },
+  "kind": "counters_event",
+  "name": "counters_03_counter_reset",
+  "snmp_call_sequence": []
+}

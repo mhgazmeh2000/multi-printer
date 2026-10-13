@@ -1,0 +1,192 @@
+# -*- coding: utf-8 -*-
+"""
+تست‌های `tools/build_snmp_yml.py` (گام G.4.1).
+
+سه چیزی که اینجا تثبیت می‌شود، همان چیزی است که «دستی‌بودنِ» snmp.yml را از
+«سلیقه‌ای‌بودن» جدا می‌کند:
+
+  ۱) **deterministic/idempotent** — دو اجرای پیاپی باید بایت‌به‌بایت یکی باشد و
+     بازتولید روی فایلِ commit‌شده هیچ diffی نسازد (`--check` ⇒ rc 0). بدون این،
+     هر بازتولید یعنی تغییرِ بی‌دلیلِ ۸۵۳ خط.
+  ۲) **نگاشتِ v3** — AUTH_KEY_MAP/AUTH_VALUE_MAP باید دقیقاً همان سه نام را عوض کند؛
+     نه بیشتر: spec عمداً شکلِ configِ *generator* را نگه می‌دارد و این تصمیم در
+     کامنتِ بالای `auths:` ثبت شده است.
+  ۳) **صفر اختراع و صفر شبکه** — ابزار فقط OIDهای spec را می‌نویسد و هیچ کدِ
+     دانلود/شبکه‌ای ندارد (قاعدهٔ فاز G).
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+import yaml
+
+ROOT = Path(__file__).resolve().parents[1]
+TOOL = ROOT / "tools" / "build_snmp_yml.py"
+GENERATOR = ROOT / "monitoring" / "generator.yml"
+SNMP_YML = ROOT / "monitoring" / "snmp.yml"
+
+
+def _tool():
+    spec = importlib.util.spec_from_file_location("build_snmp_yml", TOOL)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _run(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run([sys.executable, str(TOOL), *args], capture_output=True, text=True)
+
+
+# ── ۱) خروجیِ باثبات ────────────────────────────────────────────────────────
+def test_regeneration_is_deterministic_and_idempotent(tmp_path):
+    a, b = tmp_path / "a.yml", tmp_path / "b.yml"
+    for out in (a, b):
+        p = _run("--out", str(out))
+        assert p.returncode == 0, p.stdout + p.stderr
+    ta = a.read_text(encoding="utf-8")
+    assert ta == b.read_text(encoding="utf-8"), "دو اجرای پیاپی فرق کرد ⇒ خروجی deterministic نیست"
+    assert ta == SNMP_YML.read_text(encoding="utf-8"), (
+        "خروجیِ ابزار با فایلِ commit‌شده نمی‌خواند؛ اجرا: python tools/build_snmp_yml.py")
+
+
+def test_check_mode_passes_on_the_committed_file():
+    p = _run("--check")
+    assert p.returncode == 0, (p.stdout + p.stderr)[:2000]
+    assert "136" in p.stdout, "پیام باید شمارشِ پوشش را بگوید"
+
+
+def test_check_mode_fails_on_a_stale_file(tmp_path):
+    stale = tmp_path / "snmp.yml"
+    stale.write_text(SNMP_YML.read_text(encoding="utf-8") + "\n# stale\n", encoding="utf-8")
+    p = _run("--check", "--out", str(stale))
+    assert p.returncode == 1, "گیتِ کهنه‌بودن باید قرمز شود، نه سبز"
+    assert "کهنه" in p.stdout, "پیامِ فارسیِ راهنما نیست"
+    assert "---" in p.stdout and "+++" in p.stdout, "diff برای آدم چاپ نشده"
+
+
+def test_check_mode_fails_when_spec_gained_a_row(tmp_path):
+    """اگر ردیفی به spec اضافه شود، فایل کهنه است و ابزار باید بگوید (نه سکوت)."""
+    spec = yaml.safe_load(GENERATOR.read_text(encoding="utf-8"))
+    spec["modules"]["sensor_ecs100g"]["get"].append(
+        {"oid": "1.3.6.1.4.1.47206.999.0", "name": "brand_new_row", "type": "gauge",
+         "source": "core/oid/catalog.py:1"})
+    fake_spec = tmp_path / "generator.yml"
+    fake_spec.write_text(yaml.safe_dump(spec, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    out = tmp_path / "snmp.yml"
+    p = _run("--out", str(out), "--generator", str(fake_spec))
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert "brand_new_row" in out.read_text(encoding="utf-8"), "ردیفِ تازه به فایل نیامده"
+    p2 = _run("--check", "--out", str(SNMP_YML), "--generator", str(fake_spec))
+    assert p2.returncode == 1, "با specِ تازه، فایلِ commit‌شده باید کهنه شمرده شود"
+
+
+def test_report_numbers_are_the_published_counts():
+    mod = _tool()
+    p = _run("--report")
+    assert p.returncode == 0, p.stdout + p.stderr
+    nums = {k: int(v) for k, v in re.findall(r"(\w+)=(-?\d+)", p.stdout)}
+    assert nums == {"rows": 136, "modules": 6, "metrics": 136, "get": 98, "walk_tables": 7,
+                    "ignore_values": 31, "declared": 76, "inferred": 60}
+    assert mod.EXPECTED_COUNTS == {"modules": 6, "metrics": 136, "get_rows": 98, "walk_tables": 7,
+                                   "ignore_values": 31, "inferred_types": 60, "declared_types": 76}
+    text = SNMP_YML.read_text(encoding="utf-8")
+    doc = yaml.safe_load(text)
+    metrics = [m for md in doc["modules"].values() for m in md["metrics"]]
+    assert len(metrics) == mod.EXPECTED_COUNTS["metrics"]
+    assert len({m["oid"] for m in metrics}) == 136
+    assert len(re.findall(r"^ *# type inferred", text, re.M)) == 60
+
+
+# ── ۲) نگاشتِ auth ──────────────────────────────────────────────────────────
+def test_auth_mapping_translates_exactly_the_documented_three_names():
+    mod = _tool()
+    assert mod.AUTH_KEY_MAP == {"auth_passphrase": "password", "priv_passphrase": "priv_password"}
+    assert mod.AUTH_VALUE_MAP == {("priv_protocol", "AES128"): "AES"}
+    gen = yaml.safe_load(GENERATOR.read_text(encoding="utf-8"))
+    doc = yaml.safe_load(SNMP_YML.read_text(encoding="utf-8"))
+    for name, spec_auth in gen["auths"].items():
+        want = {}
+        for k, v in spec_auth.items():
+            rk = mod.AUTH_KEY_MAP.get(k, k)
+            want[rk] = mod.AUTH_VALUE_MAP.get((rk, v), v)
+        assert doc["auths"][name] == want, f"auths.{name}: نگاشتِ ابزار با فایل یکی نیست"
+    # spec عمداً شکلِ generator را نگه داشته (تصمیمِ G.4.1)، پس کلیدِ runtime در spec نیست
+    v3 = gen["auths"]["secure_v3"]
+    assert v3["auth_passphrase"] == "${SNMP_V3_AUTH_PASSPHRASE}" and v3["priv_passphrase"] == "${SNMP_V3_PRIV_PASSPHRASE}"
+    assert v3["priv_protocol"] == "AES128"
+    assert "password" not in v3 and "priv_password" not in v3
+
+
+def test_generator_yml_documents_the_v3_mapping_above_auths():
+    text = GENERATOR.read_text(encoding="utf-8")
+    head, sep, _rest = text.partition("auths:")
+    assert sep, "بلوک auths پیدا نشد"
+    for needle in ("auth_passphrase  → password", "priv_passphrase  → priv_password",
+                   "AES128 → AES", "tools/build_snmp_yml.py"):
+        assert needle in head, f"کامنتِ نگاشتِ v3 بالای auths نیست: {needle}"
+    assert "نامِ متغیرهای محیطی" in head, "اینکه SNMP_V3_* عوض نمی‌شود ثبت نشده"
+
+
+# ── ۳) صفر اختراع، صفر شبکه ─────────────────────────────────────────────────
+def test_tool_writes_only_spec_oids():
+    mod = _tool()
+    gen = yaml.safe_load(GENERATOR.read_text(encoding="utf-8"))
+    spec_oids = {str(r["oid"]) for _m, r, _g in mod.spec_rows(gen)}
+    doc = yaml.safe_load(SNMP_YML.read_text(encoding="utf-8"))
+    file_oids = {str(m["oid"]) for md in doc["modules"].values() for m in md["metrics"]}
+    assert file_oids - spec_oids == set(), "ابزار OID بیرونِ spec می‌سازد"
+    assert spec_oids - file_oids == set(), "ابزار ردیفِ spec را جا می‌اندازد"
+    assert len(spec_oids) == 136
+
+
+def test_tool_source_contains_no_download_or_network_code():
+    src = TOOL.read_text(encoding="utf-8")
+    for banned in ("urllib", "requests", "httpx", "socket", "subprocess", "curl ", "wget ",
+                   "Invoke-WebRequest", "http://", "https://"):
+        assert banned not in src, f"ابزار نباید این را داشته باشد ({banned}) — صفر دانلود/شبکه در فاز G"
+
+
+def test_inference_table_covers_exactly_the_untyped_spec_rows():
+    mod = _tool()
+    gen = yaml.safe_load(GENERATOR.read_text(encoding="utf-8"))
+    untyped = {(m, r["name"]) for m, r, _g in mod.spec_rows(gen) if r.get("type") is None}
+    assert set(mod.INFER) == untyped, "INFER با ردیف‌های بی‌typeِ spec یکی نیست"
+    assert len(untyped) == mod.EXPECTED_COUNTS["inferred_types"] == 60
+
+
+def test_missing_inference_rule_fails_loudly():
+    """بدون این، یک ردیفِ type‌ندارده به `None` یا یک حدسِ بی‌شاهد تبدیل می‌شد."""
+    mod = _tool()
+    key = sorted(mod.INFER)[0]
+    saved = mod.INFER.pop(key)
+    try:
+        with pytest.raises(SystemExit) as exc:
+            mod.render(GENERATOR.read_text(encoding="utf-8"))
+        assert "کم است" in str(exc.value) and key[1] in str(exc.value)
+    finally:
+        mod.INFER[key] = saved
+
+
+def test_unused_inference_rule_fails_loudly():
+    mod = _tool()
+    mod.INFER[("printer_std", "sys_descr")] = ("gauge", "unused rule")
+    try:
+        with pytest.raises(SystemExit) as exc:
+            mod.render(GENERATOR.read_text(encoding="utf-8"))
+        assert "اضافه است" in str(exc.value)
+    finally:
+        mod.INFER.pop(("printer_std", "sys_descr"))
+
+
+def test_output_path_defaults_inside_the_repo():
+    mod = _tool()
+    assert mod.DEFAULT_OUT == SNMP_YML
+    assert mod.DEFAULT_SPEC == GENERATOR
+    assert str(mod.ROOT) == str(ROOT)

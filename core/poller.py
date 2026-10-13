@@ -11,7 +11,6 @@ import time
 import threading
 from threading import Lock
 import logging
-from datetime import datetime
 
 from config.settings import POLL_INTERVAL
 from core import store
@@ -25,15 +24,30 @@ from core.collectors.base_enhanced import collect_enhanced
 
 # fallback به collectorهای برند-محور برای حفظ ثبت رویدادها در صورت خطای enhanced
 from core.collectors.sensor import collect_sensor
+# فاز G · گام G.5 — مسیرِ آزمایشیِ exporter (پیش‌فرض خاموش؛ exporter_enabled() را ببینید)
+from core.exporter_client import client_from_env, exporter_enabled
+from core.collectors.exporter_adapter import collect_via_exporter
 from core.collectors.toshiba import collect_toshiba
 from core.collectors.hp import collect_hp
 from core.collectors.canon import collect_canon
 from core.collectors.brother import collect_brother
+from core.time_utils import utc_now_iso
 
 log = logging.getLogger("PrinterMonitor")
 
 # قفل برای جلوگیری از اجرای هم‌زمان poll_all
 _polling_lock = threading.Lock()
+
+#: تنها وقتی ساخته می‌شود که پرچم روشن باشد (lazy) — با پرچمِ خاموش هیچ شیئی
+#: نساخته می‌شود و هیچ سوکتی باز نمی‌شود.
+_exporter_client_cache = None
+
+
+def _exporter_client():
+    global _exporter_client_cache
+    if _exporter_client_cache is None:
+        _exporter_client_cache = client_from_env()
+    return _exporter_client_cache
 
 # ✅ باگ #1: قفل جداگانه برای processed_ips (جلوگیری از Race Condition)
 _processed_ips_lock = Lock()
@@ -221,7 +235,7 @@ def _collect_inner(printer: dict) -> dict:
                 "device_type": device_type,
                 "online": True,
                 "partial": True,
-                "last_poll": datetime.now().isoformat(),
+                "last_poll": utc_now_iso(),
                 "poll_ms": elapsed,
                 "error_type": "snmp_restricted",
                 "error": msg,
@@ -247,7 +261,7 @@ def _collect_inner(printer: dict) -> dict:
         return {
             "ip": ip, "name": name, "nickname": nickname, "brand": brand, "device_type": device_type,
             "online": False,
-            "last_poll": datetime.now().isoformat(),
+            "last_poll": utc_now_iso(),
             "poll_ms": elapsed,
             "error": "Device unreachable",
         }
@@ -272,6 +286,20 @@ def _collect_inner(printer: dict) -> dict:
                     p["brand"] = brand
                     store.save_printers(store.PRINTERS)
                     break
+
+    # ── فاز G · گام G.5: مسیرِ exporter، فقط با USE_SNMP_EXPORTER=1 ──────────
+    # ترتیبِ شرط مهم است: exporter_enabled() اول ارزیابی می‌شود، پس با پرچمِ خاموش
+    # (پیش‌فرضِ فاز) هیچ is_available() و هیچ سوکتی رخ نمی‌دهد و رفتارِ امروز
+    # کلمه‌به‌کلمه همان مسیرِ collect_enhanced است.
+    # این مسیر عمداً رویدادِ شمارنده ثبت نمی‌کند (_counters_event در collectorهاست و
+    # collectors/ در این فاز دست‌نخورده می‌ماند)؛ به همین دلیل آزمایشی است و تا
+    # گام G.6 روشن نمی‌شود (docs/snmp-exporter-setup.md §۹).
+    if exporter_enabled() and _exporter_client().is_available():
+        exporter_result = collect_via_exporter(_exporter_client(), ip, name, brand, start)
+        if exporter_result is not None:
+            exporter_result["nickname"] = nickname
+            exporter_result["device_type"] = exporter_result.get("device_type", device_type)
+            return exporter_result
 
     # 🔥 استفاده از enhanced_collector برای همه پرینترها
     try:
@@ -306,7 +334,7 @@ def _collect_inner(printer: dict) -> dict:
         return {
             "ip": ip, "name": name, "nickname": nickname, "brand": brand,
             "online": True,
-            "last_poll": datetime.now().isoformat(),
+            "last_poll": utc_now_iso(),
             "poll_ms": elapsed,
             "device": {"model": "Unknown", "serial": "N/A", "firmware": "N/A", "uptime_str": "N/A"},
             "counters": {
@@ -362,7 +390,7 @@ def poll_all():
             with store.data_lock:
                 store.printer_data.update(results)
                 store.poll_stats["count"] += 1
-                store.poll_stats["last"] = datetime.now().isoformat()
+                store.poll_stats["last"] = utc_now_iso()
                 store.poll_stats["errors"] = sum(1 for d in results.values() if not d.get("online"))
 
             log.info(f"✅ Pull cycle completed: {len(results)} devices, "

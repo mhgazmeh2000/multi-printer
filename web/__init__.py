@@ -20,7 +20,7 @@ from web.routes.groups     import bp as bp_groups
 from web.routes.import_db import bp as bp_import_db
 from web.routes.yield_status import bp as bp_yield_status
 from web.routes.metrics import bp as bp_metrics
-from web.auth import auth_bp, init_auth, user_can_access_module
+from web.auth import auth_bp, init_auth, login_redirect_url, user_can_access_module
 from web.security import init_security, csrf
 from config import settings
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -92,18 +92,29 @@ def create_app() -> Flask:
             "auth.reset_password",
             "auth.google_login",
             "auth.google_callback",
-            "metrics.prometheus_metrics",
+            # NOTE: "metrics.prometheus_metrics" عمداً از لیست عمومی حذف شد —
+            # احراز هویت آن با توکن Bearer (METRICS_TOKEN) در خود ویو انجام می‌شود.
             # NOTE: "system.api_status" عمداً از لیست عمومی حذف شد —
             # بدون login نباید آمار polling و وضعیت سرویس دیده شود.
         }
         if endpoint.startswith("static"):
             return None
+        # ─── /metrics: تصمیم احراز هویت در خود ویو گرفته می‌شود ───────────
+        # این endpoint دیگر در public_endpoints نیست، ولی مسیرش زیر /api/ هم
+        # نیست؛ بدون این استثنا گارد عمومی آن را به صفحه‌ی login ریدایرکت
+        # می‌کرد و مسیر Bearer هرگز اجرا نمی‌شد. ویو خودش ۴۰۱ می‌دهد
+        # (نبود/اشتباه‌بودن توکن) یا در صورت نبود METRICS_TOKEN اجازه می‌دهد.
+        if endpoint == "metrics.prometheus_metrics":
+            return None
         if not current_user.is_authenticated:
             if endpoint in public_endpoints:
                 return None
+            # E.6.6 (TD-002): `next` فقط مسیر همین سایت است — نه request.url کامل،
+            # تا scheme+host در بدنهٔ ۴۰۱/سردر Location بازتاب نیفتد و تضمین داشته
+            # باشیم مقدار، همان چیزی است که `_next_url` پس از ورود می‌پذیرد.
             if request.path.startswith("/api/") or request.is_json:
-                return jsonify({"error": "unauthorized", "login_url": url_for("auth.login", next=request.url)}), 401
-            return redirect(url_for("auth.login", next=request.url))
+                return jsonify({"error": "unauthorized", "login_url": login_redirect_url()}), 401
+            return redirect(login_redirect_url())
 
         if not getattr(current_user, "is_verified", False):
             if request.path in ("/", "/auth/logout") or endpoint == "auth.logout":

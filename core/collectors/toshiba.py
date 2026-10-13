@@ -6,13 +6,14 @@
 import re
 import time
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from core.snmp.protocol import snmp_get_bulk, snmp_get_with_fallback
 from core.snmp.oid_map import OIDS, PAPER_SIZE_MAP, TONER_STATUS, TONER_LEVEL
 from core.collectors.base import si, ss, _counters_event, validate_counter_consistency, attribute_paper_size
 from core import store
 from core.database import add_event
+from core.time_utils import to_utc_z, utc_now_iso
 
 log = logging.getLogger("PrinterMonitor")
 
@@ -455,7 +456,7 @@ def collect_toshiba(ip: str, name: str, community: str, start: float) -> dict:
                     full_color=color, black_white=bw_for_event, paper_size=paper_size,
                     current_toner_level=black_level, prev_toner_level=prev_toner,
                     uptime=ut, a3_total=a3_total, a4_total=a4_total,
-                    poll_timestamp=datetime.fromtimestamp(start).isoformat(),
+                    poll_timestamp=to_utc_z(datetime.fromtimestamp(start, tz=timezone.utc)),
                     paper_split=paper_split,
                     paper_detail=paper_detail or None,
                     func_split=func_split or None)
@@ -508,7 +509,7 @@ def collect_toshiba(ip: str, name: str, community: str, start: float) -> dict:
 
     return {
         "ip": ip, "name": name, "brand": "toshiba",
-        "online": True, "last_poll": datetime.now().isoformat(), "poll_ms": elapsed,
+        "online": True, "last_poll": utc_now_iso(), "poll_ms": elapsed,
         "device": {
             "model": ss(raw.get("model"), "TOSHIBA"),
             "serial": ss(raw.get("serial")),

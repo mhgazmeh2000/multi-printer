@@ -1,0 +1,157 @@
+"""
+تست‌های پیش‌اعتبارسنجی کیفیت داده (Preflight Data Quality Validation) در مهاجرت SQLite به PostgreSQL.
+
+بررسی می‌کند که:
+۱. داده‌های سالم بدون خطا از اعتبارسنجی عبور کنند.
+۲. داده‌های با خطای نوع داده کمتر از ۵٪ فقط لاگ/گزارش شوند و مانع مهاجرت نشوند.
+۳. داده‌های با خطای بیش از ۵٪ منجر به توقف قطعی مهاجرت (RuntimeError) شوند.
+"""
+
+import os
+from pathlib import Path
+import sqlite3
+import tempfile
+import unittest
+
+from tools.migrate_sqlite_to_pg import (
+    TablePlan,
+    _preflight_data_quality,
+)
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+class PreflightDataQualityTests(unittest.TestCase):
+    """مجموعه آزمون‌های پیش‌اعتبارسنجی داده‌های SQLite پیش از ارسال به PG."""
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.db_path = self.tmp.name
+        self.tmp.close()
+        self.conn = sqlite3.connect(self.db_path)
+
+    def tearDown(self):
+        self.conn.close()
+        if os.path.exists(self.db_path):
+            os.unlink(self.db_path)
+
+    def test_clean_table_passes_without_issues(self):
+        """جدول دارای داده‌های صحیح و سالم باید بدون هیچ مشکلی تایید شود."""
+        self.conn.execute(
+            """
+            CREATE TABLE printer_counters (
+                ip TEXT PRIMARY KEY,
+                print_total INTEGER,
+                full_color INTEGER
+            )
+            """
+        )
+        for i in range(10):
+            self.conn.execute(
+                "INSERT INTO printer_counters VALUES (?, ?, ?)",
+                (f"192.168.1.{i}", 1000 + i, 200 + i),
+            )
+        self.conn.commit()
+
+        plan = [
+            TablePlan(
+                name="printer_counters",
+                sqlite_rows=10,
+                pg_rows=0,
+                columns=["ip", "print_total", "full_color"],
+                strategy="BATCH",
+            )
+        ]
+
+        findings = _preflight_data_quality(self.conn, plan)
+        self.assertEqual(findings, {}, "نباید هیچ خطایی برای جدول سالم گزارش شود")
+
+    def test_corrupt_data_under_5_percent_is_reported_without_error(self):
+        """خطای ناهمخوانی نوع داده زیر ۵٪ فقط گزارش می‌شود و migration متوقف نمی‌شود."""
+        self.conn.execute(
+            """
+            CREATE TABLE printer_counters (
+                ip TEXT PRIMARY KEY,
+                print_total INTEGER,
+                full_color INTEGER
+            )
+            """
+        )
+        # ۱۰۰ سطر: ۹۹ سطر سالم و ۱ سطر شیفت‌خورده/متنی (۱٪ خطا)
+        for i in range(99):
+            self.conn.execute(
+                "INSERT INTO printer_counters VALUES (?, ?, ?)",
+                (f"192.168.1.{i}", 1000 + i, 200 + i),
+            )
+        # سطر شیفت‌خورده (خرابی .recover)
+        self.conn.execute(
+            "INSERT INTO printer_counters VALUES (?, ?, ?)",
+            ("172.16.25.54", "MFP07622411", 500),
+        )
+        self.conn.commit()
+
+        plan = [
+            TablePlan(
+                name="printer_counters",
+                sqlite_rows=100,
+                pg_rows=0,
+                columns=["ip", "print_total", "full_color"],
+                strategy="BATCH",
+            )
+        ]
+
+        # نباید Exception صادر کند، بلکه دیکشنری مشکلات را بدهد
+        findings = _preflight_data_quality(self.conn, plan)
+        self.assertIn("printer_counters", findings)
+        issues = findings["printer_counters"]
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0]["column"], "print_total")
+        self.assertEqual(issues[0]["corrupt_count"], 1)
+        self.assertEqual(issues[0]["expected_type"], "integer")
+        self.assertEqual(issues[0]["actual_type"], "text")
+        self.assertAlmostEqual(issues[0]["ratio"], 0.01)
+
+    def test_corrupt_data_over_5_percent_halts_migration(self):
+        """اگر نرخ ردیف‌های آسیب‌دیده بیش از ۵٪ باشد، باید بلافاصله RuntimeError بدهد."""
+        self.conn.execute(
+            """
+            CREATE TABLE printer_counters (
+                ip TEXT PRIMARY KEY,
+                print_total INTEGER
+            )
+            """
+        )
+        # ۲۰ سطر: ۱۶ سالم و ۴ خراب (۲۰٪ خطا)
+        for i in range(16):
+            self.conn.execute(
+                "INSERT INTO printer_counters VALUES (?, ?)",
+                (f"192.168.1.{i}", 1000 + i),
+            )
+        for j in range(4):
+            self.conn.execute(
+                "INSERT INTO printer_counters VALUES (?, ?)",
+                (f"172.16.25.{j}", f"CORRUPT_{j}"),
+            )
+        self.conn.commit()
+
+        plan = [
+            TablePlan(
+                name="printer_counters",
+                sqlite_rows=20,
+                pg_rows=0,
+                columns=["ip", "print_total"],
+                strategy="BATCH",
+            )
+        ]
+
+        with self.assertRaises(RuntimeError) as ctx:
+            _preflight_data_quality(self.conn, plan)
+
+        err_msg = str(ctx.exception)
+        self.assertIn("printer_counters", err_msg)
+        self.assertIn("print_total", err_msg)
+        self.assertIn("بیش از ۵٪", err_msg)
+
+
+if __name__ == "__main__":
+    unittest.main()

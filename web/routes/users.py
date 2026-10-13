@@ -3,7 +3,7 @@ import logging
 import secrets
 import re
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, jsonify, render_template, request, url_for
 from flask_login import current_user
@@ -14,6 +14,7 @@ from models import User
 from web.auth import users_access_required
 from utils import generate_reset_token, hash_token, send_email
 from core.security_audit import log_security_event, SecurityEvent, Severity
+from core.time_utils import to_utc_z
 
 bp = Blueprint("users", __name__)
 log = logging.getLogger("PrinterMonitor")
@@ -161,7 +162,7 @@ def api_user_add():
 
     token = generate_reset_token(user.id, user.email)
     token_hash = hash_token(token)
-    expires_at = (datetime.now() + timedelta(hours=1)).isoformat()
+    expires_at = to_utc_z(datetime.now(timezone.utc) + timedelta(hours=1))
     user.set_reset_token(token_hash, expires_at)
     reset_link = url_for("auth.reset_password", token=token, _external=True)
     text_body = (
@@ -196,9 +197,15 @@ def api_user_reset_password(user_id):
     if not target:
         return jsonify({"error": "user not found"}), 404
 
+    # 🔒 P0-4: اثرگذاری روی حساب admin (نقش/حذف/بازنشانی رمز) فقط
+    # برای admin مجاز است؛ در غیر این صورت manager می‌توانست
+    # ادمین را تنزل دهد یا حذف کند.
+    if target.role == "admin" and getattr(current_user, "role", None) != "admin":
+        return jsonify({"error": "بازنشانی رمز admin فقط توسط admin مجاز است"}), 403
+
     token = generate_reset_token(target.id, target.email)
     token_hash = hash_token(token)
-    expires_at = (datetime.now() + timedelta(hours=1)).isoformat()
+    expires_at = to_utc_z(datetime.now(timezone.utc) + timedelta(hours=1))
     target.set_reset_token(token_hash, expires_at)
     reset_link = url_for("auth.reset_password", token=token, _external=True)
     text_body = (
@@ -230,6 +237,11 @@ def api_user_role(user_id):
     target = User.get(user_id)
     if not target:
         return jsonify({"error": "user not found"}), 404
+    # 🔒 P0-4: اثرگذاری روی حساب admin (نقش/حذف/بازنشانی رمز) فقط
+    # برای admin مجاز است؛ در غیر این صورت manager می‌توانست
+    # ادمین را تنزل دهد یا حذف کند.
+    if target.role == "admin" and getattr(current_user, "role", None) != "admin":
+        return jsonify({"error": "تغییر نقش یک admin فقط توسط admin مجاز است"}), 403
     if int(target.id) == int(current_user.id):
         return jsonify({"error": "نمی‌توانید نقش کاربری خودتان را تغییر دهید"}), 403
 
@@ -305,6 +317,12 @@ def api_delete_user(user_id):
     target = User.get(user_id)
     if not target:
         return jsonify({"error": "user not found"}), 404
+
+    # 🔒 P0-4: اثرگذاری روی حساب admin (نقش/حذف/بازنشانی رمز) فقط
+    # برای admin مجاز است؛ در غیر این صورت manager می‌توانست
+    # ادمین را تنزل دهد یا حذف کند.
+    if target.role == "admin" and getattr(current_user, "role", None) != "admin":
+        return jsonify({"error": "حذف حساب admin فقط توسط admin مجاز است"}), 403
 
     if int(target.id) == int(current_user.id):
         return jsonify({"error": "cannot delete current user"}), 400

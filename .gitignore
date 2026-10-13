@@ -14,6 +14,11 @@ ENV/
 # ===== Runtime / داده‌های محلی — هرگز commit نشوند! =====
 logs.db
 logs.db-*
+printguard-pg-*.dump
+# فاز E.3.5: بکاپِ دستیِ پیش از مهاجرت زمان + manifest ابزار مهاجرت
+logs.db.bak-*
+logs.db.*-manifest.json
+*.diagnosis.json
 codespace.db
 printers.json
 oid_profiles.json
@@ -24,6 +29,7 @@ yield_status_report.txt
 *.sqlite
 *.sqlite3
 temp_import*.db*
+tests/fixtures/cutover_synthetic.db
 
 # ===== Debug / Logs =====
 DEBUG-LOG.md

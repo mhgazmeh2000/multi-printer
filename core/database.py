@@ -9,7 +9,6 @@
 - load_printer_counters, save_printer_counters: ذخیره و بازیابی مقادیر قبلی شمارنده‌ها
 """
 
-import sqlite3
 import json
 import logging
 import os
@@ -17,10 +16,20 @@ import re
 import secrets
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from config.settings import DB_PATH
+# NOTE: DB_PATH عمداً بازصادر می‌شود — tests/golden_harness.py مسیر DB را از
+# همین attribute می‌خواند تا گارد «DB موقت» را بسازد. حذف نکنید.
+from config.settings import DB_PATH  # noqa: F401
+from core.db import BACKEND_POSTGRESQL, ColumnAlreadyExists, DatabaseOperationalError
+from core.db import upsert_sql as _upsert_sql
+from core.db import db_connection as core_db_connection
+from core.db import resolve_backend
+from core.db import get_connection as core_db_get_connection
+from core.db.schema import APP_TABLES as _PG_APP_TABLES, verify_postgres_tables
+from core.time_utils import (to_filter_bound, to_local_day, to_sort_key,
+                             to_utc_z, utc_now_iso)
 # NOTE: from core import store حذف شده است (import پویا درون تابع add_event)
 
 log = logging.getLogger("PrinterMonitor")
@@ -34,6 +43,10 @@ def db_connection(timeout: float = 10.0, commit: bool = False):
     Context manager برای اتصال امن به دیتابیس.
     تضمین می‌کند که اتصال در همه شرایط (موفق یا خطا) بسته می‌شود.
 
+    توجه (فاز D): پیاده‌سازی واقعی به ``core.db.db_connection`` منتقل شده است
+    (لایه‌ی adapter نازک). این تابع فقط پوسته‌ی سازگاری است تا امضای قبلی
+    (timeout/commit) و محل import موجود دست‌نخورده بماند.
+
     استفاده:
         # فقط خواندن:
         with db_connection() as conn:
@@ -44,24 +57,9 @@ def db_connection(timeout: float = 10.0, commit: bool = False):
         with db_connection(commit=True) as conn:
             conn.execute("UPDATE users SET ... WHERE id=?", (uid,))
     """
-    conn = sqlite3.connect(DB_PATH, timeout=timeout)
-    try:
+    with core_db_connection(timeout=timeout, commit=commit) as conn:
         yield conn
-        if commit:
-            conn.commit()
-    except Exception:
-        # rollback خودکار در صورت خطا (اگر در حال نوشتن بودیم)
-        if commit:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-        raise
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+
 
 # فیلدهای top-level که مستقیم در ستون‌های جدول ذخیره می‌شوند (بقیه به details JSON می‌روند)
 _LOG_TOP_LEVEL_FIELDS = frozenset(
@@ -224,26 +222,46 @@ def _load_json_dict(value):
 
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH, timeout=30.0)
-    c = conn.cursor()
+    # فاز D: اتصال از لایه‌ی adapter (core.db) ساخته می‌شود؛ همان timeout قبلی.
+    # فاز E.4.6: همه‌ی دستورها با ``conn.execute`` اجرا می‌شوند (cursor خام نمی‌گیریم)
+    # تا مسیر PG هم از ترجمه‌ی placeholder و رفتار مشترک adapter عبور کند.
+    conn = core_db_get_connection(timeout=30.0)
 
-    c.execute("PRAGMA busy_timeout=30000")
+    if conn.backend == BACKEND_POSTGRESQL:
+        # فاز E.4.5: روی PostgreSQL **Alembic تنها منبع DDL است**. این تابع آن‌جا
+        # هیچ جدول/ایندکسی نمی‌سازد (نه PRAGMA، نه AUTOINCREMENT که نحو PG نیست) و
+        # فقط تأیید می‌کند اسکیمای migration موجود است؛ در نبود آن، خطای روشن می‌دهد
+        # تا برنامه با schema ناقص بالا نیاید. جایگزین PRAGMAهای SQLite
+        # (`busy_timeout`/`journal_mode`/`synchronous`) تنظیم `lock_timeout` سطح
+        # سرور است — بند ۱۲ سند سخت‌گیری.
+        try:
+            verify_postgres_tables(conn, _PG_APP_TABLES, context="init_db")
+        finally:
+            conn.close()
+        return
+
+
+    conn.execute("PRAGMA busy_timeout=30000")
     # تغییر journal mode روی share شبکه‌ای ممکن است موقتاً قفل شود؛
     # حالت فعلی را حفظ کن و اجازه بده startup ادامه پیدا کند.
+    # فاز E.4.4: خطا از adapter با نوع مشترک می‌آید (DatabaseOperationalError).
+    # این PRAGMA فقط روی مسیر SQLite اجرا می‌شود (روی PG، init_db پیش‌تر no-op
+    # می‌شود) و «قفل موقت روی share» باید startup را متوقف نکند؛ سایر خطاها بالا
+    # می‌روند. بررسی متن پیام درایور دست‌نخورده مانده (SQLite کد SQLSTATE ندارد).
     try:
-        c.execute("PRAGMA journal_mode=DELETE")
-    except sqlite3.OperationalError as exc:
+        conn.execute("PRAGMA journal_mode=DELETE")
+    except DatabaseOperationalError as exc:
         if "locked" not in str(exc).lower():
             raise
         log.warning("Database is temporarily locked; keeping current journal mode: %s", exc)
     try:
-        c.execute("PRAGMA synchronous=FULL")
-    except sqlite3.OperationalError as exc:
+        conn.execute("PRAGMA synchronous=FULL")
+    except DatabaseOperationalError as exc:
         if "locked" not in str(exc).lower():
             raise
         log.warning("Could not set SQLite synchronous mode during startup: %s", exc)
     
-    c.execute('''
+    conn.execute('''
         CREATE TABLE IF NOT EXISTS logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             printer_ip TEXT NOT NULL,
@@ -260,95 +278,37 @@ def init_db():
             details TEXT
         )
     ''')
+    # فاز E.4.4: «ستون از قبل هست» روی هر دو backend همین کلاس مشترک است
+    # (SQLite: duplicate column name؛ PG: SQLSTATE 42701).
     try:
-        c.execute("ALTER TABLE logs ADD COLUMN paper_size TEXT")
-    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE logs ADD COLUMN paper_size TEXT")
+    except ColumnAlreadyExists:
         pass
     try:
-        c.execute("ALTER TABLE logs ADD COLUMN username TEXT")
-    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE logs ADD COLUMN username TEXT")
+    except ColumnAlreadyExists:
         pass
 
-    c.execute('CREATE INDEX IF NOT EXISTS idx_printer_ip ON logs(printer_ip)')
-    c.execute('CREATE INDEX IF NOT EXISTS idx_timestamp ON logs(timestamp)')
-    c.execute('CREATE INDEX IF NOT EXISTS idx_type ON logs(type)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_printer_ip ON logs(printer_ip)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_timestamp ON logs(timestamp)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_type ON logs(type)')
 
-    c.execute('''
+    # ستون‌های پایه از _COUNTER_BASE_COLUMNS ساخته می‌شوند و ستون‌های
+    # افزوده‌شده با _counter_column_alters() اضافه می‌شوند (تک‌منبع).
+    conn.execute(f'''
         CREATE TABLE IF NOT EXISTS printer_counters (
             ip TEXT PRIMARY KEY,
-            device_type TEXT,
-            print_total INTEGER,
-            full_color INTEGER,
-            black_white INTEGER,
-            toner_level INTEGER,
-            manual_override INTEGER DEFAULT 0,
-            override_color TEXT,
-            override_base_level INTEGER,
-            override_start_total INTEGER,
-            override_start_toner INTEGER,
-            yield_per_page INTEGER DEFAULT 2000,
-            force_estimate INTEGER DEFAULT 0,
-            yield_learning_failures INTEGER DEFAULT 0,
-            last_alert_codes TEXT,
-            a3_total INTEGER,
-            a4_total INTEGER,
-            alert_codes TEXT,
-            cartridge_id_state TEXT,
-            updated_at TEXT
+{_counter_columns_create_sql()}
         )
     ''')
-    # اضافه کردن ستون cartridge_id_state به جداول قدیمی (شناسه‌های کارتریج)
-    try:
-        c.execute("ALTER TABLE printer_counters ADD COLUMN cartridge_id_state TEXT")
-    except sqlite3.OperationalError:
-        pass
-    # اضافه کردن ستون device_type به جداول قدیمی
-    try:
-        c.execute("ALTER TABLE printer_counters ADD COLUMN device_type TEXT")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        c.execute("ALTER TABLE printer_counters ADD COLUMN toner_level INTEGER DEFAULT NULL")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        c.execute("ALTER TABLE printer_counters ADD COLUMN manual_override INTEGER DEFAULT 0")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        c.execute("ALTER TABLE printer_counters ADD COLUMN override_color TEXT")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        c.execute("ALTER TABLE printer_counters ADD COLUMN override_base_level INTEGER")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        c.execute("ALTER TABLE printer_counters ADD COLUMN override_start_total INTEGER")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        c.execute("ALTER TABLE printer_counters ADD COLUMN override_start_toner INTEGER")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        c.execute("ALTER TABLE printer_counters ADD COLUMN yield_per_page INTEGER DEFAULT 2000")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        c.execute("ALTER TABLE printer_counters ADD COLUMN force_estimate INTEGER DEFAULT 0")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        c.execute("ALTER TABLE printer_counters ADD COLUMN yield_learning_failures INTEGER DEFAULT 0")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        c.execute("ALTER TABLE printer_counters ADD COLUMN last_alert_codes TEXT DEFAULT NULL")
-    except sqlite3.OperationalError:
-        pass
+    # کامل‌کردن ستون‌های جدول‌های قدیمی — تنها منبع: _counter_column_alters()
+    for _column_sql in _counter_column_alters():
+        try:
+            conn.execute(_column_sql)
+        except ColumnAlreadyExists:      # فاز E.4.4: نوع مشترک هر دو backend
+            pass  # ستون قبلاً وجود دارد
 
-    c.execute('''
+    conn.execute('''
         CREATE TABLE IF NOT EXISTS toner_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             printer_ip TEXT NOT NULL,
@@ -359,9 +319,9 @@ def init_db():
             source TEXT DEFAULT 'poll'
         )
     ''')
-    c.execute('CREATE INDEX IF NOT EXISTS idx_toner_history_ip_ts ON toner_history(printer_ip, timestamp)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_toner_history_ip_ts ON toner_history(printer_ip, timestamp)')
 
-    c.execute('''
+    conn.execute('''
         CREATE TABLE IF NOT EXISTS sensor_readings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             printer_ip TEXT NOT NULL,
@@ -374,11 +334,11 @@ def init_db():
         )
     ''')
     # اگر نسخه‌ای از index در یک توقف ناقص خراب شده باشد، آن را اتمیک بازسازی کن.
-    c.execute('DROP INDEX IF EXISTS idx_sensor_readings_kind')
-    c.execute('CREATE INDEX IF NOT EXISTS idx_sensor_readings_ip_ts ON sensor_readings(printer_ip, timestamp)')
-    c.execute('CREATE INDEX IF NOT EXISTS idx_sensor_readings_kind ON sensor_readings(kind)')
+    conn.execute('DROP INDEX IF EXISTS idx_sensor_readings_kind')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_sensor_readings_ip_ts ON sensor_readings(printer_ip, timestamp)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_sensor_readings_kind ON sensor_readings(kind)')
 
-    c.execute('''
+    conn.execute('''
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT NOT NULL UNIQUE,
@@ -423,8 +383,8 @@ def init_db():
         "ALTER TABLE users ADD COLUMN sensor_alert_end_hour INTEGER DEFAULT 24",
     ):
         try:
-            c.execute(column_sql)
-        except sqlite3.OperationalError:
+            conn.execute(column_sql)
+        except ColumnAlreadyExists:      # فاز E.4.4: نوع مشترک هر دو backend
             pass
 
     conn.commit()
@@ -554,7 +514,7 @@ def get_user_by_google_id(google_id: str) -> Optional[dict]:
 def create_user(username: str, email: str, password_hash: str = None, google_id: str = None,
                 role: str = "viewer", is_verified: bool = False,
                 allowed_offices=None, allowed_modules=None) -> Optional[dict]:
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
     username = (username or "").strip()
     if not USERNAME_RE.fullmatch(username):
         log.warning("Rejecting invalid username during user creation: %s", username)
@@ -562,18 +522,24 @@ def create_user(username: str, email: str, password_hash: str = None, google_id:
     role = role if role in ("admin", "manager", "viewer") else "viewer"
     try:
         with db_connection(commit=True) as conn:
-            cur = conn.execute(
+            # فاز E.4.3: شناسه‌ی ردیف از adapter گرفته می‌شود، نه ``cur.lastrowid``
+            # (که روی PG وجود ندارد). ``insert_returning_id`` روی SQLite همان
+            # ``lastrowid`` و روی PG ``INSERT … RETURNING id`` را به کار می‌برد.
+            user_id = conn.insert_returning_id(
                 '''
                 INSERT INTO users (username, email, password_hash, google_id, role,
                                    is_verified, email_verified, is_active, created_at, updated_at,
                                    allowed_offices, allowed_modules)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''',
+                # فاز E.4.1: این سه ستون روی PG نوع BOOLEAN دارند ⇒ مقدار پایتون باید
+                # bool باشد (نوشتن int روی boolean خطای نوع می‌دهد). روی SQLite هیچ
+                # تفاوتی ندارد: sqlite3 مقدار bool را همان 1/0 ذخیره می‌کند.
+                # is_active پیش‌تر literal «1» داخل SQL بود و به پارامتر تبدیل شد.
                 (username, email.strip().lower(), password_hash, google_id,
-                 role, 1 if is_verified else 0, 1 if is_verified else 0, now, now,
+                 role, bool(is_verified), bool(is_verified), True, now, now,
                  _dump_json_list(allowed_offices), _dump_json_list(allowed_modules)),
             )
-            user_id = cur.lastrowid
         return get_user_by_id(user_id)
     except Exception as e:
         log.exception(f"Error creating user {username}: {e}")
@@ -583,7 +549,7 @@ def create_user(username: str, email: str, password_hash: str = None, google_id:
 def update_user_password(user_id: int, password_hash: str) -> bool:
     return _execute_user_update(
         'UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?',
-        (password_hash, datetime.now().isoformat(), user_id),
+        (password_hash, utc_now_iso(), user_id),
         f"password for user {user_id}",
     )
 
@@ -591,13 +557,13 @@ def update_user_password(user_id: int, password_hash: str) -> bool:
 def set_user_google_id(user_id: int, google_id: str) -> bool:
     return _execute_user_update(
         'UPDATE users SET google_id = ?, updated_at = ? WHERE id = ?',
-        (google_id, datetime.now().isoformat(), user_id),
+        (google_id, utc_now_iso(), user_id),
         f"google_id for user {user_id}",
     )
 
 
 def touch_user_login(user_id: int) -> None:
-    now = datetime.now().isoformat()
+    now = utc_now_iso()
     _execute_user_update(
         'UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?',
         (now, now, user_id),
@@ -618,7 +584,13 @@ def list_users() -> list:
                         WHEN 'manager' THEN 1
                         ELSE 2
                     END,
-                    username COLLATE NOCASE ASC
+                    -- فاز E.4.11a (ردیف ۳ سند سخت‌گیری): ``COLLATE NOCASE`` نحو
+                    -- SQLite است و روی PG با «collation "nocase" for encoding
+                    -- "UTF8" does not exist» (42704) می‌شکند — و چون این تابع
+                    -- استثنا را می‌گیرد، خطا بی‌صدا «[]» می‌داد (سنجیده‌شده).
+                    -- ``lower(username)`` روی هر دو backend کار می‌کند و همان
+                    -- ترتیب ASCII بی‌توجه به بزرگی/کوچکی را می‌دهد.
+                    lower(username) ASC
                 '''
             ).fetchall()
             return [_user_row_to_dict(r) for r in rows]
@@ -633,16 +605,18 @@ def update_user_role(user_id: int, role: str) -> bool:
         return False
     return _execute_user_update(
         'UPDATE users SET role = ?, updated_at = ? WHERE id = ?',
-        (role, datetime.now().isoformat(), user_id),
+        (role, utc_now_iso(), user_id),
         f"role for user {user_id}",
     )
 
 
 def update_user_verified(user_id: int, is_verified: bool) -> bool:
-    verified_int = 1 if is_verified else 0
+    # فاز E.4.1: هر دو ستون روی PG از نوع BOOLEAN‌اند ⇒ مقدار پایتون باید bool باشد
+    # (int روی boolean خطای نوع می‌دهد). روی SQLite همان 1/0 ذخیره می‌شود.
+    verified = bool(is_verified)
     return _execute_user_update(
         'UPDATE users SET is_verified = ?, email_verified = ?, updated_at = ? WHERE id = ?',
-        (verified_int, verified_int, datetime.now().isoformat(), user_id),
+        (verified, verified, utc_now_iso(), user_id),
         f"verification for user {user_id}",
     )
 
@@ -655,7 +629,7 @@ def update_user_access(user_id: int, allowed_offices=None, allowed_modules=None)
         WHERE id = ?
         ''',
         (_dump_json_list(allowed_offices), _dump_json_list(allowed_modules),
-         datetime.now().isoformat(), user_id),
+         utc_now_iso(), user_id),
         f"access for user {user_id}",
     )
 
@@ -675,7 +649,7 @@ def update_user_sensor_alert(user_id: int, enabled=False, temp_warning=30, temp_
         (int(enabled), temp_warning, temp_critical,
          hum_warning_high, hum_critical_high, hum_warning_low,
          cooldown_minutes, start_hour, end_hour,
-         datetime.now().isoformat(), user_id),
+         utc_now_iso(), user_id),
         f"sensor alert settings for user {user_id}",
     )
 
@@ -695,7 +669,7 @@ def set_password_reset_token(user_id: int, token_hash: str, expires_at: str) -> 
         SET reset_token_hash = ?, reset_token_expires = ?, updated_at = ?
         WHERE id = ?
         ''',
-        (token_hash, expires_at, datetime.now().isoformat(), user_id),
+        (token_hash, expires_at, utc_now_iso(), user_id),
         f"reset token for user {user_id}",
     )
 
@@ -713,7 +687,7 @@ def clear_password_reset_token(user_id: int) -> bool:
         SET reset_token_hash = NULL, reset_token_expires = NULL, updated_at = ?
         WHERE id = ?
         ''',
-        (datetime.now().isoformat(), user_id),
+        (utc_now_iso(), user_id),
         f"clear reset token for user {user_id}",
     )
 
@@ -721,7 +695,7 @@ def clear_password_reset_token(user_id: int) -> bool:
 def add_event(ip: str, etype: str, details: dict):
     try:
         from core import store
-        timestamp = details.get("timestamp", datetime.now().isoformat())
+        timestamp = details.get("timestamp", utc_now_iso())
         message = details.get("message", "")
         pages = details.get("pages")
         color = details.get("color")
@@ -755,7 +729,7 @@ def add_event(ip: str, etype: str, details: dict):
 
             if etype in DEBOUNCE_TYPES or etype == 'ALERT':
                 debounce_secs = ALERT_DEBOUNCE_SECS if etype == 'ALERT' else DEBOUNCE_WINDOW_SECS
-                cutoff = (datetime.now() - timedelta(seconds=debounce_secs)).isoformat()
+                cutoff = to_utc_z(datetime.now(timezone.utc) - timedelta(seconds=debounce_secs))
                 with db_connection() as conn:
                     # prefer code match when available (faster indexable comparison)
                     if code is not None:
@@ -783,8 +757,10 @@ def add_event(ip: str, etype: str, details: dict):
             if etype == "CARTRIDGE_CHANGED":
                 event_id = details.get("event_id") or details.get("id")
                 if event_id:
+                    # فاز E.4.9: ``json_extract`` تابع SQLite است ⇒ هِلپر cross-backend.
+                    event_id_sql = conn.json_extract("details", "event_id")
                     existing = conn.execute(
-                        "SELECT 1 FROM logs WHERE printer_ip=? AND type='CARTRIDGE_CHANGED' AND json_extract(details, '$.event_id')=? LIMIT 1",
+                        f"SELECT 1 FROM logs WHERE printer_ip=? AND type='CARTRIDGE_CHANGED' AND {event_id_sql}=? LIMIT 1",
                         (ip, str(event_id)),
                     ).fetchone()
                     if existing:
@@ -794,13 +770,15 @@ def add_event(ip: str, etype: str, details: dict):
                 prev_total = details.get("prev_total")
                 current_total = details.get("current_total")
                 if prev_total is not None and current_total is not None:
-                    cutoff = (datetime.now() - timedelta(seconds=300)).isoformat()
+                    cutoff = to_utc_z(datetime.now(timezone.utc) - timedelta(seconds=300))
+                    prev_sql = conn.json_extract("details", "prev_total", as_number=True)
+                    curr_sql = conn.json_extract("details", "current_total", as_number=True)
                     duplicate = conn.execute(
-                        """
+                        f"""
                         SELECT 1 FROM logs
                         WHERE printer_ip = ? AND type = 'PRINT' AND timestamp >= ?
-                          AND json_extract(details, '$.prev_total') = ?
-                          AND json_extract(details, '$.current_total') = ?
+                          AND {prev_sql} = ?
+                          AND {curr_sql} = ?
                         LIMIT 1
                         """,
                         (ip, cutoff, prev_total, current_total),
@@ -812,13 +790,13 @@ def add_event(ip: str, etype: str, details: dict):
                         )
                         return
                     overlap = conn.execute(
-                        """
+                        f"""
                         SELECT 1 FROM logs
                         WHERE printer_ip = ? AND type = 'PRINT' AND timestamp >= ?
-                          AND json_extract(details, '$.prev_total') IS NOT NULL
-                          AND json_extract(details, '$.current_total') IS NOT NULL
-                          AND CAST(json_extract(details, '$.prev_total') AS INTEGER) < ?
-                          AND CAST(json_extract(details, '$.current_total') AS INTEGER) > ?
+                          AND {prev_sql} IS NOT NULL
+                          AND {curr_sql} IS NOT NULL
+                          AND CAST({prev_sql} AS INTEGER) < ?
+                          AND CAST({curr_sql} AS INTEGER) > ?
                         LIMIT 1
                         """,
                         (ip, cutoff, current_total, prev_total),
@@ -834,13 +812,15 @@ def add_event(ip: str, etype: str, details: dict):
                 prev_total_cr = details.get("prev_total")
                 current_total_cr = details.get("current_total")
                 if prev_total_cr is not None and current_total_cr is not None:
-                    cutoff_cr = (datetime.now() - timedelta(seconds=300)).isoformat()
+                    cutoff_cr = to_utc_z(datetime.now(timezone.utc) - timedelta(seconds=300))
+                    cr_prev_sql = conn.json_extract("details", "prev_total", as_number=True)
+                    cr_curr_sql = conn.json_extract("details", "current_total", as_number=True)
                     dup_cr = conn.execute(
-                        """
+                        f"""
                         SELECT 1 FROM logs
                         WHERE printer_ip = ? AND type = 'COUNTER_RESET' AND timestamp >= ?
-                          AND json_extract(details, '$.prev_total') = ?
-                          AND json_extract(details, '$.current_total') = ?
+                          AND {cr_prev_sql} = ?
+                          AND {cr_curr_sql} = ?
                         LIMIT 1
                         """,
                         (ip, cutoff_cr, prev_total_cr, current_total_cr),
@@ -864,8 +844,24 @@ def add_event(ip: str, etype: str, details: dict):
 
 
 def _row_to_dict(row) -> dict:
-    details = json.loads(row[11] or "{}") if row[11] else {}
+    # فاز E.6.4: ``logs.details`` روی PostgreSQL از نوع ``jsonb`` است و psycopg آن را
+    # **دیکدشده** (dict) برمی‌گرداند؛ روی SQLite همان TEXT می‌ماند و ``json.loads``
+    # لازم است. مسیر SQLite عمداً دست‌نخورده است — از جمله «JSON بدفرمت ⇒ خطا»، که
+    # رفتار مستندشدهٔ امروز است و بی‌صدا بلعیده نمی‌شود.
+    _raw_details = row[11]
+    if isinstance(_raw_details, dict):
+        details = _raw_details
+    elif _raw_details:
+        details = json.loads(_raw_details)
+    else:
+        details = {}
+    # فاز E.3: ترتیب صریح است — ``details`` اول می‌آید تا کلیدهای اضافی قرارداد
+    # به‌عنوان فیلد رویداد در دسترس باشند، ولی **ستون‌های جدول** (به‌ویژه
+    # ``timestamp``) همیشه برنده باشند: پیش‌تر ``**details`` آخر بود و اگر پیلودی
+    # کلید ``timestamp`` داشت (مثل رویدادهای موتور کارتریج)، مقدار JSON جای مقدار
+    # ستون را در پاسخ API می‌گرفت.
     return {
+        **details,
         "printer_ip":   row[0],
         "printer_name": row[1],
         "timestamp":    row[2],
@@ -877,8 +873,7 @@ def _row_to_dict(row) -> dict:
         "severity":     row[8],
         "paper_size":   row[9],
         "username":     row[10],
-        "details": details,
-        **details,
+        "details":      details,
     }
 
 
@@ -913,6 +908,11 @@ def get_log(ip: str, limit: int = 500, ips=None) -> list:
 
 def get_all_logs(start=None, end=None, limit: int = 1000, ip=None, ips=None) -> list:
     try:
+        # فاز E.3: پارامترهای بازه از query string می‌آیند (تاریخ محلی/naive/آگاه) و
+        # پیش از مقایسه‌ی رشته‌ای با ستون timestamp باید هم‌فرمت داده‌ی ذخیره‌شده
+        # شوند؛ قاعده و حالت‌های مرزی در core/time_utils.to_filter_bound.
+        start = to_filter_bound(start)
+        end = to_filter_bound(end)
         params = []
         conditions = []
         if ips:
@@ -1002,27 +1002,24 @@ def clear_logs(ip=None, ips=None, types=None) -> int:
 
 
 def ensure_printer_counters_columns():
-    column_alters = (
-        "ALTER TABLE printer_counters ADD COLUMN device_type TEXT",
-        "ALTER TABLE printer_counters ADD COLUMN toner_level INTEGER DEFAULT NULL",
-        "ALTER TABLE printer_counters ADD COLUMN manual_override INTEGER DEFAULT 0",
-        "ALTER TABLE printer_counters ADD COLUMN override_color TEXT",
-        "ALTER TABLE printer_counters ADD COLUMN override_base_level INTEGER",
-        "ALTER TABLE printer_counters ADD COLUMN override_start_total INTEGER",
-        "ALTER TABLE printer_counters ADD COLUMN override_start_toner INTEGER",
-        "ALTER TABLE printer_counters ADD COLUMN yield_per_page INTEGER DEFAULT 2000",
-        "ALTER TABLE printer_counters ADD COLUMN force_estimate INTEGER DEFAULT 0",
-        "ALTER TABLE printer_counters ADD COLUMN yield_learning_failures INTEGER DEFAULT 0",
-        "ALTER TABLE printer_counters ADD COLUMN last_alert_codes TEXT DEFAULT NULL",
-        "ALTER TABLE printer_counters ADD COLUMN cartridge_id_state TEXT DEFAULT NULL",
-        "ALTER TABLE printer_counters ADD COLUMN toner_overrides TEXT DEFAULT NULL",
-    )
+    """تضمین وجود همه‌ی ستون‌های printer_counters.
+
+    تنها منبع ستون‌ها ``_counter_column_alters()`` است (همان لیستی که
+    ``init_db()`` استفاده می‌کند)؛ بنابراین ستونی که در ``_COUNTERS_COLS``
+    خوانده می‌شود دیگر نمی‌تواند از مسیر مهاجرت جا بماند.
+    """
+    if resolve_backend() == BACKEND_POSTGRESQL:
+        # قاعده‌ی E.4.5 (Alembic تنها منبع DDL روی PG): این ALTER ها روی PG نه
+        # لازم‌اند نه بی‌خطر — هر خطای ALTER کل تراکنش را abort می‌کند (25P02) و
+        # در نتیجه فقط یک exception در log ثبت می‌شد (سنجش E.5: ۳ شکست
+        # test_db_migration_columns). پس روی PG بی‌عمل است.
+        return
     try:
         with db_connection(commit=True) as conn:
-            for column_sql in column_alters:
+            for column_sql in _counter_column_alters():
                 try:
                     conn.execute(column_sql)
-                except sqlite3.OperationalError:
+                except ColumnAlreadyExists:   # فاز E.4.4: نوع مشترک هر دو backend
                     pass  # ستون قبلاً وجود دارد
     except Exception as e:
         log.exception(f"Error ensuring printer_counters columns: {e}")
@@ -1030,7 +1027,7 @@ def ensure_printer_counters_columns():
 
 def prune_old_print_logs(days=90) -> int:
     """حذف خودکار لاگ‌های نوع PRINT که قدیمی‌تر از days روز هستند."""
-    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    cutoff = to_utc_z(datetime.now(timezone.utc) - timedelta(days=days))
     try:
         with db_connection(commit=True) as conn:
             cur = conn.execute("DELETE FROM logs WHERE type='PRINT' AND timestamp < ?", (cutoff,))
@@ -1043,13 +1040,80 @@ def prune_old_print_logs(days=90) -> int:
         return 0
 
 
-# نام ستون‌های printer_counters (برای جلوگیری از تکرار)
+# ─── تعریف واحد ستون‌های printer_counters ──────────────────────────────
+# تنها منبع حقیقت طرح‌واره: هم مسیر «ساخت جدول تازه» (init_db) و هم مسیر
+# «مهاجرت جدول قدیمی» (ensure_printer_counters_columns) از همین دو لیست
+# تغذیه می‌شوند تا شکاف مهاجرت (ستونی که خوانده می‌شود ولی هرگز اضافه نشده)
+# دیگر تکرار نشود.
+_COUNTER_BASE_COLUMNS = (
+    ("device_type", "TEXT"),
+    ("print_total", "INTEGER"),
+    ("full_color", "INTEGER"),
+    ("black_white", "INTEGER"),
+    ("toner_level", "INTEGER"),
+    ("manual_override", "INTEGER DEFAULT 0"),
+    ("override_color", "TEXT"),
+    ("override_base_level", "INTEGER"),
+    ("override_start_total", "INTEGER"),
+    ("override_start_toner", "INTEGER"),
+    ("yield_per_page", "INTEGER DEFAULT 2000"),
+    ("force_estimate", "INTEGER DEFAULT 0"),
+    ("yield_learning_failures", "INTEGER DEFAULT 0"),
+    ("last_alert_codes", "TEXT"),
+    ("a3_total", "INTEGER"),
+    ("a4_total", "INTEGER"),
+    ("alert_codes", "TEXT"),
+    ("cartridge_id_state", "TEXT"),
+    ("updated_at", "TEXT"),
+)
+
+# ستون‌هایی که بعد از نسخه‌ی اول جدول اضافه شدند (فقط از مسیر مهاجرت می‌آیند).
+_COUNTER_ADDED_COLUMNS = (
+    ("toner_overrides", "TEXT DEFAULT NULL"),
+)
+
+_COUNTER_COLUMNS = _COUNTER_BASE_COLUMNS + _COUNTER_ADDED_COLUMNS
+
+# نام ستون‌ها برای SELECT — ⚠ ترتیب این رشته به اندیس‌های ردیف در
+# load_printer_counters/save_printer_counters گره خورده است؛ ترتیب را عوض نکنید.
 _COUNTERS_COLS = (
     "device_type, print_total, full_color, black_white, toner_level, manual_override, "
     "override_color, override_base_level, override_start_total, override_start_toner, "
     "yield_per_page, force_estimate, yield_learning_failures, last_alert_codes, "
     "a3_total, a4_total, alert_codes, cartridge_id_state, toner_overrides, updated_at"
 )
+
+
+#: ستون‌های درج‌شده در ``save_printer_counters`` — **همهٔ** ستون‌های جدول.
+#: هم‌نام‌بودن این فهرست با ``_COUNTERS_COLS`` و با اسکیمای جدول در
+#: ``tests/test_upsert_cross_backend.py`` قفل شده است، چون «INSERT OR REPLACE»
+#: تنها وقتی با «ON CONFLICT DO UPDATE» هم‌معناست که همهٔ ستون‌ها نوشته شوند
+#: (``docs/insert-or-replace-inventory.md`` §۳.۱).
+_COUNTERS_UPSERT_COLUMNS = (
+    "ip", "device_type", "print_total", "full_color", "black_white", "toner_level",
+    "manual_override", "override_color", "override_base_level", "override_start_total",
+    "override_start_toner", "yield_per_page", "force_estimate", "yield_learning_failures",
+    "last_alert_codes", "a3_total", "a4_total", "alert_codes", "cartridge_id_state",
+    "toner_overrides", "updated_at",
+)
+
+
+def _counter_column_alters() -> tuple:
+    """ALTER های لازم برای کامل‌کردن جدول printer_counters.
+
+    ترتیب: ابتدا ستون‌های پایه، سپس ستون‌های افزوده‌شده. روی جدول تازه یا
+    نیمه‌مهاجرت‌شده، ALTER های تکراری خطای ``duplicate column name`` می‌دهند
+    و توسط فراخوان‌کننده نادیده گرفته می‌شوند (idempotent).
+    """
+    return tuple(
+        f"ALTER TABLE printer_counters ADD COLUMN {name} {decl}"
+        for name, decl in _COUNTER_COLUMNS
+    )
+
+
+def _counter_columns_create_sql() -> str:
+    """بدنه‌ی CREATE TABLE printer_counters (بدون ``ip`` که PRIMARY KEY است)."""
+    return ",\n".join(f"            {name} {decl}" for name, decl in _COUNTER_BASE_COLUMNS)
 
 
 def load_printer_counters(ip: str) -> Optional[dict]:
@@ -1092,17 +1156,15 @@ def load_printer_counters(ip: str) -> Optional[dict]:
 def save_printer_counters(ip: str, data: dict):
     """ذخیره مقادیر شمارنده در دیتابیس"""
     ensure_printer_counters_columns()
-    updated_at = data.get("updated_at") or datetime.now().isoformat()
+    updated_at = data.get("updated_at") or utc_now_iso()
     try:
         with db_connection(commit=True) as conn:
-            conn.execute('''
-                INSERT OR REPLACE INTO printer_counters
-                (ip, device_type, print_total, full_color, black_white, toner_level, manual_override,
-                 override_color, override_base_level, override_start_total, override_start_toner,
-                 yield_per_page, force_estimate, yield_learning_failures,
-                 last_alert_codes, a3_total, a4_total, alert_codes, cartridge_id_state, toner_overrides, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
+            # فاز E.5: جمله از هِلپر cross-backend ساخته می‌شود (پیش از این روی PG
+            # با «syntax error at or near "OR"» (42601) می‌شکست). ترتیب ستون‌ها و
+            # پارامترها دست‌نخورده است.
+            conn.execute(
+                _upsert_sql("printer_counters", _COUNTERS_UPSERT_COLUMNS, ("ip",),
+                            backend=conn.backend), (
                 ip,
                 data.get("device_type"),
                 data.get("print_total"),
@@ -1147,7 +1209,7 @@ def record_sensor_readings(ip: str, readings: list, timestamp: str = None):
     """
     if not readings:
         return
-    ts = timestamp or datetime.now().isoformat()
+    ts = timestamp or utc_now_iso()
     rows = []
     for item in readings:
         try:
@@ -1195,7 +1257,7 @@ def record_toner_snapshot(ip: str, print_total: int = None, toner_level: int = N
                 """,
                 (
                     ip,
-                    timestamp or datetime.now().isoformat(),
+                    timestamp or utc_now_iso(),
                     print_total,
                     toner_level,
                     yield_per_page,
@@ -1208,7 +1270,7 @@ def record_toner_snapshot(ip: str, print_total: int = None, toner_level: int = N
 
 def estimate_yield_from_history(ip: str, days: int = 7, min_points: int = 3, min_pages: int = 500):
     """تخمین yield_per_page از روی snapshotهای تاریخی toner_history."""
-    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    cutoff = to_utc_z(datetime.now(timezone.utc) - timedelta(days=days))
     try:
         with db_connection() as conn:
             rows = conn.execute(
@@ -1231,7 +1293,12 @@ def estimate_yield_from_history(ip: str, days: int = 7, min_points: int = 3, min
         prev_toner = None
         for ts, print_total, toner_level in rows:
             if ts:
-                days_seen.add(str(ts)[:10])
+                # فاز E.3: «روز» یعنی روزِ محلی (مثل substr قدیم روی داده‌ی naive محلی)،
+                # نه روزِ UTC. ردیف مهاجرت‌نشده تخمین را نمی‌شکند؛ روزِ خام ثبت می‌شود.
+                try:
+                    days_seen.add(to_local_day(ts))
+                except ValueError:
+                    days_seen.add(str(ts)[:10])
             if print_total is None or toner_level is None:
                 prev_total, prev_toner = print_total, toner_level
                 continue
@@ -1304,7 +1371,9 @@ def get_reset_history(ip=None, limit: int = 1000, ips=None, current_totals=None)
 
         history = []
         for printer_ip, printer_events in grouped.items():
-            printer_events.sort(key=lambda ev: ev.get('timestamp') or '')
+            # فاز E.3: مرتب‌سازی زمانی واقعی (نه مقایسه‌ی رشته‌ای) — یک ردیف
+            # مهاجرت‌نشده کافی است تا ترتیب رشته‌ای بشکند.
+            printer_events.sort(key=lambda ev: to_sort_key(ev.get('timestamp')))
             for idx, event in enumerate(printer_events):
                 total_at_reset = event.get('total_at_reset')
                 next_total = None
@@ -1332,7 +1401,7 @@ def get_reset_history(ip=None, limit: int = 1000, ips=None, current_totals=None)
                     'pages_per_1pct': event.get('yield_per_page_at_reset') or event.get('yield_per_page'),
                 })
 
-        history.sort(key=lambda item: item.get('timestamp') or '', reverse=True)
+        history.sort(key=lambda item: to_sort_key(item.get('timestamp')), reverse=True)
         return history[:limit]
     except Exception as e:
         log.exception(f"Error building reset history: {e}")

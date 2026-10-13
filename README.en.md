@@ -1,276 +1,268 @@
-# 🖨️ Multi‑Brand Printer Monitor
+# 🖨️ Multi‑Brand Printer Monitor (PrintGuard)
 
-> 🇮🇷 **نسخه فارسی:** [README.md](README.md)
-> 🗺️ **Interactive architecture & data-flow diagram:** [docs/architecture.html](docs/architecture.html) (exports to draw.io XML)
+> 🇮🇷 **نسخه فارسی:** [README.md](README.md)  
+> 🗺️ **Interactive architecture & data-flow diagram:** [docs/architecture.html](docs/architecture.html) (exports to draw.io XML)  
+> 📋 **PostgreSQL Cutover Runbook:** [docs/cutover-runbook.md](docs/cutover-runbook.md)
 
-A monitoring system for **Toshiba, HP, Canon, Brother** printers and **ECS100G** environment sensors using **SNMP (v1/v2c) + HTTP**.
+An enterprise-grade monitoring, analytics, and management platform for multi-brand printers (**Toshiba, HP, Canon, Brother**) and **ECS100G** environmental sensors using **SNMP (v1/v2c) + HTTP Web Scraping** and a high-performance **Prometheus SNMP Exporter** hybrid pipeline.
 
-Built to track online/offline status, print counters, toner levels, paper trays, events/logs, reporting, printer grouping, and multi-user access control.
+PrintGuard tracks real-time online/offline states, granular print counters (A3/A4 split, color/mono), toner and drum levels, device alerts, machine-learned cartridge capacity (Yield Engine), audit logs, Excel/CSV exports, custom printer groups, and role-based access security.
 
 ---
 
 ## 📑 Table of Contents
 
-1. [Features](#-features)
-2. [Architecture](#-architecture-overview)
-3. [Data Flow (how data is collected)](#-data-flow)
-4. [Project Structure & File Guide](#-project-structure)
-5. [Prerequisites & Installation](#-prerequisites)
+1. [Key Features](#-key-features)
+2. [Architecture & System Layers](#-architecture--system-layers)
+3. [Data Flow & Monitoring Pipelines](#-data-flow--monitoring-pipelines)
+4. [Project Structure](#-project-structure)
+5. [Prerequisites & Installation](#-prerequisites--installation)
 6. [Environment Configuration](#-environment-configuration)
 7. [API Reference](#-api-reference)
-8. [Toner & Yield Engine](#-toner--consumables)
+8. [Toner & Yield Engine](#-toner--yield-engine)
 9. [Log & Counter Integrity](#-log--counter-integrity)
-10. [Tools](#-tools)
-11. [Security](#-security)
+10. [Command-Line Tools (CLI)](#-command-line-tools-cli)
+11. [Testing & Quality Assurance](#-testing--quality-assurance)
+12. [Security](#-security)
 
 ---
 
-## ✨ Features
+## ✨ Key Features
 
-### 🖨️ Multi-brand support
-- **Toshiba e‑STUDIO** (vendor-specific counters, A3/A4, trays, toner via SNMP or TopAccess scraping)
-- **HP LaserJet / FutureSmart / JetDirect** (incl. M527 & E52645 with NPCL percent units)
-- **Canon i‑SENSYS / MF / LBP** (incl. LBP233dw with discrete toner status codes 0/5/7)
-- **Brother MFC / NC series**
-- **ECS100G** temperature/humidity sensors
+### 🖨️ Multi-Brand Enterprise Support
+- **Toshiba e‑STUDIO:** Vendor-specific counters, A3/A4 attribution, paper tray status, toner level extraction via SNMP or TopAccess web scraping.
+- **HP LaserJet / FutureSmart / JetDirect:** Enterprise models (e.g. M527, E52645, M577), NPCL percentage handling, sensor alerts, and color supplies tracking.
+- **Canon i‑SENSYS / imageRUNNER / LBP:** MF and single-function devices (e.g. LBP233dw), discrete status code mapping (`0/5/7`), and Remote UI scraping.
+- **Brother MFC / NC Series:** Counters, drum life, and cartridge status tracking.
+- **ECS100G:** Real-time temperature and humidity monitoring for server rooms and print facilities.
 
-### 📊 Device monitoring
-- **Online/offline** detection with a **minimum of 2 consecutive failed cycles**, so a transient network hiccup never causes a false offline
-- Model, serial, firmware, uptime
-- Counters: total / color / mono / copy / print / fax / scan
-- **Paper-size split (A3/A4)** using a snapshot-matching cycle
-- Paper tray levels, toner/cartridge/drum cards, active alerts
+### 💾 Dual-Backend Storage Architecture
+- Native support for both **SQLite** (local development and isolated unit testing) and **PostgreSQL 16+** (high-concurrency production).
+- Unified database connection adapter layer (`core/db/`) with session-level timezone enforcement locked strictly to **UTC**.
+- Production-ready schema migration chain with **Alembic** (`0001` through `0005`), supporting `JSONB` log payloads and native PostgreSQL `IDENTITY` auto-incrementing sequences.
 
-### 🎨 Toner & consumables
-- Toner level via **SNMP** and, on some brands, **HTTP scraping** (Toshiba TopAccess / Canon Remote UI)
-- RFC 3805 supply-unit handling: percent (`unit=19`), Canon discrete codes (`0/5/7`), `-2/-3` sentinels
-- **Manual toner reset** with *pages since last reset*
-- **Yield Engine** (`core/yield_engine.py`):
-  - Automatic `yield_per_page` learning
-  - **Anchor-based learning** for low-volume printers
-  - Confidence levels `low` / `medium` / `high`
-  - Yield sharing across same-model/same-name cartridges
-  - Snapshot & learning-sample history
-- **Local cartridge catalog** (`cartridge_yield_catalog.json` — 30+ models) instead of a naive 2000-page fallback
-- Capacity priority: `auto_learn` → `shared_profile` → `device_capacity` → `catalog` → `default`
-- Dot Count / Mega Dots where the model genuinely provides them
+### 🚀 Prometheus & Resilience Pipeline
+- Standard metrics exposition on `/metrics` with dedicated bearer token security (`METRICS_TOKEN`).
+- Optional high-throughput hybrid collection pipeline (`USE_SNMP_EXPORTER=1`) based on Prometheus `snmp_exporter`.
+- Built-in resilience engineering with **Exponential Backoff** and **Circuit Breaker** patterns in `core/exporter_client.py` to protect against network flooding on offline devices.
+- Zero-copy HTTP scraping fallback when SNMP metrics are missing or incomplete.
 
-### 📜 Events & logs
-- Automatic `PRINT` / `STATUS` / `ALERT` / `REFILL` / `SERVICE` events
-- `CARTRIDGE_CHANGED` — **definitive cartridge-change detection via unique supply identity (Chip ID / serial)**:
-  - **Automatic OID discovery:** on the first successful poll, `cartridge_discovery.py` walks the standard Printer-MIB supplies-description table (color mapping) plus vendor subtrees for all four brands (HP / Canon / Brother / Toshiba) and extracts serial-like values.
-  - **Stability gate:** a candidate OID is confirmed only if its value stays identical across 3 consecutive probes (dynamic values like toner levels are filtered out).
-  - Confirmed OIDs are persisted automatically to `config/cartridge_id_map.json` (the `learned` section); manual entries always take precedence and are never overwritten.
-  - An ID change fires an immediate `CARTRIDGE_CHANGED` event with previous/new ID and color; complementary signals: the “pages printed with this supply” reset and (fallback) the toner-level jump path.
-  - The current chip ID per cartridge is shown on the dashboard (overview card + per-supply card) with a 🧩 label.
-- `SENSOR_CHANGE` for meaningful sensor changes (temp ≥ 1°C, humidity ≥ 5%)
-- `paper_size` (`Large (A3/B4)` / `Small (A4/A5)` / `Mixed`) and `paper_split` stored in log details
-- `poll_timestamp` on `PRINT` events
-- **Protection against wrong logs:** first-poll snapshot ignored, `COUNTER_RESET`, `COUNTER_DROP`, `PRINT_OVERFLOW` and `COUNTER_ANOMALY` detection — see [Log Integrity](#-log--counter-integrity)
+### 📊 Accurate Tracking & Diagnostics
+- Multi-cycle offline detection requiring **at least 2 consecutive failed polling cycles** to eliminate transient network flapping.
+- Granular counters: Total / Color / Monochrome / Copy / Print / Fax / Scan.
+- **Deterministic paper-size attribution (A3/A4 split)** verified through snapshot-matching cycles.
+- Active alert codes, paper tray capacities, and toner levels.
 
-### 👥 Printer groups
-- Create/rename/delete **custom groups** with icon & color (`groups.json`)
-- A group persists even with zero printers; stable `id` separate from display name
-- Built-in office groups based on **subnet**
+### 🧩 Smart Cartridge Yield Engine
+- Unique cartridge replacement detection (`CARTRIDGE_CHANGED`) via Chip ID / Serial Number discovery.
+- Adaptive learning of `yield_per_page` based on historical printing patterns.
+- Comprehensive local catalog (`cartridge_yield_catalog.json`) with prioritized capacity resolution:
+  `auto_learn → shared_profile → device_capacity → catalog → default`.
 
-### 📈 Reporting & export
-- Daily-usage charts (Chart.js)
-- **Excel** export (Printer Status / Job Log / Reset History sheets)
-- **CSV** and **JSON** export
-- **Database import** with analysis, section selection, IP/date filters and automatic backup
-
-### 👤 Users & security
-- **Username/password** auth (bcrypt) and **Google OAuth**
-- Roles: `admin` / `manager` / `viewer`
-- Per-user **allowed offices** and **allowed modules**
-- **CSRF protection**, **rate limiting**, reCAPTCHA, **security audit log**
-- User-management page and security dashboard
-
-### 🧩 UI
-- **Dark/light** theme, responsive layout, Persian RTL
-- Drag & drop card ordering (Sortable.js)
-- Tooltips, toasts, and an accordion for secondary counters
+### 👥 Access Control & Reporting
+- Robust authentication with **bcrypt**, **Google OAuth**, and 3-tier role authorization (`admin` / `manager` / `viewer`).
+- Granular permissions based on **office subnets** and **allowed modules**.
+- Multi-sheet **Excel** export (Printer Status, Job Logs, Reset History) and **CSV** reports.
 
 ---
 
-## 🧱 Architecture Overview
+## 🧱 Architecture & System Layers
 
-| Layer | Technology / module |
-|---|---|
-| Frontend | Vanilla HTML/CSS/JS + Chart.js + Sortable.js (`web/templates`, `web/static`) |
-| Web & API | Flask + Blueprints (`web/`), default port **5050** |
-| Core logic | Poller + collectors + Yield Engine (`core/`) |
-| Device protocol | In-house SNMP v1/v2c over **UDP/161** (`core/snmp/`) + HTTP scraping |
-| Storage | SQLite (`logs.db`) + JSON files (`printers.json`, `groups.json`, `oid_profiles.json`) |
+| Layer | Component / Tech | Details |
+|---|---|---|
+| **User Interface** | HTML5 / CSS3 / Vanilla JS + Chart.js + Sortable.js | Responsive, Persian RTL, Dark/Light theme support |
+| **Web & API** | Flask + Blueprints (`web/`) | Default port: **5050** (`FLASK_PORT`) |
+| **Core Monitoring** | Poller + Collectors + Yield Engine (`core/`) | Multi-threaded polling loops, state tracking |
+| **Protocols** | SNMP v1/v2c (`core/snmp/`) + HTTP Web Scraping | Native UDP socket transport + web panel scraping |
+| **Metrics Pipeline**| Prometheus `/metrics` + `snmp_exporter` | High-throughput collector with Circuit Breaker |
+| **Database** | **SQLite** (`logs.db`) or **PostgreSQL 16+** | Abstracted through `core/db/` adapter with **Alembic** migrations |
 
-🗺️ For the **complete interactive flowchart** of file relationships and data flow (with draw.io XML export), open **[docs/architecture.html](docs/architecture.html)** in a browser.
+🗺️ Explore the **interactive data-flow and architecture diagram** in **[docs/architecture.html](docs/architecture.html)**.
 
 ---
 
-## 🔄 Data Flow
+## 🔄 Data Flow & Monitoring Pipelines
 
-### Polling cycle (every 60 s — `POLL_INTERVAL`)
+### Polling Pipeline (Every 60s — `POLL_INTERVAL`)
 
 ```text
-run.py ──▶ polling_loop (thread)
+run.py (Main Application Entry)
    │
-   ├─▶ core/poller.py : poll_all()
-   │      │  printer list from core/store.py (printers.json)
-   │      ▼
-   │   collect(ip) ──▶ primary path: core/enhanced_collector.py
-   │      │                (Generic MIB-2 + Host Resources + Printer MIB + vendor OIDs)
-   │      │            if incomplete/failed ─▶ brand collector fallback:
-   │      │                toshiba.py / hp.py / canon.py / brother.py
-   │      │                (+ HTTP toner scraping when needed)
-   │      ▼
-   │   core/snmp/protocol.py ──▶ SNMP GET over UDP/161
-   │      │                    (v2c first, fallback to v1; per-IP version cache)
-   │      ▼
-   │   core/collectors/base.py ──▶ processing:
-   │      │   • _counters_event: real printing vs reset/anomaly detection
-   │      │   • attribute_paper_size: A3/A4 split via matching cycle
-   │      │   • toner math + Yield Engine (yield_engine.py + catalog)
-   │      ▼
-   ├─▶ core/store.py  ──▷ live memory (printer_data) for the APIs
-   └─▶ core/database.py ──▷ add_event(...) into logs.db
-            │
-            ▼
-   User's browser ──▶ dashboard.js polls GET /api/printers every few seconds
-            └──── web routes read store/database and return JSON
+   ├─▶ core/poller.py : polling_loop()
+   │      │
+   │      ├─ [Default Mode: USE_SNMP_EXPORTER=0]
+   │      │     └─▶ core/enhanced_collector.py (Direct SNMP over UDP/161)
+   │      │           └─▶ Fallback to brand collectors (HP, Toshiba, Canon, Brother)
+   │      │
+   │      └─ [Exporter Mode: USE_SNMP_EXPORTER=1]
+   │            └─▶ core/collectors/exporter_adapter.py
+   │                  ├─▶ core/exporter_client.py ──▶ snmp_exporter (HTTP)
+   │                  │     (Guarded by Circuit Breaker & Exponential Backoff)
+   │                  └─▶ If SNMP Incomplete ──▶ HTTP Scraping Fallback
+   │
+   ├─▶ core/collectors/base.py (Event processing, A3/A4 split, counter validation)
+   │
+   ├─▶ core/yield_engine.py (Yield calculations, learning updates, Chip ID detection)
+   │
+   ├─▶ core/store.py (In-memory live cache of device states for dashboard)
+   │
+   └─▶ core/db/ (Transactional persistence of logs, stats, and security events)
 ```
 
-### Background threads (`run.py`)
-| Thread | Purpose |
+### Background Worker Threads (`run.py`)
+| Thread | Responsibility |
 |---|---|
-| `poll-init` / `poll-loop` | immediate first poll + the 60-second polling loop |
-| `weekly-scan` | weekly OID scan, refreshes `oid_profiles.json` |
-| `cleanup-loop` | prunes old `PRINT` logs |
-| Flask (main thread) | serves the web app on `0.0.0.0:5050` |
-
-### Other data paths
-- **ECS100G sensors** → `core/collectors/sensor.py` → `sensor_readings` table + `SENSOR_CHANGE` events
-- **OID scan** → `core/oid/scanner.py` → `oid_profiles.json` + `device_classifier.py`
-- **User actions** (add printer, toner reset, groups, user management) → `web/routes/` → `store`/`database`
-- **Reporting** → `web/routes/export_bp.py` → Excel/CSV from `logs.db`
+| `poll-init` / `poll-loop` | Immediate startup poll followed by periodic 60-second polling cycle |
+| `startup-scan` / `weekly-scan` | Discovers new OIDs, checks firmware changes, updates device profiles |
+| `cleanup-loop` | Enforces historical log retention policies |
+| `clear-terminal` | Daily console refresh for server operator legibility |
 
 ---
 
 ## 📁 Project Structure
 
 ```text
-Multi-Printer/
-├── run.py                      # entry point: Flask + polling/scan/cleanup threads
-├── models.py                   # User model (Flask-Login) + bcrypt
-├── utils.py                    # email, reset tokens, reCAPTCHA
-├── create_admin.py             # create/promote an admin from the CLI
-├── requirements.txt            # dependencies
-├── printers.example.json       # sample printers file
-├── cartridge_yield_catalog.json# cartridge capacity catalog (+ local/Iran values)
-├── start.bat / stop-project.bat# Windows start/stop helpers
+multi-printer/
+├── run.py                          # Application entry point: Flask + background threads
+├── models.py                       # User models (Flask-Login) & authentication logic
+├── create_admin.py                 # CLI utility to create or promote an admin account
+├── alembic.ini                     # Alembic database migration config (ASCII-only)
+├── alembic/                        # Migration version scripts (0001 to 0005)
+│   └── versions/
+│       ├── 0001_initial_schema.py          # Baseline cross-engine schema
+│       ├── 0002_boolean_columns.py         # Boolean column transformations
+│       ├── 0003_identity_columns.py        # BIGSERIAL to IDENTITY migrations
+│       ├── 0004_jsonb_columns.py           # logs.details JSONB conversion
+│       └── 0005_add_legacy_log_columns.py   # Production logs schema alignment
 ├── config/
-│   ├── __init__.py
-│   └── settings.py             # ports, file paths, office subnets, SECRET_KEY, thresholds
+│   ├── settings.py                 # Core configuration: ports, subnets, thresholds
+│   └── cartridge_id_map.json       # OID-to-color and chip serial mapping table
 ├── core/
-│   ├── database.py             # SQLite layer: logs, users, counters, toner/reset history
-│   ├── poller.py               # polling loop, collector selection, online/offline handling
-│   ├── store.py                # live memory (printer_data/PRINTERS) + PrevStore
-│   ├── enhanced_collector.py   # primary collection path (all brands): counters/toner/trays
-│   ├── yield_engine.py         # yield learning + cartridge catalog + status report
-│   ├── groups.py               # custom printer groups (groups.json)
-│   ├── device_classifier.py    # device classification from scanned OIDs
-│   ├── security_audit.py       # security event log
-│   ├── collectors/
-│   │   ├── base.py             # shared helpers: print events, toner, A3/A4 attribution
-│   │   ├── base_enhanced.py    # bridge to enhanced_collector
-│   │   ├── toshiba.py          # Toshiba: vendor OIDs, A3/A4, twin, toner scrape, trays
-│   │   ├── hp.py               # HP: counters/toner + fallback
-│   │   ├── canon.py            # Canon: MF/LBP + Remote UI toner scrape
-│   │   ├── brother.py          # Brother: toner/drum + fallback
-│   │   └── sensor.py           # ECS100G sensor (temperature/humidity)
-│   ├── snmp/
-│   │   ├── protocol.py         # low-level SNMP v1/v2c over UDP/161 + version fallback + cache
-│   │   └── oid_map.py          # OID maps (mainly Toshiba) + paper/toner mappings
-│   └── oid/
-│       ├── scanner.py          # per-IP OID scan & profile building (startup + weekly)
-│       ├── catalog.py          # catalog of known OIDs
-│       └── validator.py        # OID value validation + error log
+│   ├── db/                         # Database abstraction adapter (SQLite & PostgreSQL)
+│   │   ├── connection.py           # Unified connections with strict UTC enforcement
+│   │   └── exceptions.py           # Normalized database exception classes
+│   ├── poller.py                   # Polling scheduler and offline resilience logic
+│   ├── store.py                    # In-memory printer states and PrevStore
+│   ├── enhanced_collector.py       # Primary multi-brand SNMP collector
+│   ├── exporter_client.py          # snmp_exporter HTTP client with Circuit Breaker
+│   ├── yield_engine.py             # Capacity learning and cartridge catalog engine
+│   ├── collectors/                 # Dedicated brand modules (HP, Canon, Toshiba, Brother)
+│   │   └── exporter_adapter.py     # Prometheus adapter with zero-copy scraping fallback
+│   ├── snmp/                       # Low-level native SNMP v1/v2c packet handler
+│   └── oid/                        # Automatic network OID scanner and validator
 ├── web/
-│   ├── __init__.py             # create_app: blueprints, auth, security, CORS
-│   ├── auth.py                 # login/register/OAuth/reset + role & access decorators
-│   ├── security.py             # CSRF, rate limiting, security headers
-│   ├── routes/
-│   │   ├── dashboard.py        # main page
-│   │   ├── printers.py         # printer CRUD + toner reset + debug
-│   │   ├── logs.py             # log APIs + manual events
-│   │   ├── export_bp.py        # Excel/CSV export
-│   │   ├── discover.py         # network device discovery
-│   │   ├── scan.py             # OID scan/validation APIs
-│   │   ├── stats.py            # daily stats & chart data
-│   │   ├── system.py           # system status + manual poll
-│   │   ├── security.py         # security dashboard + event APIs
-│   │   ├── users.py            # user & access management
-│   │   ├── groups.py           # custom groups API
-│   │   ├── import_db.py        # database analyze/import with backup
-│   │   ├── validation.py       # counter & profile consistency checks
-│   │   └── yield_status.py     # Yield Engine status & report
-│   ├── templates/              # base/dashboard/login/register/users/security/...
-│   └── static/
-│       ├── css/style.css
-│       └── js/                 # dashboard.js (main UI logic), legacy-mode.js,
-│                               # Sortable.min.js, chart.umd.min.js
-├── tools/
-│   └── diagnose_printer.py     # raw SNMP/Web dump of one printer for new-model debugging
-└── docs/
-    └── architecture.html       # interactive architecture + data-flow diagram + XML export
+│   ├── __init__.py                 # Flask factory, blueprint registration, CSRF setup
+│   ├── auth.py                     # Authentication routes, session guards, Google OAuth
+│   ├── security.py                 # CSRF protection, rate limiting, and security headers
+│   ├── routes/                     # Blueprint routes (dashboard, printers, logs, metrics)
+│   ├── templates/                  # Jinja2 templates (dashboard, users, security, login)
+│   └── static/                     # Frontend styles, client JS, Chart.js, Sortable.js
+├── tools/                          # Command-line tools (CLI)
+│   ├── migrate_sqlite_to_pg.py     # Full SQLite-to-PostgreSQL cutover migration tool
+│   ├── diagnose_data_quality.py    # Independent SQLite data quality diagnosis tool
+│   ├── migrate_timestamps_to_utc.py# Timestamp UTC-Z converter with audit manifests
+│   ├── check_cutover_readiness.py  # 10-point preflight cutover readiness verifier
+│   ├── generate_cutover_fixture.py # Synthetic 30MB SQLite fixture generator for cutover
+│   ├── build_snmp_yml.py           # Compiles generator.yml into monitoring snmp.yml
+│   └── diagnose_printer.py         # Diagnostic utility to dump raw SNMP and web data
+└── docs/                           # Official technical docs and architecture reports
+    ├── cutover-runbook.md          # Step-by-step PostgreSQL cutover runbook
+    ├── hybrid-path-report.md       # Full-path Prometheus hybrid evaluation report
+    ├── phase-h-decisions.md        # Architectural decision records for exporter pipeline
+    └── tech-debt.md                # Living technical debt catalog (TD-001 to TD-023)
 ```
-
-### Runtime files (not tracked in git)
-`logs.db`, `printers.json`, `groups.json`, `oid_profiles.json`, `oid_validation_errors.txt`, `toner_report.txt`, `yield_status_report.txt`
 
 ---
 
-## 🔧 Prerequisites
+## 🔧 Prerequisites & Installation
 
-- Python **3.8+** (recommended **3.10+**)
-- Network access to the printers with **161/UDP** open (SNMP v1 or v2c)
-- `openpyxl` for Excel export (included in requirements)
+### Requirements
+- **Python:** **3.10+** (tested on Python 3.10 through 3.13)
+- **Database (choose one):**
+  - **SQLite:** Built-in, zero setup required.
+  - **PostgreSQL 16+:** Recommended for production deployments.
+- **Network Access:** Port **161/UDP** open towards target printers.
 
-## 🚀 Installation & Run
+### Step-by-Step Installation
 
 ```bash
+# 1. Clone repository
 git clone https://github.com/mhgazmeh2000/multi-printer.git
 cd multi-printer
-python -m venv .venv
-# Linux/macOS:  source .venv/bin/activate
-# Windows:      .venv\Scripts\activate
+
+# 2. Set up virtual environment
+python3 -m venv .venv
+source .venv/bin/activate       # On Windows: .venv\Scripts\activate
+
+# 3. Install dependencies
 pip install -r requirements.txt
+pip install -r requirements-dev.txt   # Optional: for testing and CLI tools
+
+# 4. Apply database migrations (Required for PostgreSQL)
+python -m alembic upgrade head
+
+# 5. Create administrator user
+python create_admin.py
+
+# 6. Start the server
 python run.py
 ```
 
-Default: `http://localhost:5050`
-On Windows you can also use `start.bat` and `stop-project.bat`.
+The application is now accessible at **`http://localhost:5050`**.
 
-If no user exists, the **first registered account** automatically becomes a verified `admin`; or run `python create_admin.py`.
+### 🪟 Windows Quick Start (`start.bat`)
+On Windows servers, `start.bat` automates environment verification, dependencies, port checks, migrations, and server startup:
+* **Test Machine:**
+  To test on PostgreSQL, create a `.env` file in the project root:
+  ```env
+  DB_BACKEND=postgresql
+  PG_DSN=postgresql://postgres:123456@127.0.0.1:5432/printguard_test
+  ```
+  `start.bat` dynamically discovers the running PostgreSQL Windows service, applies Alembic migrations, runs `tools/auto_migrate.py` with preflight safety checks, and starts Flask.
+* **Production Machine:**
+  In production, `.env` **must NOT** have `DB_BACKEND=postgresql` prior to scheduled cutover (keep `DB_BACKEND=sqlite` or omit `.env`). `start.bat` defaults to SQLite (`logs.db`).
+* **Pre-TRUNCATE Safety Verification in `auto_migrate.py`:**
+  If the target PostgreSQL database already contains users (`users > 0`), migration is skipped (Idempotent). If users count is 0, all tables are inspected: if real data exists in any non-seed table, migration aborts immediately with an error, preventing any TRUNCATE. Only if the DB is clean or contains only seed rows, seed tables are truncated and full verified migration runs.
 
 ---
 
 ## ⚙️ Environment Configuration
 
-### Security & runtime
+Set these in your `.env` file or environment variables:
+
+### Database & Storage
 ```bash
-export ENVIRONMENT=development
-export SECRET_KEY=change-me
+# Backend engine: sqlite (default) or postgresql
+export DB_BACKEND=postgresql
+
+# PostgreSQL connection DSN (when DB_BACKEND=postgresql)
+export PG_DSN="postgresql://printguard:strong-password@127.0.0.1:5432/printguard"
+
+# SQLite path (when DB_BACKEND=sqlite)
+export DB_PATH="logs.db"
+```
+
+### Web Server & Security
+```bash
+export ENVIRONMENT=production
+export SECRET_KEY="generate-a-strong-secret-key"
 export FLASK_PORT=5050
+export CORS_ALLOWED_ORIGINS="https://monitor.example.com"
 ```
 
-### Default printers (optional)
+### Prometheus & Exporter Pipeline
 ```bash
-export DEFAULT_PRINTERS_JSON='[
-  {"ip":"192.168.1.10","name":"Printer #1","community":"public"}
-]'
+# Enable Prometheus SNMP Exporter pipeline (default: 0)
+export USE_SNMP_EXPORTER=0
+
+# Address of running snmp_exporter service
+export SNMP_EXPORTER_URL="http://127.0.0.1:9116"
+
+# Bearer token to protect /metrics endpoint (recommended for production)
+export METRICS_TOKEN="your-secure-metrics-token"
 ```
 
-### Office subnets
+### Subnets & Office Groups
 ```bash
 export OFFICE_SUBNET_IMAMAT=172.16.25
 export OFFICE_SUBNET_SOROUSH=172.16.24
@@ -278,151 +270,133 @@ export OFFICE_SUBNET_FALESTIN=172.16.0
 export OFFICE_SUBNET_ELAHIYE=172.16.32
 ```
 
-### Miscellaneous
-```bash
-export ASSET_VERSION=20260609-2          # asset cache busting
-export CORS_ALLOWED_ORIGINS="https://app.example.com"
-# Mail (password reset), Google OAuth and reCAPTCHA keys — see config/settings.py
-```
-
 ---
 
 ## 🔌 API Reference
 
-### System
-- `GET /api/status`
-- `POST /api/poll/now`
+### Prometheus Metrics
+- **`GET /metrics`:** Prometheus exposition format endpoint (protected by `METRICS_TOKEN` via `Authorization: Bearer <token>`).
 
-### Printers
-- `GET /api/printers` · `GET /api/printer/<ip>`
-- `POST /api/printers/add` · `POST /api/printers/bulk-add` · `POST /api/printers/remove`
-- `POST /api/printer/<ip>/update` (rename / group / …)
-- `POST /api/printer/<ip>/toner_reset`
-- `POST /api/printers/discover` · `POST /api/discover/auto-add`
+### System Status & Polling
+- **`GET /api/status`:** Server health status, poller state, and error counters.
+- **`POST /api/poll/now`:** Triggers an immediate polling cycle for all devices.
 
-### Logs
-- `GET /api/logs/all` · `GET /api/printer/<ip>/log`
-- `POST /api/logs/clear` · `POST /api/events/manual`
+### Device Management
+- **`GET /api/printers`:** List of all monitored devices with online status and counters.
+- **`GET /api/printer/<ip>`:** Detailed state of a specific device.
+- **`POST /api/printers/add` / `remove` / `update`:** Printer CRUD operations.
+- **`POST /api/printer/<ip>/toner_reset`:** Manual supply reset record.
+- **`POST /api/printers/discover`:** Subnet scan for printer discovery.
 
-### Groups
-- `GET/POST /api/groups`
-- `POST /api/groups/<gid>/rename` · `DELETE /api/groups/<gid>`
+### Logs & Events
+- **`GET /api/logs/all?limit=100`:** Paginated event logs.
+- **`GET /api/printer/<ip>/log`:** Filtered logs for a single device.
+- **`POST /api/events/manual`:** Logs manual maintenance or paper refilling.
 
-### Database import
-- `POST /api/import/analyze` · `POST /api/import/confirm`
+### Reporting
+- **`GET /api/export/excel`:** Comprehensive multi-sheet workbook (Status, Logs, Resets).
+- **`GET /api/export/logs?format=csv`:** Raw CSV event export.
 
-Besides logs, `printer_counters`, `toner_history`, `sensor_readings` and Yield Engine tables can be imported — with section selection, IP/date filters, duplicate handling and automatic backup.
-
-### Export
-- `GET /api/export/excel`
-- `GET /api/export/logs?format=csv` / `?format=excel`
-
-### Scan & validation
-- `POST /api/scan/oids` · `GET /api/scan/oids/<ip>` · `POST /api/scan/all` · `GET /api/scan/profiles`
-- `GET /api/validate/counters` · `GET /api/validate/oids/<ip>`
-
-### Yield Engine
-- `GET /api/yield/status`
-- `POST /api/yield/report`
-
-### Stats
-- `GET /api/stats/daily` · `GET /api/stats/sensor/daily`
-
-### Users & security
-- `GET /users` · `GET/POST /api/users`
-- `POST /api/users/<id>/role` · `.../verify` · `.../access` · `DELETE /api/users/<id>`
-- `GET /security` · `GET /api/security/events` · `GET /api/security/stats`
+### Database Migration & Import
+- **`POST /api/import/analyze`:** Analyzes an uploaded SQLite backup (works cross-backend).
+- **`POST /api/import/confirm`:** Direct database write on SQLite (retired on PostgreSQL for data safety; use `tools/migrate_sqlite_to_pg.py` instead).
 
 ---
 
-## 📊 Toner & Consumables
+## 📊 Toner & Yield Engine
 
-### Cartridge yield catalog
-`cartridge_yield_catalog.json` provides realistic nominal capacities when neither `auto_learn` nor `device_capacity` exists yet — far better than a blind `2000` fallback.
-
-Priority: **auto_learn → shared_profile → device_capacity → catalog → default**
-
+### Local Cartridge Catalog
+`cartridge_yield_catalog.json` covers 30+ cartridge models to provide realistic initial capacities before adaptive learning finishes.
 ```bash
-export CARTRIDGE_YIELD_CATALOG=/path/to/cartridge_yield_catalog.json
-# capacity mode (default: local — tuned for the Iranian refilled/compatible market)
-set CARTRIDGE_YIELD_MODE=local        # Windows
-export CARTRIDGE_YIELD_MODE=local     # Linux/macOS  (oem | compatible | refill | local)
-export CARTRIDGE_YIELD_FACTOR=0.90    # optional extra-conservative factor
+# Configure market capacity mode: local | oem | compatible | refill
+export CARTRIDGE_YIELD_MODE=local
+export CARTRIDGE_YIELD_FACTOR=0.90
 ```
 
-Each entry may carry all four values: `yield_per_page_oem/compatible/refill/local`.
-
-### Brand notes
-- **Canon i‑SENSYS (e.g. LBP233dw):** reports discrete codes `0=Empty / 5=Low / 7=OK` instead of a percentage. The system maps them to display-only percentages (0/15/70) with source `canon_status_code`, so yield learning stays unpolluted. Remote UI scraping is used as a fallback.
-- **HP FutureSmart (e.g. M527 & E52645):** `MaxCapacity` is negative (‑3/‑2) and `Remaining` IS the percent (`unit=19`) — the system detects this. Cartridges 87A/87X/87Y and 89A/89X/89Y are in the catalog.
-- **Brother:** some models only report toner *presence*; the UI then shows `—` and fabricates nothing.
-- **RFC 3805 sentinel `-3`** = "supply present, exact level unknown" → status `unknown`, not `not_supported`.
-- **Toshiba:** falls back to TopAccess scraping when needed; `pages_since_last_reset` is supported.
+### Chip ID Cartridge Change Detection
+`cartridge_discovery.py` scans standard Printer-MIB and vendor subtrees on the first successful poll. A 3-cycle stability gate verifies serial consistency and persists the identity to `config/cartridge_id_map.json`. When a supply is physically replaced, the Chip ID changes, triggering a `CARTRIDGE_CHANGED` event.
 
 ---
 
 ## 🧮 Log & Counter Integrity
 
-To prevent wrong/inflated logs, `_counters_event` enforces these rules:
-
-| Situation | System behavior |
-|---|---|
-| First poll of a device | Baseline snapshot stored; **no PRINT event created** |
-| Counter reset (zeros/sharp drop + uptime=0) | `COUNTER_RESET` event; no fabricated printing |
-| Slight drop / soft reset | `COUNTER_DROP`, baseline re-anchored |
-| Unrealistic jump (beyond the physical max for the poll window) | rejected as `PRINT_OVERFLOW` |
-| Slight drop after reboot (pages the device itself forgot) | `COUNTER_ANOMALY` with details |
-| Normal printing | `PRINT` event with exact A3/A4 split and `poll_timestamp` |
-
-Paper-size attribution runs on a snapshot-matching cycle; if an A3/A4 sub-counter lags, the `a3_lagged/a4_lagged` flags are recorded so logs stay honest.
+To prevent counter corruption from device reboots or rollovers, `core/collectors/base.py` enforces:
+* **First Poll Baseline:** Sets the baseline without creating fabricated `PRINT` events.
+* **Sharp Drop with Reboot:** Logged as `COUNTER_RESET` without false page counts.
+* **Extreme Jump:** Blocked as `PRINT_OVERFLOW` if page counts exceed physical engine limits.
+* **Minor Drift after Reboot:** Flagged as `COUNTER_ANOMALY`.
 
 ---
 
-## 🛠️ Tools
+## 🛠️ Command-Line Tools (CLI)
 
-### Printer diagnostic tool
+The `tools/` directory includes specialized CLI utilities:
+
+### 1. SQLite to PostgreSQL Migration (`migrate_sqlite_to_pg.py`)
 ```bash
-python tools/diagnose_printer.py <IP>
-```
-Dumps raw SNMP (system, counters, supplies) and the device's web pages into `diagnose_<ip>.md`, making it easy to add precise support for new models.
+# Dry run verification
+python tools/migrate_sqlite_to_pg.py --source logs.db --dry-run
 
-### Debug endpoints
-- `GET /api/debug/printer/<ip>`
-- `GET /api/debug/brother-toner/<ip>`
-- `GET /api/debug/toshiba-snmp/<ip>`
+# Full cutover with deep verification
+python tools/migrate_sqlite_to_pg.py --source logs.db --target "$PG_DSN" --force --verify
+```
+* **Features:** Intelligent `COPY` / `BATCH` selection, PostgreSQL `IDENTITY` sequence synchronization, preflight data quality validation, and read-only enforcement on the SQLite source.
+
+### 2. Data Quality Diagnosis Tool (`diagnose_data_quality.py`)
+Scans SQLite databases before cutover to detect corrupted types, shifted data from recovery, or missing cartridge rows:
+```bash
+python tools/diagnose_data_quality.py --db logs.db --output logs.db.diagnosis.json
+```
+
+### 3. Timestamp UTC-Z Standardizer (`migrate_timestamps_to_utc.py`)
+Converts legacy timestamps to ISO-8601 UTC with trailing `Z` and outputs timestamped audit manifests:
+```bash
+python tools/migrate_timestamps_to_utc.py --db logs.db --apply
+```
+
+### 4. Cutover Readiness Checker (`check_cutover_readiness.py`)
+Runs 10 automated preflight checks (Python, psycopg, port, PostgreSQL service, Alembic head, disk space):
+```bash
+python tools/check_cutover_readiness.py
+```
+
+### 5. Printer SNMP/Web Dump (`diagnose_printer.py`)
+Dumps raw OIDs and HTML pages from an unknown device to facilitate driver development:
+```bash
+python tools/diagnose_printer.py <PRINTER_IP>
+```
+
+---
+
+## 🧪 Testing & Quality Assurance
+
+PrintGuard features a comprehensive dual-backend test suite:
+
+```bash
+# Run tests against SQLite (default)
+PYTHONPATH=. pytest -q
+# Result: 774 passed, 74 skipped
+
+# Run tests against real PostgreSQL
+PG_DSN="host=127.0.0.1 port=5432 dbname=printguard user=printguard password=***" PYTHONPATH=. pytest -q
+# Result: 848 passed, 0 skipped
+
+# Run golden scenario regression harness
+PYTHONPATH=. pytest tests/test_golden.py tests/test_hybrid_full_path.py
+# Result: 13/13 passed (diff-zero)
+```
 
 ---
 
 ## 🛡️ Security
 
-- **bcrypt** auth + Flask-Login; roles `admin/manager/viewer`
-- **CSRF** on every state-changing request (frontend uses `apiFetch`)
-- **Rate limiting**, security headers, ENV-restricted CORS
-- **Security audit log** (logins/failures/suspicious activity) at `/security`
-- `SECRET_KEY` only from ENV; production refuses the insecure default (`config/settings.py`)
-- Sensitive runtime files (database, printer list) are git-ignored
-- The current repository has been **sanitized after a security review** (foreign/suspicious files and sensitive data removed from history)
-
-> ⚠️ Before deploying: set a strong `SECRET_KEY`, change the default admin password, and put the service behind HTTPS if it is publicly reachable.
-
----
-
-## 📈 Excel Export
-
-Sheets: `Printer Status`, `Job Log`, `Reset History`
-
-The **Reset History** sheet includes: reset time, device IP/name, cartridge color, reset percentage, total pages at reset, pages since reset, and `yield_per_page`.
-
----
-
-## ⚠️ Operational Notes
-
-- Assets are versioned with `ASSET_VERSION` (cache busting)
-- `/api/debug/*` endpoints are for internal development only
-- Never commit runtime files (already in `.gitignore`)
+- **Encrypted Passwords:** Passwords hashed with **bcrypt**; state-changing endpoints protected by CSRF tokens.
+- **Rate Limiting:** Prevents brute-force attacks on login and sensitive endpoints.
+- **Audit Logging:** Security events (logins, privilege escalations, locks) tracked in `/security`.
+- **Environment Isolation:** Sensitive credentials read exclusively from environment variables; passwords masked in logs.
 
 ---
 
 ## 📄 License
 
-Add your chosen license here.
+Internal enterprise printer monitoring and management software. All rights reserved.

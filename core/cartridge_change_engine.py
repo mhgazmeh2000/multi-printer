@@ -19,7 +19,7 @@ replace the generic evidence payload.
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime
+from core.time_utils import utc_now_iso
 from typing import Any, Dict, List, Optional
 
 CONFIDENCE_LEVELS = ("UNKNOWN", "POSSIBLE", "PROBABLE", "CONFIRMED")
@@ -269,7 +269,7 @@ def evaluate_cartridge_change(prev: Optional[Dict[str, Any]], curr: Optional[Dic
     result["new_identity"] = new_identity
 
     if result["should_emit"] and result["old_identity"] and result["new_identity"]:
-        timestamp = datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M:%SZ")
+        timestamp = utc_now_iso()
         result["event"] = {
             "printer_ip": (prev.get("printer_ip") or curr.get("printer_ip") or "unknown"),
             "brand": prev.get("brand") or curr.get("brand") or "",
@@ -303,7 +303,7 @@ def evaluate_cartridge_change(prev: Optional[Dict[str, Any]], curr: Optional[Dic
         result["new_identity"] = new_identity
 
     if result["should_emit"] and result["old_identity"] and result["new_identity"]:
-        timestamp = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        timestamp = utc_now_iso()
         result["event"] = {
             "printer_ip": (prev.get("printer_ip") or curr.get("printer_ip") or "unknown"),
             "brand": prev.get("brand") or curr.get("brand") or "",

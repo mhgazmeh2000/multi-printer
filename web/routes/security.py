@@ -2,13 +2,21 @@
 Endpoint های نمایش لاگ‌های امنیتی (فقط برای admin).
 """
 
-from datetime import datetime, timedelta
+import logging
+from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, jsonify, request, render_template
 
 from web.auth import admin_required
 from core.security_audit import get_recent_events, SecurityEvent, _db_conn
+from core.time_utils import to_utc_z
 import json
+
+#: E.6.7 (TD-004): مسیر خطای `api_security_stats` با `log.exception` صدا می‌زد در
+#: حالی که این نام در ماژول تعریف نبود ⇒ خودِ handler خطا، `NameError` می‌داد و
+#: پاسخ JSON برنامه‌ریزی‌شده (و رکورد لاگ) هرگز تولید نمی‌شد. نام، همان قرارداد
+#: سایر routeهاست.
+log = logging.getLogger("PrinterMonitor")
 
 EVENT_TYPE_LABELS = {
     "successful_login": "ورود موفق",
@@ -84,8 +92,10 @@ def api_security_events():
 def api_security_stats():
     """آمار خلاصه رویدادهای امنیتی اخیر."""
     try:
-        cutoff_24h = (datetime.now() - timedelta(hours=24)).isoformat()
-        cutoff_7d = (datetime.now() - timedelta(days=7)).isoformat()
+        # فاز E.3: cutoffها هم‌فرمت با داده‌ی ذخیره‌شده (UTC/Z) ساخته می‌شوند.
+        now_utc = datetime.now(timezone.utc)
+        cutoff_24h = to_utc_z(now_utc - timedelta(hours=24))
+        cutoff_7d = to_utc_z(now_utc - timedelta(days=7))
 
         with _db_conn() as conn:
             failed_24h = conn.execute(

@@ -3,14 +3,32 @@
 """
 import csv
 import io
-from datetime import datetime
+from datetime import datetime, timezone
 from flask import Blueprint, jsonify, request, make_response, send_file
 from flask_login import current_user
 from core import store
 from core.database import get_log, get_all_logs, get_reset_history
+from core.time_utils import (DEFAULT_DISPLAY_TZ, to_local_str, to_sort_key,
+                             utc_now_iso)
 from web.auth import allowed_printer_ips, user_allowed_offices
 
 bp = Blueprint("export", __name__)
+
+# فاز E.3: داده‌ی ذخیره‌شده UTC با پسوند Z است (طول ثابت ۲۷). خروجی‌های CSV/Excel
+# باید ساعت محلی نشان دهند (قبلاً رشته‌ی naive محلی بود و بریدنِ [:19] بی‌خطر بود؛
+# حالا بدون تبدیل، UTC نمایش داده می‌شود و ردیف‌ها ۳:۳۰ جابه‌جا به‌نظر می‌رسند).
+TZ_LABEL = DEFAULT_DISPLAY_TZ
+
+
+def _local_ts(value) -> str:
+    """timestamp ذخیره‌شده ⇒ رشته‌ی محلی برای خروجی؛ مقدار ناخوانا ⇒ دست‌نخورده."""
+    raw = str(value or "")
+    if not raw:
+        return ""
+    try:
+        return to_local_str(raw)
+    except ValueError:
+        return raw
 
 
 # ─── export لاگ با بازه تاریخ ───────────────────────────────────
@@ -39,12 +57,12 @@ def export_logs():
 def _csv_logs(logs, start, end):
     output = io.StringIO()
     w = csv.writer(output)
-    w.writerow(['Timestamp','Printer IP','Printer Name','Type','Message',
+    w.writerow([f'Timestamp ({TZ_LABEL})','Printer IP','Printer Name','Type','Message',
                 'Pages','Color','Code','Severity','Paper Size','Details'])   # ← اضافه شد
     import json
     for ev in logs:
         w.writerow([
-            ev.get('timestamp',''), ev.get('printer_ip',''), ev.get('printer_name',''),
+            _local_ts(ev.get('timestamp')), ev.get('printer_ip',''), ev.get('printer_name',''),
             ev.get('type',''), ev.get('message',''), ev.get('pages',''),
             ev.get('color',''), ev.get('code',''), ev.get('severity',''),
             ev.get('paper_size',''),   # ← اضافه شد
@@ -73,7 +91,7 @@ def _excel_logs(logs, start, end):
     ws = wb.active; ws.title = "Logs"; ws.sheet_view.rightToLeft = True
     thin = Side(style='thin', color='2A3248')
     bdr  = Border(left=thin, right=thin, top=thin, bottom=thin)
-    headers = ['زمان','IP','نام دستگاه','نوع','پیام','صفحات','رنگ','کد','اهمیت','سایز کاغذ','جزئیات']   # ← اضافه شد
+    headers = [f'زمان ({TZ_LABEL})','IP','نام دستگاه','نوع','پیام','صفحات','رنگ','کد','اهمیت','سایز کاغذ','جزئیات']   # ← اضافه شد
     for col, h in enumerate(headers, 1):
         cell = ws.cell(1, col, h)
         cell.font      = Font(bold=True, color='00D4FF', name='Arial', size=10)
@@ -85,7 +103,7 @@ def _excel_logs(logs, start, end):
         bg  = '141720' if row % 2 == 0 else '0E1018'
         sev = ev.get('severity','info')
         vals = [
-            (ev.get('timestamp','')[:19].replace('T',' ')),
+            _local_ts(ev.get('timestamp')),
             ev.get('printer_ip',''), ev.get('printer_name',''), ev.get('type',''),
             ev.get('message',''), ev.get('pages',''), ev.get('color',''), ev.get('code',''),
             sev.upper(),
@@ -201,18 +219,19 @@ def export_excel():
 
     # Sheet 2: Job Log (با ستون سایز کاغذ)
     ws3 = wb.create_sheet("Job Log"); ws3.sheet_view.rightToLeft = True
-    H3  = ["زمان","IP","نام دستگاه","نوع رویداد","پیام","صفحات","رنگ","کد","اهمیت","سایز کاغذ"]   # ← اضافه شد
+    H3  = [f"زمان ({TZ_LABEL})","IP","نام دستگاه","نوع رویداد","پیام","صفحات","رنگ","کد","اهمیت","سایز کاغذ"]   # ← اضافه شد
     for ci, h in enumerate(H3, 1): hcell(ws3, 1, ci, h)
     ws3.row_dimensions[1].height = 28
     all_ev = []
     for p in cfg:
         for e in get_log(p["ip"], limit=1000):
             all_ev.append((p["ip"], p["name"], e))
-    all_ev.sort(key=lambda x: x[2].get("timestamp",""), reverse=True)
+    # فاز E.3: مرتب‌سازی زمانی واقعی (تجزیه‌ی مقدار)، نه مقایسه‌ی رشته‌ای.
+    all_ev.sort(key=lambda x: to_sort_key(x[2].get("timestamp")), reverse=True)
     SEV = {"error":"FF3D3D","warning":"FFD740","success":"00E676","info":"7B86A0"}
     for ri, (pip, pname, e) in enumerate(all_ev, 2):
         bg  = ROWS[ri % 2]
-        ts  = (e.get("timestamp") or "")[:19].replace("T"," ")
+        ts  = _local_ts(e.get("timestamp"))
         sev = e.get("severity") or "info"
         vals = [ts, pip, pname, e.get("type",""), e.get("message",""),
                 e.get("pages",""), e.get("color",""), e.get("code",""), sev.upper(),
@@ -226,7 +245,7 @@ def export_excel():
 
     # Sheet 3: Reset History
     ws4 = wb.create_sheet("Reset History"); ws4.sheet_view.rightToLeft = True
-    H4 = ["زمان تنظیم","IP","نام دستگاه","رنگ","درصد تنظیم‌شده","کل صفحات در لحظه تنظیم",
+    H4 = [f"زمان تنظیم ({TZ_LABEL})","IP","نام دستگاه","رنگ","درصد تنظیم‌شده","کل صفحات در لحظه تنظیم",
           "صفحات چاپ‌شده پس از تنظیم","صفحات به ازای هر 1٪"]
     for ci, h in enumerate(H4, 1): hcell(ws4, 1, ci, h)
     ws4.row_dimensions[1].height = 28
@@ -235,7 +254,7 @@ def export_excel():
     for ri, row in enumerate(reset_rows, 2):
         bg = ROWS[ri % 2]
         vals = [
-            (row.get("timestamp") or "")[:19].replace("T", " "),
+            _local_ts(row.get("timestamp")),
             row.get("printer_ip", ""),
             row.get("printer_name", ""),
             row.get("color", ""),
@@ -250,7 +269,7 @@ def export_excel():
         ws4.column_dimensions[get_column_letter(i+1)].width = w
 
     buf = io.BytesIO(); wb.save(buf); buf.seek(0)
-    fname = f"printer_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    fname = f"printer_report_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.xlsx"
     return send_file(buf, as_attachment=True, download_name=fname,
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
@@ -258,7 +277,7 @@ def export_excel():
 def _csv_full_report(snap, cfg):
     out = io.StringIO()
     w   = csv.writer(out)
-    w.writerow(["Report", datetime.now().isoformat()])
+    w.writerow(["Report", utc_now_iso()])
     w.writerow([])
     w.writerow(["IP","Name","Online","Model","Serial","Total","FC","BW","Copy","Fax",
                 "A4","A3","T1%","T2%","CyanPct","MagentaPct","YellowPct","BlackPct","Alerts"])
@@ -277,7 +296,7 @@ def _csv_full_report(snap, cfg):
             to.get("yellow",{}).get("level",0), to.get("black",{}).get("level",0),
             " | ".join(a["message"] for a in d.get("alerts",[]))])
     out.seek(0)
-    fname = f"printers_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    fname = f"printers_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv"
     return make_response(out.read(), 200, {
         "Content-Type": "text/csv;charset=utf-8-sig",
         "Content-Disposition": f'attachment;filename="{fname}"',

@@ -1,0 +1,23 @@
+# =====================================================
+# Multi Printer Monitoring — وابستگی‌های توسعه/CI
+# (فاز C، کار ۶ — تور ایمنی CI)
+# =====================================================
+#
+# نصب (کنار وابستگی‌های اجرا):
+#       pip install -r requirements.txt -r requirements-dev.txt
+#
+# اجرای تست‌ها:
+#       python -m pytest tests/ -q                          # همه‌ی ۲۳۴ تست
+#       python -m pytest tests/ -m pytest_only -q           # ۲۱ تست pytest-only
+#       python -m unittest discover -s tests -p "test_*.py" # ۲۱۳ تست unittest
+#
+# نکته: پوشش کد (coverage) **بدون threshold** است؛ هیچ حداقلی برای درصد
+#       پوشش در CI اعمال نمی‌شود.
+# =====================================================
+
+pytest>=7.0
+pytest-cov>=4.1
+
+# گیت‌های فاز G (monitoring/generator.yml و docs/oid-matrix.md) با yaml.safe_load
+# کار می‌کنند: tests/test_generator_yml.py و tools/check_oid_coverage.py.
+PyYAML>=6.0

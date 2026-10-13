@@ -1,0 +1,40 @@
+# PrintGuard fixture — synthetic, hand-written (گام G.5.1)
+#
+# Expected response for a Canon iR MF device:
+#
+#     GET /snmp?target=172.16.0.9&module=printer_canon&auth=public_v2
+#
+# Same caveats as exporter_response_sample.txt: not a capture; metric names/types come
+# from `monitoring/snmp.yml` (module printer_canon: 16 metrics, 16 get, no walk).
+#
+# What this fixture pins about the *vendor precedence* (core/collectors/canon.py):
+#   canon_total (1.1602.1.11.2.1.1.3.1) is the MF total and wins over the LBP total,
+#   canon_print/canon_copy/canon_scan are the MF sub-counters, canon_lbp_total and
+#   canon_lbp_color are the LBP-side numbers, and the alt_* OIDs (…11.2.2.1.3.x) are
+#   the fallback for firmware that only answers there — they are deliberately absent
+#   here so the "no alt data" branch is the one under test.
+# canon_alternate_oids_2 carries the −2 sentinel (it has `# ignore_values:` in
+# snmp.yml) and must not become a measurement.
+# TYPE canon_model gauge
+# HELP canon_model PrintGuard printer_canon: canon_model [core/oid/catalog.py:65]
+canon_model{canon_model="imageRUNNER 2224"} 1
+# TYPE canon_firmware gauge
+canon_firmware{canon_firmware="05.21"} 1
+# TYPE canon_serial gauge
+canon_serial{canon_serial="A01234567"} 1
+# TYPE canon_alternate_oids gauge
+canon_alternate_oids 5
+# TYPE canon_alternate_oids_2 gauge
+canon_alternate_oids_2 -2
+# TYPE canon_lbp_total counter
+canon_lbp_total 9000
+# TYPE canon_lbp_color counter
+canon_lbp_color 400
+# TYPE canon_total counter
+canon_total 12000
+# TYPE canon_copy counter
+canon_copy 2500
+# TYPE canon_print counter
+canon_print 9000
+# TYPE canon_scan counter
+canon_scan 1100
