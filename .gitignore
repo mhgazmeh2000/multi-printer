@@ -78,3 +78,7 @@ debug_js.txt
 .freebuffpreview-*.log
 .freebuffpreview-*.log.err
 system_config.json
+
+# Local backups & readiness cache
+backups/
+caches_readiness.json
