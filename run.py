@@ -112,6 +112,13 @@ def main():
         # عملیات دیتابیسی بعدی با timeout/retry خطای مناسب خود را ثبت می‌کند.
         log.exception("Database initialization deferred because the database is unavailable: %s", exc)
 
+    # راه‌اندازی زمان‌بند دوره‌ای سیاست نگهداری و خلاصه‌سازی داده‌ها (فاز I.4)
+    try:
+        from core.scheduler import start_scheduler
+        start_scheduler()
+    except Exception as exc:
+        log.warning("Could not start background scheduler: %s", exc)
+
     # Flask app
     app = create_app()
 

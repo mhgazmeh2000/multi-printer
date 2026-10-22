@@ -189,9 +189,7 @@ class PostgresOrderingEquivalenceTests(unittest.TestCase):
                             tail = up.split("ORDER BY", 1)[1]
                             if any(tok in tail for tok in self.TEXT_TOKENS) \
                                     and "COLLATE" not in tail:
-                                # جداکننده باید هم‌شکل کلیدهای ALLOWED_TEXT_ORDER_SITES باشد
-                                # (``/``)؛ روی ویندوز ``os.path.relpath`` بک‌اسلش می‌دهد.
-                                found.add(os.path.relpath(path, root).replace(os.sep, "/"))
+                                found.add(os.path.relpath(path, root))
         self.assertEqual(found, set(self.ALLOWED_TEXT_ORDER_SITES),
                          "محل تازه‌ای ORDER BY متنی دارد؛ برای ترتیب عمدی باید "
                          "COLLATE صریح بگیری یا تصمیم E.6.3 را بازبینی کنی")

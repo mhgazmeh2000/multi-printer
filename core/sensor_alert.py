@@ -7,6 +7,10 @@ import logging
 import os
 import time
 from datetime import datetime
+from typing import Optional
+from zoneinfo import ZoneInfo
+
+from core.time_utils import DEFAULT_DISPLAY_TZ
 
 log = logging.getLogger("PrinterMonitor")
 
@@ -35,12 +39,33 @@ def save_config(config: dict):
         log.exception("Error saving sensor alert config: %s", e)
 
 
-def _in_time_range(start_hour: int, end_hour: int) -> bool:
-    now = datetime.now().hour
+def _in_time_range(
+    start_hour: int,
+    end_hour: int,
+    tz_name: str = DEFAULT_DISPLAY_TZ,
+    now_dt: Optional[datetime] = None,
+) -> bool:
+    """
+    بررسی اینکه آیا زمان فعلی در بازه ساعات مجاز قرار دارد یا خیر (رفع TD-006).
+    از منطقه زمانی مشخص‌شده (پیش‌فرض Asia/Tehran) استفاده می‌شود تا حتی در صورتی که
+    سرور با منطقه زمانی UTC یا ساعت محلی متفاوتی اجرا شود، سنجش دقیق بماند.
+    """
+    if now_dt is None:
+        try:
+            now_dt = datetime.now(ZoneInfo(tz_name))
+        except Exception:
+            now_dt = datetime.now()
+    elif now_dt.tzinfo is not None:
+        try:
+            now_dt = now_dt.astimezone(ZoneInfo(tz_name))
+        except Exception:
+            pass
+
+    now_hour = now_dt.hour
     if start_hour <= end_hour:
-        return start_hour <= now < end_hour
+        return start_hour <= now_hour < end_hour
     else:
-        return now >= start_hour or now < end_hour
+        return now_hour >= start_hour or now_hour < end_hour
 
 
 def _check_cooldown(key: str, cooldown_minutes: int) -> bool:
@@ -84,8 +109,9 @@ def check_and_send_sensor_alert(ip: str, sensor_name: str, readings: list):
     cooldown = config.get("cooldown_minutes", 30)
     start_hour = config.get("start_hour", 0)
     end_hour = config.get("end_hour", 24)
+    tz_name = config.get("timezone", DEFAULT_DISPLAY_TZ)
 
-    if not _in_time_range(start_hour, end_hour):
+    if not _in_time_range(start_hour, end_hour, tz_name=tz_name):
         return
 
     triggered = []
@@ -116,7 +142,10 @@ def check_and_send_sensor_alert(ip: str, sensor_name: str, readings: list):
     if not _check_cooldown(cooldown_key, cooldown):
         return
 
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        now_str = datetime.now(ZoneInfo(tz_name)).strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     severity = "critical" if any(t[0] == "critical" for t in triggered) else "warning"
 
     fa_parts = []

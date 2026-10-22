@@ -155,9 +155,9 @@ class HeadDiscoveryTests(unittest.TestCase):
     def setUp(self):
         self.t = _tool()
 
-    def test_repo_has_single_head_0005(self):
+    def test_repo_has_single_head_0007(self):
         heads = self.t.discover_heads(ROOT / "alembic" / "versions")
-        self.assertEqual(heads, ["0005"], "سرشاخهٔ مخزن باید یکی و 0005 باشد")
+        self.assertEqual(heads, ["0007"], "سرشاخهٔ مخزن باید یکی و 0007 باشد")
 
     def test_multiple_heads_are_all_reported(self):
         with tempfile.TemporaryDirectory() as td:
@@ -398,11 +398,11 @@ class DsnAndHeadWithStubTests(unittest.TestCase):
     def test_head_matches_repo_head(self):
         log = []
         rows = {"CURRENT_SCHEMA": [("public", '"$user", public')],
-                "ALEMBIC_VERSION": [("0005",)]}
+                "ALEMBIC_VERSION": [("0007",)]}
         res = self.t.check_alembic_head(self.cfg, connect=_fake_connect(rows, log),
                                         versions_dir=ROOT / "alembic" / "versions")
         self.assertEqual(res.status, "ok", res["detail"])
-        self.assertIn("0005", res["detail"])
+        self.assertIn("0007", res["detail"])
         self.assertIn('search_path="$user", public', res["detail"])
         self.assertTrue(any("FROM alembic_version" in q for q in log))
 
@@ -411,7 +411,7 @@ class DsnAndHeadWithStubTests(unittest.TestCase):
         res = self.t.check_alembic_head(self.cfg, connect=_fake_connect(rows, []),
                                         versions_dir=ROOT / "alembic" / "versions")
         self.assertEqual(res.status, "fail")
-        self.assertIn("انتظار مخزن: 0005", res["detail"])
+        self.assertIn("انتظار مخزن: 0007", res["detail"])
         self.assertIn("upgrade head", res["action"])
 
     def test_head_empty_table_is_red(self):
@@ -424,7 +424,7 @@ class DsnAndHeadWithStubTests(unittest.TestCase):
     def test_head_falls_back_to_public_schema(self):
         """اگر search_path جدول را نبیند، `public.alembic_version` را امتحان می‌کند (TD-011)."""
         log = []
-        rows = {"CURRENT_SCHEMA": [("x", "x")], "PUBLIC.ALEMBIC_VERSION": [("0005",)]}
+        rows = {"CURRENT_SCHEMA": [("x", "x")], "PUBLIC.ALEMBIC_VERSION": [("0007",)]}
         connect = _fake_connect(rows, log, raise_for=("FROM alembic_version",))
         res = self.t.check_alembic_head(self.cfg, connect=connect,
                                         versions_dir=ROOT / "alembic" / "versions")
@@ -482,7 +482,7 @@ class CliTests(unittest.TestCase):
         self.assertNotIn("pw\n", text)
         self.assertIn("password=***", text)
         self.assertEqual(len(data["checks"]), 10)         # ۹ سنجه + ۱ ردیف کمکی marker
-        self.assertEqual(data["expected_heads"], ["0005"])
+        self.assertEqual(data["expected_heads"], ["0007"])
         self.assertEqual({r["key"] for r in data["checks"]},
                          {"python", "psycopg", "service", "dsn", "head", "port",
                           "integrity", "timestamps", "disk", "marker"})
@@ -532,7 +532,7 @@ class LivePgTests(unittest.TestCase):
         self.assertEqual(dsn_res.status, "ok")
         head = self.t.check_alembic_head(self.cfg, versions_dir=ROOT / "alembic" / "versions")
         self.assertEqual(head.status, "ok", head["detail"])
-        self.assertIn("0005", head["detail"])
+        self.assertIn("0007", head["detail"])
 
     def test_live_port_check(self):
         port = int(self.cfg.get("port") or 5432)

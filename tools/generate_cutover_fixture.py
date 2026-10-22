@@ -94,26 +94,8 @@ def generate_synthetic_db(
     for tbl in tables:
         conn.execute(f'DELETE FROM "{tbl}"')
 
-    # جدول meta در SQLite پروداکشن نیست (۱۰ جدول) ولی اسکیمای مقصد ۱۱ جدول دارد.
-    # عیناً همان DDL migration 0001.
-    if "meta" not in tables:
-        conn.execute(
-            "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)"
-        )
-
-    # فشرده‌سازی پس از تخلیه: DELETE فایل را کوچک نمی‌کند، و اگر ``schema_source``
-    # یک دیتابیس واقعی (چند صد مگابایت) باشد، فایل نهایی از بازهٔ ۲۵–۳۵MB بیرون می‌زند.
-    conn.commit()
-    conn.execute("VACUUM")
-
-    # هم‌راستایی اسکیمای جدول logs با پروداکشن واقعی (۱۸ ستون).
-    # ``table_xinfo`` (نه ``table_info``): ستون‌های *generated* مجازی مثل ``raw_delta``
-    # در ``table_info`` دیده نمی‌شوند و ``ADD COLUMN`` با «duplicate column name»
-    # می‌افتد — خطای واقعی روی schemای پروداکشن.
-    log_xinfo = conn.execute('PRAGMA table_xinfo("logs")').fetchall()
-    cur_cols = {r[1] for r in log_xinfo}
-    # hidden == 0 ⇒ ستون عادی و قابل درج؛ 2/3 ⇒ generated و غیرقابل درج.
-    insertable_cols = [r[1] for r in log_xinfo if not r[6]]
+    # هم‌راستایی اسکیمای جدول logs با پروداکشن واقعی (۱۸ ستون)
+    cur_cols = {r[1] for r in conn.execute('PRAGMA table_info("logs")').fetchall()}
     legacy_columns = [
         ("sheets", "INTEGER"),
         ("raw_counters", "TEXT"),
@@ -376,8 +358,8 @@ def generate_synthetic_db(
     conn.executemany("INSERT INTO sensor_readings VALUES (?,?,?,?,?,?,?,?)", sr_rows)
 
     # ۱۱. جدول logs (شامل ۱۸ ستون هم‌راستا با production)
-    def _log_row(i: int) -> tuple:
-        return (
+    log_rows = [
+        (
             i,
             SAMPLE_IPS[i % len(SAMPLE_IPS)],
             SAMPLE_MODELS[i % len(SAMPLE_MODELS)],
@@ -397,51 +379,12 @@ def generate_synthetic_db(
             "UNKNOWN",  # event_type (legacy, 100% 'UNKNOWN')
             "unknown",  # duplex_mode (legacy, 100% 'unknown')
         )
-
-    # درج به‌صورت ستون‌محور، نه ``VALUES`` بدون فهرست ستون: روی schemای پروداکشن که
-    # ``raw_delta`` در آن ستون *generated* است، درج مستقیم در آن ستون خطا می‌دهد.
-    log_column_order = [
-        "id", "printer_ip", "printer_name", "timestamp", "type", "message", "pages",
-        "color", "code", "severity", "paper_size", "username", "details",
-        "sheets", "raw_counters", "raw_delta", "event_type", "duplex_mode",
+        for i in range(1, num_logs + 1)
     ]
-    insertable = set(insertable_cols)
-    keep = [i for i, name in enumerate(log_column_order) if name in insertable]
-    cols_sql = ", ".join(f'"{log_column_order[i]}"' for i in keep)
-    placeholders = ",".join("?" for _ in keep)
-
-    def _insert_logs(rows: list) -> None:
-        conn.executemany(
-            f"INSERT INTO logs ({cols_sql}) VALUES ({placeholders})",
-            [tuple(row[i] for i in keep) for row in rows],
-        )
-
-    _insert_logs([_log_row(i) for i in range(1, num_logs + 1)])
-
-    # تنظیم اندازهٔ نهایی روی «حجم هدف»: شمارش سطور بر مبنای تخمین است و روی اسکیمای
-    # واقعیِ پروداکشن (ستون‌های عریض‌تر از دیتابیس مرجع) از بازهٔ مجاز ۲۵–۳۵MB بیرون
-    # می‌زند؛ پس دوطرفه تصحیح می‌شود تا قرارداد خودِ ابزار برقرار بماند.
-    target_bytes = int(size_mb * 1024 * 1024)
-    band_bytes = max(1, int(size_mb * 0.10 * 1024 * 1024))     # ±۱۰٪ ⇒ ۲۷–۳۳MB برای ۳۰
-    for _ in range(8):
-        conn.commit()
-        conn.execute("VACUUM")
-        current = os.path.getsize(str(out_file))
-        n_logs = conn.execute("SELECT COUNT(*) FROM logs").fetchone()[0]
-        bytes_per_row = max(1, current // max(1, n_logs))
-        if current > target_bytes + band_bytes:
-            cut = max(1, min(n_logs - 1, (current - target_bytes - band_bytes) // bytes_per_row))
-            conn.execute(
-                "DELETE FROM logs WHERE id IN (SELECT id FROM logs ORDER BY id DESC LIMIT ?)",
-                (cut,),
-            )
-            continue
-        if current < target_bytes - band_bytes:
-            highest = conn.execute("SELECT COALESCE(MAX(id), 0) FROM logs").fetchone()[0]
-            want = max(500, min(20000, (target_bytes - band_bytes - current) // bytes_per_row))
-            _insert_logs([_log_row(i) for i in range(highest + 1, highest + 1 + want)])
-            continue
-        break
+    conn.executemany(
+        "INSERT INTO logs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        log_rows,
+    )
 
     conn.commit()
     conn.close()

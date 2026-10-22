@@ -288,7 +288,8 @@ def check_service(dsn_cfg: Dict[str, str]) -> Result:
         if dsn_cfg.get("user"):
             cmd += ["-U", dsn_cfg["user"]]
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+            proc = subprocess.run(cmd, capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace", timeout=15)
             msg = (proc.stdout or proc.stderr).strip().splitlines()
             detail = msg[-1][:160] if msg else f"exit={proc.returncode}"
             if proc.returncode == 0:
@@ -416,8 +417,9 @@ def check_timestamps(db_path: Path, analyze_tool: Optional[Path] = None,
         with tempfile.NamedTemporaryFile("w+", suffix=".json", delete=False) as fh:
             tmp = Path(fh.name)
         cmd += ["--json", str(tmp)]
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180,
-                                cwd=str(PROJECT_ROOT))  # زمان کامیتِ cutover از git همین مخزن
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=180,
+                              cwd=str(PROJECT_ROOT))  # زمان کامیتِ cutover از git همین مخزن
         data: Dict[str, Any] = {}
         if tmp.is_file():
             try:

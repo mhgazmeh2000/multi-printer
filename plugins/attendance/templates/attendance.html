@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+
+{% block title %}سامانه حضور و غیاب پرسنل - PrintGuard{% endblock %}
+
+{% block content %}
+<div style="padding: 24px 32px; max-width: 1400px; margin: 0 auto;">
+  
+  <!-- Header -->
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:24px; border-bottom:1px solid var(--border); padding-bottom:16px;">
+    <div>
+      <h2 style="margin:0 0 6px; color:var(--text); font-size:22px; display:flex; align-items:center; gap:8px;">
+        <span>👥</span> سامانه حضور و غیاب پرسنل چاپخانه (پلاگین سازمانی)
+      </h2>
+      <div style="color:var(--text3); font-size:13px;">پایش وضعیت حضور، شیفت‌های کاری و اپراتورهای فعال دستگاه‌ها</div>
+    </div>
+    <div style="display:flex; gap:12px; align-items:center;">
+      <a href="/dashboards" class="btn" style="text-decoration:none;">داشبوردها 📊</a>
+      <a href="/" class="btn" style="text-decoration:none;">پایش پرینترها 🖨</a>
+    </div>
+  </div>
+
+  <!-- KPI Cards -->
+  <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:18px; margin-bottom:24px;">
+    
+    <div class="card" style="background:var(--bg2); border:1px solid var(--border); border-radius:10px; padding:18px;">
+      <div style="font-size:12px; color:var(--text2); margin-bottom:4px;">تعداد پرسنل حاضر</div>
+      <div style="font-size:32px; font-weight:800; color:var(--green); font-family:var(--mono);" id="att-present">۱۴ نفر</div>
+      <div style="font-size:11px; color:var(--text3); margin-top:4px;">شیفت فعال: صبح</div>
+    </div>
+
+    <div class="card" style="background:var(--bg2); border:1px solid var(--border); border-radius:10px; padding:18px;">
+      <div style="font-size:12px; color:var(--text2); margin-bottom:4px;">پرسنل در مرخصی</div>
+      <div style="font-size:32px; font-weight:800; color:var(--yellow); font-family:var(--mono);" id="att-leave">۲ نفر</div>
+      <div style="font-size:11px; color:var(--text3); margin-top:4px;">مرخصی استحقاقی تأییدشده</div>
+    </div>
+
+    <div class="card" style="background:var(--bg2); border:1px solid var(--border); border-radius:10px; padding:18px;">
+      <div style="font-size:12px; color:var(--text2); margin-bottom:4px;">کل کادر چاپخانه</div>
+      <div style="font-size:32px; font-weight:800; color:var(--cyan); font-family:var(--mono);" id="att-total">۱۶ نفر</div>
+      <div style="font-size:11px; color:var(--text3); margin-top:4px;">درصد حضور: ۸۷.۵٪</div>
+    </div>
+
+  </div>
+
+  <!-- Recent Logs Table -->
+  <div class="card" style="background:var(--bg2); border:1px solid var(--border); border-radius:10px; padding:20px;">
+    <h3 style="margin:0 0 14px; font-size:16px; color:var(--text);">آخرین وضعیت ورود و خروج شیفت جاری</h3>
+    <table style="width:100%; border-collapse:collapse; direction:rtl; text-align:right; font-size:13px;">
+      <thead>
+        <tr style="border-bottom:1px solid var(--border); color:var(--text2);">
+          <th style="padding:10px;">نام و نام خانوادگی</th>
+          <th style="padding:10px;">ساعت ثبت ورود</th>
+          <th style="padding:10px;">وضعیت</th>
+        </tr>
+      </thead>
+      <tbody id="att-table-body">
+        <tr style="border-bottom:1px solid rgba(255,255,255,0.04);">
+          <td style="padding:10px; color:var(--text);">علی رضایی</td>
+          <td style="padding:10px; font-family:var(--mono);">۰۸:۰۴</td>
+          <td style="padding:10px;"><span class="pill p2">حاضر</span></td>
+        </tr>
+        <tr style="border-bottom:1px solid rgba(255,255,255,0.04);">
+          <td style="padding:10px; color:var(--text);">محمد صادقی</td>
+          <td style="padding:10px; font-family:var(--mono);">۰۸:۱۵</td>
+          <td style="padding:10px;"><span class="pill p2">حاضر</span></td>
+        </tr>
+        <tr style="border-bottom:1px solid rgba(255,255,255,0.04);">
+          <td style="padding:10px; color:var(--text);">حسین مهدوی</td>
+          <td style="padding:10px; font-family:var(--mono);">—</td>
+          <td style="padding:10px;"><span class="pill p1">مرخصی</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+</div>
+{% endblock %}

@@ -1,0 +1,27 @@
+{
+  "name": "attendance",
+  "version": "1.0.0",
+  "display_name": "سامانه حضور و غیاب پرسنل (Attendance)",
+  "description": "پایش حضور پرسنل، شیفت‌های کاری و اپراتورهای چاپخانه",
+  "author": "PrintGuard Engineering",
+  "entry_point": "plugin:AttendancePlugin",
+  "routes_prefix": "/attendance",
+  "permissions": ["admin", "manager"],
+  "menu_entries": [
+    {
+      "id": "menu-attendance",
+      "label": "حضور و غیاب",
+      "icon": "user-check",
+      "url": "/attendance",
+      "role": "manager"
+    }
+  ],
+  "widgets": [
+    {
+      "type": "attendance_stat",
+      "display_name": "آمار لحظه‌ای حضور پرسنل",
+      "description": "نمایش تعداد پرسنل حاضر، مرخصی و شیفت کاری فعال",
+      "icon": "users"
+    }
+  ]
+}

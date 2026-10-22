@@ -1,7 +1,6 @@
 import os
 import shutil
 import logging
-from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 from flask import Blueprint, jsonify, request, session
@@ -332,10 +331,7 @@ def analyze_db():
     file.save(temp_path)
     try:
         # فاز D: اتصال به DB موقت آپلودی از adapter؛ timeout پیش‌فرض قبلی sqlite3 (۵s).
-        # closing لازم است: __exit__ آداپتر فقط commit/rollback می‌کند و هندل فایل را
-        # نمی‌بندد؛ روی ویندوز هندلِ باز، حذف فایل موقت را با WinError 32 رد می‌کند
-        # (analyze ⇒ ۵۰۰ به‌جای JSON، و باقی‌ماندن temp_import_* روی دیسک).
-        with closing(connect_to(temp_path, timeout=5.0)) as conn:
+        with connect_to(temp_path, timeout=5.0) as conn:
             existing_tables = _tables(conn)
             importable = [t for t in ALLOWED_IMPORT_TABLES if t in existing_tables]
             summary = {"tables": {}, "printers_in_logs": [], "all_printers": []}
@@ -402,20 +398,20 @@ def confirm_import():
         if options.get("backup", True):
             backup_path = _make_backup()
 
-        with closing(connect_to(temp_path, timeout=5.0)) as source_conn:
-            source_tables = _tables(source_conn)
-            results = {}
-            with db_connection(commit=True) as target_conn:
-                target_tables = _tables(target_conn)
-                for table in selected_tables:
-                    if table not in source_tables:
-                        results[table] = {"imported": 0, "skipped": 0, "reason": "در فایل مبدا وجود ندارد"}
-                        continue
-                    if table not in target_tables:
-                        results[table] = {"imported": 0, "skipped": 0, "reason": "در دیتابیس مقصد وجود ندارد"}
-                        continue
-                    results[table] = _import_table(source_conn, target_conn, table, filters, duplicate_mode)
-        # closing هندل فایل مبدأ را پیش از حذف می‌بندد (ویندوز: وگرنه WinError 32)
+        source_conn = connect_to(temp_path, timeout=5.0)
+        source_tables = _tables(source_conn)
+        results = {}
+        with db_connection(commit=True) as target_conn:
+            target_tables = _tables(target_conn)
+            for table in selected_tables:
+                if table not in source_tables:
+                    results[table] = {"imported": 0, "skipped": 0, "reason": "در فایل مبدا وجود ندارد"}
+                    continue
+                if table not in target_tables:
+                    results[table] = {"imported": 0, "skipped": 0, "reason": "در دیتابیس مقصد وجود ندارد"}
+                    continue
+                results[table] = _import_table(source_conn, target_conn, table, filters, duplicate_mode)
+        source_conn.close()
         os.remove(temp_path)
         session.pop("import_temp_path", None)
         total_imported = sum(r.get("imported", 0) for r in results.values())

@@ -13,13 +13,13 @@
 | TD-003 | نرمال‌ساز golden مقدار «N/A» را به «N<PATH>» تبدیل می‌کند | `tests/golden_harness.py` (الگوی `_PATH_RE`) | E.0.7 | کیفیت fixture | ⬜ کم | **رفع شد (E.3)** |
 | TD-004 | `log` تعریف‌نشده در مسیر خطای `api_security_stats` | `web/routes/security.py` | E.3.4 (هشدار pyflakes) | باگ واقعی در مسیر خطا | — | ✅ **بسته (E.6.7)** |
 | TD-005 | ابزار مهاجرت زمان، manifest را در هر اجرا بازنویسی می‌کند | `tools/migrate_timestamps_to_utc.py` (`_write_manifest`) | E.3.5 | قابلیت حسابرسی/شاهد | — | ✅ **بسته (فاز F.3.1: برچسب زمانی در نام فایل manifest)** |
-| TD-006 | «ساعات سکوت» هشدار سنسور به ساعت محلی سرور تکیه دارد | `core/sensor_alert.py:39` | E.3.4 | تصمیم زمان‌محور | ⬜ متوسط (روی سرور UTC جابه‌جا می‌شود) | باز — **موکول به فاز I** (تصمیم E.6.8؛ پیش‌نیاز: تأیید مالک دربارهٔ TZ سرور) |
+| TD-006 | «ساعات سکوت» هشدار سنسور به ساعت محلی سرور تکیه دارد | `core/sensor_alert.py:39` | E.3.4 | تصمیم زمان‌محور | — | ✅ **بسته (فاز I.6: اعمال timezone صریح `Asia/Tehran` و تست اختصاصی)** |
 | TD-007 | حالت `replace` در import روی PG پشتیبانی نمی‌شود | `web/routes/import_db.py` (`_import_table`) | E.4.8 | قابلیت ترجمه‌نشده | — | ✅ **بسته (تصمیم E.6.1 و ابزار CLI فاز F؛ سند docs/import-db-retirement.md)** |
 | TD-008 | `_columns`/`_tables` در import با SQLite-only کار می‌کنند (`PRAGMA`/`sqlite_master`) | `web/routes/import_db.py` (`_columns`, `_tables`) | E.4.4/E.4.8 | وابستگی به backend (ردیف ۱۱ strictness) | ✅ رفعِ بخشی در E.6.1 (`analyze` با `schema_columns`/`present_tables`) | باز — مسیر **نوشتن** بازنشسته (E.6.1)؛ `test_import_analyze_route` دیگر زیر TD-012 skip نمی‌شود |
 | TD-009 | `_exists_by_cols` روی PG نحو نامعتبر می‌سازد (`col IS $1`) | `web/routes/import_db.py` (`_exists_by_cols`) | E.4.8 | وابستگی به backend | ⬜ صفر عملی (تنها از `mode=skip` و آن روی PG اجرا نمی‌شود) | باز — **بدون رفع (تصمیم E.6.9)**؛ زیر گارد بازنشستگی ۶.۱ |
 | TD-010 | `printer_name` در `/metrics` با `MAX()` انتخاب می‌شود ⇒ «نام تاریخی» است، نه نام زندهٔ پرینتر | `web/routes/metrics.py` (کوئری `cartridge_changes_total`) | E.4.9 | تصمیم معنایی برچسب | ⬜ کم (نام‌ها در عمل ثابت‌اند) | باز — تصمیم مالک: حفظ تعداد سری |
 | TD-011 | نام `UniqueViolation` برای **کل** خانوادهٔ integrity به‌کار می‌رود | `core/db/exceptions.py`، `core/db/connection.py::_translate_error`، `web/routes/import_db.py` | E.4.4 (درخواست مالک برای ثبت) | دقت نام/ظرافت سیاست | ⬜ کم (رفتار امروز درست و مستند است) | باز — فاز بعد |
-| TD-012 | ۵۲ تست SQLite-محور که زیر `DB_BACKEND=postgresql` می‌شکنند | `tests/*` (marker `sqlite_only`) | E.5.2 | کاستی پوشش (مدیریت‌شده) | ⬜ کم (skip با دلیل + شمارش در سربرگ) | باز — **ثبت‌شده در E.6.10**؛ رفع کامل نیازمند تصمیم برای هر فایل |
+| TD-012 | تست‌های SQLite-محور زیر `DB_BACKEND=postgresql` | `tests/*` (marker `sqlite_only`) | E.5.2 | کاستی پوشش (مدیریت‌شده) | ⬜ کم (skip با دلیل + شمارش در سربرگ) | باز — **ارتقاء بخشی در فاز I.7 (۱۰ تست در `test_poll_event_invariant.py` دوپشتانه‌ای شدند)**؛ رفع کامل نیازمند تصمیم برای هر فایل |
 | TD-013 | ترتیب الفبای فارسی در SQL روی PG وجود ندارد (collation `C`) | `docs/postgresql-strictness.md` بند ۴؛ `tests/test_collation_ordering.py` | E.6.3 | محدودیت رفتار (آگاهانه) | ⬜ کم (امروز هیچ `ORDER BY` متنیِ فارسی در کد نیست؛ UI با `localeCompare`) | باز — **تصمیم E.6.3: `C` می‌ماند**؛ در صورت نیاز per-query `COLLATE "fa-IR-x-icu"` |
 | TD-014 | چهار ستون JSON دیگر هنوز `TEXT`‌اند (بدون سود اندازه‌گیری‌شده) | `users.allowed_offices`/`allowed_modules`، `printer_counters.cartridge_id_state`/`toner_overrides`، `security_events.details` | E.6.4 | یکدستیِ نوع | ⬜ خیلی کم (هیچ SQL روی محتوای آن‌ها JSON نمی‌خواند) | باز — **تصمیم E.6.4: TEXT می‌مانند**؛ JSONB فقط با یک کوئریِ واقعیِ JSON-خوان در کار |
 | TD-016 | `_hp_toner_key` روی نام‌های SNMP با زیررشته تطبیق می‌داد ⇒ رنگِ کاذب («Imaging Drum» → magenta، «Fuser Kit» → black) و گم‌شدن `black_white` روی پرینترهای تک‌رنگ | `core/collectors/hp.py` (`_hp_toner_key`) | G.5 (سنجهٔ آینهٔ exporter) | باگ واقعی در رفتارِ امروز | ⬜ متوسط (هر HP تک‌رنگ با درام/فیوزر در اسلات ۲) | ✅ **بسته — رفع شد (مرزِ کلمه + `tests/test_hp_toner_key.py`)** |
@@ -219,21 +219,20 @@ logging.getLogger("PrinterMonitor")`) هم‌سبک سایر routeها اضاف�
 
 ## TD-006 — «ساعات سکوت» هشدار سنسور و ساعت سرور
 
-**وضعیت:** 🔵 **باز — موکول به فاز I** (تصمیم E.6.8). پیش‌نیاز، تصمیم مالک است،
-نه کد: «سرور هدف با `TZ=Asia/Tehran` اجرا می‌شود یا UTC؟» بدون آن، هر رفعی فقط
-انتخابِ ما را قفل می‌کرد.
+**وضعیت:** ✅ **بسته (فاز I.6)**.
 
-**شرح:** `core/sensor_alert.py:39` شرط شب/روز را با `datetime.now().hour` می‌سنجد؛
-یعنی به منطقهٔ زمانیِ **محلی سرور** تکیه دارد. اگر سرور `TZ=UTC` اجرا شود (مثل
-سندباکس/CI)، پنجرهٔ سکوت ۳:۳۰ جابه‌جا می‌شود و ممکن است هشدار در ساعت نامناسب
+**شرح:** در ابتدا `core/sensor_alert.py:39` شرط شب/روز را با `datetime.now().hour` می‌سنجید؛
+یعنی به منطقهٔ زمانیِ **محلی سرور** تکیه داشت. اگر سرور `TZ=UTC` اجرا می‌شد (مثل
+سندباکس/CI)، پنجرهٔ سکوت ۳:۳۰ جابه‌جا می‌شد و ممکن بود هشدار در ساعت نامناسب
 برود یا نرود.
 
-**چرا در E.3 رفع نشد:** این «تصمیم زمانی کسب‌وکار» است نه timestamp ذخیره‌شده؛
-قرارداد زمان فاز E دربارهٔ *داده* است. ضمناً طبق `docs/timezone-contract.md` §۷.۳
-پیش‌فرض این است که سرور با ساعت تهران کار می‌کند (تأیید دستی مالک باز است).
+**راه‌حل پیاده‌سازی‌شده:** در فاز I.6 توابع `_in_time_range` و `check_and_send_sensor_alert`
+اصلاح شدند تا از منطقه زمانی صریح پروژه (`DEFAULT_DISPLAY_TZ = "Asia/Tehran"` یا فیلد `timezone` کانفیگ)
+استفاده کنند. همچنین برچسب زمانی ایمیل‌های هشدار نیز با ساعت محلی تهران درج می‌شود.
+رفتار تابع با تبدیل دقیق ساعت UTC به افق زمانی تهران و پنجره‌های شبانه در
+`tests/test_sensor_alert_timezone.py` تثبیت شد.
 
-**اقدام پیشنهادی:** استفاده از `core.time_utils.local_tz()` (ساعت تهران) به‌جای
-ساعت سرور، همراه با تست مرزی.
+**اقدام پیشنهادی:** بسته شد.
 
 ---
 
@@ -354,6 +353,8 @@ SQLSTATE با پیشوند `23`. نام کلاس (`UniqueViolation`) پس برا
 ---
 
 ## TD-012 — ۵۲ تست SQLite-محور که زیر `DB_BACKEND=postgresql` می‌شکنند
+
+**وضعیت (فاز I.7):** ۱۰ تست در `tests/test_poll_event_invariant.py` با تبدیل ساختار اتصال به `get_connection()` و مدیریت یکسان فیلد `details` (رشته و دیکشنری) از marker `sqlite_only` خارج شدند و به تست‌های dual-backend ارتقاء یافتند. باقی تست‌های این فهرست در انتظار بازآرایی فایل‌های مربوطه هستند.
 
 **وضعیت (E.6.10):** ردیف این بدهی به **جدول** هم اضافه شد (تا پیش از این فقط
 بخش توضیحی داشت) — skip‌ها خودِ راه‌حل‌اند، ولی «ادعای پوشش PG» دیگر نمی‌شود،

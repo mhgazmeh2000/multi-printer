@@ -44,6 +44,15 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+# بارگذاری خودکار متغیرهای .env در صورت وجود
+env_file = PROJECT_ROOT / ".env"
+if env_file.is_file():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(dotenv_path=env_file, override=False)
+    except ImportError:
+        pass
+
 config = context.config
 
 if config.config_file_name is not None:

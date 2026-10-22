@@ -20,6 +20,12 @@ from web.routes.groups     import bp as bp_groups
 from web.routes.import_db import bp as bp_import_db
 from web.routes.yield_status import bp as bp_yield_status
 from web.routes.metrics import bp as bp_metrics
+from web.routes.plugins_bp import bp as bp_plugins_mgr
+from web.routes.datasources_bp import bp as bp_datasources
+from web.routes.query_bp import bp as bp_query_engine
+from web.routes.alerts_bp import bp as bp_alerts_engine
+from web.routes.onboarding_bp import bp as bp_onboarding
+from core.plugins.loader import plugin_manager
 from web.auth import auth_bp, init_auth, login_redirect_url, user_can_access_module
 from web.security import init_security, csrf
 from config import settings
@@ -71,8 +77,17 @@ def create_app() -> Flask:
         bp_dashboard, bp_printers, bp_logs, bp_export,
         bp_scan, bp_discover, bp_stats, bp_validation, bp_system, bp_users,
         bp_security_audit, bp_import_db, bp_yield_status, bp_groups, bp_metrics,
+        bp_plugins_mgr, bp_datasources, bp_query_engine, bp_alerts_engine, bp_onboarding,
     ):
         app.register_blueprint(blueprint)
+
+    # ─── راه‌اندازی فریم‌ورک پلاگین‌های سازمانی (فاز J.5) ─────────────
+    plugin_manager.init_app(app)
+
+    @app.context_processor
+    def inject_plugin_menus():
+        role = current_user.role if current_user.is_authenticated else "viewer"
+        return {"plugin_menu_entries": plugin_manager.get_menu_entries(user_role=role)}
 
     # ─── معافیت endpoint های JSON API از CSRF ──────────────────────
     # برای endpointهای JSON که از session احراز هویت می‌کنند، CSRF protection
@@ -164,6 +179,28 @@ def create_app() -> Flask:
 
         viewer_allowed = {
             "dashboard.index",
+            "dashboard.preview_panels",
+            "dashboard.dashboards_list_view",
+            "dashboard.dashboard_view",
+            "dashboard.api_panel_registry",
+            "dashboard.api_list_dashboards",
+            "dashboard.api_get_dashboard",
+            "plugins_mgr.api_list_plugins",
+            "datasources.datasources_page",
+            "datasources.api_list_drivers",
+            "datasources.api_list_datasources",
+            "datasources.api_get_datasource",
+            "datasources.api_test_datasource",
+            "datasources.api_query_datasource",
+            "query_engine.api_prebuilt_catalog",
+            "query_engine.api_query_preview",
+            "query_engine.api_query_validate",
+            "alerts_engine.api_active_alerts",
+            "alerts_engine.api_alert_summary",
+            "alerts_engine.api_alert_detail",
+            "onboarding.api_onboarding_status",
+            "onboarding.api_onboarding_complete",
+            "onboarding.api_onboarding_reset",
             "system.api_status",
             "groups.api_groups",
             "printers.api_printers",
@@ -174,6 +211,20 @@ def create_app() -> Flask:
             "auth.logout",
         }
         manager_allowed = viewer_allowed | {
+            "dashboard.dashboard_edit",
+            "dashboard.api_create_dashboard",
+            "dashboard.api_update_dashboard",
+            "dashboard.api_delete_dashboard",
+            "dashboard.api_add_panel",
+            "dashboard.api_update_panel",
+            "dashboard.api_delete_panel",
+            "dashboard.api_get_dashboard_permissions",
+            "dashboard.api_set_dashboard_permissions",
+            "datasources.api_create_datasource",
+            "datasources.api_update_datasource",
+            "datasources.api_delete_datasource",
+            "attendance.index",
+            "attendance.api_stats",
             "export.export_excel",
             "users.users_page",
             "users.api_office_options",

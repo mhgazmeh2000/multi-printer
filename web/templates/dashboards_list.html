@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+
+{% block title %}مدیریت داشبوردها - PrintGuard{% endblock %}
+
+{% block content %}
+<div style="padding: 24px 32px; max-width: 1400px; margin: 0 auto;">
+  <!-- Header -->
+  <div id="dashboards-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:24px; border-bottom:1px solid var(--border); padding-bottom:16px;">
+    <div>
+      <h2 style="margin:0 0 6px; color:var(--text); font-size:22px; display:flex; align-items:center; gap:8px;">
+        <span>📊</span> مدیریت داشبوردهای سفارشی (فاز J)
+      </h2>
+      <div style="color:var(--text3); font-size:13px;">طراحی، چیدمان و مشاهده داشبوردهای پایش و تحلیل داده‌های سازمان</div>
+    </div>
+    <div style="display:flex; gap:12px; align-items:center;">
+      <button class="btn btn-cyan" onclick="if(window.PrintGuardTours) window.PrintGuardTours.startDashboardIntroTour(true);" title="راهنمای تعاملی این صفحه">راهنما 💡</button>
+      <a href="/dashboards/preview-panels" class="btn" style="text-decoration:none;">پیش‌نمایش پنل‌ها 📈</a>
+      {% if current_user.role in ['admin', 'manager'] %}
+      <button id="btn-new-dashboard" class="btn btn-green" onclick="openCreateModal()">＋ ایجاد داشبورد جدید</button>
+      {% endif %}
+      <a href="/" class="btn" style="text-decoration:none;">پایش پرینترها 🖨</a>
+    </div>
+  </div>
+
+  <!-- Dashboards Grid -->
+  <div id="dashboards-grid" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(340px, 1fr)); gap:20px;">
+    <div style="grid-column: 1 / -1; padding:40px; text-align:center; color:var(--text3);">در حال دریافت اطلاعات داشبوردها...</div>
+  </div>
+</div>
+
+<!-- Modal: Create Dashboard -->
+<div class="modal-overlay" id="modal-create-dash" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:9999; align-items:center; justify-content:center;">
+  <div class="card" style="width:480px; max-width:90%; background:var(--bg2); border:1px solid var(--border); border-radius:12px; padding:24px; box-shadow:0 12px 36px rgba(0,0,0,0.6);">
+    <h3 style="margin:0 0 16px; color:var(--text); font-size:18px;">ایجاد داشبورد سازمانی جدید</h3>
+    
+    <div style="margin-bottom:14px;">
+      <label style="display:block; font-size:12px; color:var(--text2); margin-bottom:6px;">عنوان داشبورد *</label>
+      <input type="text" id="dash-new-title" class="form-input" style="width:100%; box-sizing:border-box;" placeholder="مثال: داشبورد اجرایی مدیران / پایش تونرها" />
+    </div>
+
+    <div style="margin-bottom:20px;">
+      <label style="display:block; font-size:12px; color:var(--text2); margin-bottom:6px;">توضیحات</label>
+      <textarea id="dash-new-desc" class="form-input" style="width:100%; height:75px; box-sizing:border-box;" placeholder="توضیح کوتاه درباره هدف این داشبورد..."></textarea>
+    </div>
+
+    <div style="display:flex; justify-content:flex-end; gap:10px;">
+      <button class="btn" onclick="closeCreateModal()">انصراف</button>
+      <button class="btn btn-cyan" onclick="submitCreateDashboard()">ثبت و ورود به محیط طراحی</button>
+    </div>
+  </div>
+</div>
+
+<script>
+async function loadDashboards() {
+  const grid = document.getElementById("dashboards-grid");
+  try {
+    const res = await fetch("/api/dashboards", { headers: { "Accept": "application/json" } });
+    if (!res.ok) throw new Error("خطا در دریافت داشبوردها");
+    const data = await res.json();
+    const items = data.dashboards || [];
+
+    if (items.length === 0) {
+      grid.innerHTML = `
+        <div style="grid-column: 1 / -1; padding:60px; text-align:center; background:var(--bg2); border:1px dashed var(--border); border-radius:12px;">
+          <div style="font-size:36px; margin-bottom:10px;">📊</div>
+          <div style="color:var(--text); font-weight:600; font-size:16px;">هیچ داشبورد سفارشی هنوز ایجاد نشده است</div>
+          <div style="color:var(--text3); font-size:13px; margin:8px 0 18px;">می‌توانید با زدن دکمه «ایجاد داشبورد جدید» اولین داشبورد اختصاصی خود را بسازید.</div>
+          <button class="btn btn-cyan" onclick="openCreateModal()">＋ اولین داشبورد را بسازید</button>
+        </div>
+      `;
+      return;
+    }
+
+    grid.innerHTML = "";
+    items.forEach(d => {
+      const card = document.createElement("div");
+      card.className = "card";
+      card.style.cssText = "background:var(--bg2); border:1px solid var(--border); border-radius:10px; padding:18px; display:flex; flex-direction:column; justify-content:space-between; gap:14px;";
+
+      card.innerHTML = `
+        <div>
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:8px;">
+            <h4 style="margin:0; font-size:16px; color:var(--text);">${d.title}</h4>
+            <span style="font-size:18px; cursor:pointer;" title="نشان‌دار کردن">${d.is_starred ? '⭐' : '☆'}</span>
+          </div>
+          <p style="margin:0; color:var(--text3); font-size:12px; line-height:1.5;">${d.description || "بدون توضیحات"}</p>
+        </div>
+        <div style="border-top:1px solid rgba(255,255,255,0.05); padding-top:12px; display:flex; justify-content:space-between; align-items:center;">
+          <span style="font-size:11px; color:var(--text3); font-family:var(--mono);">شناسه: ${d.uid}</span>
+          <div style="display:flex; gap:6px;">
+            <a href="/dashboards/${d.uid}" class="btn btn-cyan" style="font-size:11px; padding:4px 8px; text-decoration:none;">نمایش</a>
+            <button class="btn" style="font-size:11px; padding:4px 8px; border-color:var(--red); color:var(--red);" onclick="deleteDashboard('${d.uid}')">حذف</button>
+          </div>
+        </div>
+      `;
+      grid.appendChild(card);
+    });
+  } catch (err) {
+    grid.innerHTML = `<div style="grid-column: 1 / -1; color:var(--red); text-align:center;">${err.message}</div>`;
+  }
+}
+
+function openCreateModal() {
+  document.getElementById("modal-create-dash").style.display = "flex";
+  document.getElementById("dash-new-title").focus();
+}
+
+function closeCreateModal() {
+  document.getElementById("modal-create-dash").style.display = "none";
+  document.getElementById("dash-new-title").value = "";
+  document.getElementById("dash-new-desc").value = "";
+}
+
+async function submitCreateDashboard() {
+  const title = document.getElementById("dash-new-title").value.trim();
+  const desc = document.getElementById("dash-new-desc").value.trim();
+  if (!title) {
+    alert("لطفاً عنوان داشبورد را وارد نمایید.");
+    return;
+  }
+
+  try {
+    const res = await fetch("/api/dashboards", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRFToken": window.CSRF_TOKEN || "",
+      },
+      body: JSON.stringify({ title, description: desc }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || "خطا در ایجاد داشبورد");
+    }
+
+    const created = await res.json();
+    closeCreateModal();
+    loadDashboards();
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+async function deleteDashboard(uid) {
+  if (!confirm(`آیا از حذف این داشبورد اطمینان دارید؟`)) return;
+  try {
+    const res = await fetch(`/api/dashboards/${uid}`, {
+      method: "DELETE",
+      headers: { "X-CSRFToken": window.CSRF_TOKEN || "" },
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || "خطا در حذف داشبورد");
+    }
+    loadDashboards();
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+document.addEventListener("DOMContentLoaded", loadDashboards);
+</script>
+{% endblock %}

@@ -1114,34 +1114,39 @@ function buildPrinterDetail(p) {
   const bw = c.black_white || 0;
   const fcPct = total > 0 ? Math.round((fc / total) * 100) : 0;
   const bwPct = total > 0 ? Math.round((bw / total) * 100) : 0;
-  const scan  = (c.scan_fc||0)+(c.scan_bw||0)+(c.scan_net_fc||0)+(c.scan_net_bw||0);
   const hasPagesSinceReset = typeof c.pages_since_last_reset === 'number' && Number.isFinite(c.pages_since_last_reset);
 
-  const maxP = Math.max(...Object.values(pz).map(v=>v.total||0), 1);
-  const PCOLS = {A4:{cls:'pb-a4',clr:'#00d4ff'},A3:{cls:'pb-a3',clr:'#ff7043'},A4R:{cls:'pb-a4r',clr:'#ffd740'},A5:{cls:'pb-a5',clr:'#00e676'},B4:{cls:'pb-b4',clr:'#ea80fc'}};
-  // ✅ فیکس برچسب گمراه‌کننده: این شاخه‌های Toshiba «سایز دقیق» نیستند.
-  // 208=کل کاغذ کوچک، 207=کل کاغذ بزرگ، 209/210=زیرگروه job رایانه، 227=نامشخص
-  const PLABELS = {
-    A4:{short:'کوچک', hint:'کل چاپ روی کاغذ کوچک (A4/A5/A4R...)'},
-    A3:{short:'بزرگ', hint:'کل چاپ روی کاغذ بزرگ (A3/B4...)'},
-    A4R:{short:'چاپ·بزرگ', hint:'زیرگروه: فقط jobهای چاپ از رایانه روی کاغذ بزرگ'},
-    A5:{short:'چاپ·کوچک', hint:'زیرگروه: فقط jobهای چاپ از رایانه روی کاغذ کوچک'},
-    B4:{short:'نامشخص', hint:'شمارنده‌ی ناشناخته‌ی Toshiba (شاخه ۲۲۷)'},
+  const maxP = Math.max(...Object.values(pz).map(v => v.total || 0), 1);
+  const paperSizeStyles = {
+    A4: { cls: 'pb-a4', color: '#00d4ff' },
+    A3: { cls: 'pb-a3', color: '#ff7043' },
+    A4R: { cls: 'pb-a4r', color: '#ffd740' },
+    A5: { cls: 'pb-a5', color: '#00e676' },
+    B4: { cls: 'pb-b4', color: '#ea80fc' },
   };
-  const paperRows = Object.entries(pz).map(([size,d])=>{
-    if (!d.total) return '';
-    const pct = Math.round(d.total/maxP*100);
-    const col = PCOLS[size]||PCOLS.A4;
-    const lab = PLABELS[size]||{short:size, hint:size};
-    return `<div class="psize-row" title="${escapeHtml(lab.hint)}">
-      <span class="pb ${col.cls}">${escapeHtml(lab.short)}</span>
-      <div class="pbar-wrap"><div class="pbar-fill" style="width:${pct}%;background:${col.clr}"></div></div>
+  // Toshiba branches 208/207 are broad small/large totals; 209/210 are print-job subsets.
+  const paperSizeLabels = {
+    A4: { short: 'کوچک', hint: 'کل چاپ روی کاغذ کوچک (A4/A5/A4R...)' },
+    A3: { short: 'بزرگ', hint: 'کل چاپ روی کاغذ بزرگ (A3/B4...)' },
+    A4R: { short: 'چاپ·بزرگ', hint: 'زیرگروه: فقط jobهای چاپ از رایانه روی کاغذ بزرگ' },
+    A5: { short: 'چاپ·کوچک', hint: 'زیرگروه: فقط jobهای چاپ از رایانه روی کاغذ کوچک' },
+    B4: { short: 'نامشخص', hint: 'شمارنده‌ی ناشناخته‌ی Toshiba (شاخه ۲۲۷)' },
+  };
+  const paperRows = Object.entries(pz).map(([size, detail]) => {
+    if (!detail.total) return '';
+    const percent = Math.round(detail.total / maxP * 100);
+    const style = paperSizeStyles[size] || paperSizeStyles.A4;
+    const label = paperSizeLabels[size] || { short: size, hint: size };
+    return `<div class="psize-row" title="${escapeHtml(label.hint)}">
+      <span class="pb ${style.cls}">${escapeHtml(label.short)}</span>
+      <div class="pbar-wrap"><div class="pbar-fill" style="width:${percent}%;background:${style.color}"></div></div>
       <div>
-        <div class="pbar-count num">${fmtN(d.total)}</div>
-        <div class="pbar-sub">FC:${fmtN(d.fc)} BW:${fmtN(d.bw)}</div>
+        <div class="pbar-count num">${fmtN(detail.total)}</div>
+        <div class="pbar-sub">FC:${fmtN(detail.fc)} BW:${fmtN(detail.bw)}</div>
       </div>
     </div>`;
   }).join('');
+
 
   const TCOLORS = {cyan:'#00d4ff',magenta:'#ea80fc',yellow:'#ffd740',black:'#9e9e9e'};
   const TGRADS  = {cyan:'#00d4ff,#0097a7',magenta:'#ea80fc,#ab47bc',yellow:'#ffd740,#f9a825',black:'#bdbdbd,#757575'};
@@ -1296,42 +1301,6 @@ function buildPrinterDetail(p) {
     ? `<button class="btn btn-sm btn-orange" onclick="removePrinter('${p.ip}','${escapeHtml(p.name)}')" style="font-size:9px">× حذف</button>`
     : '';
 
-  const printerLogActionsHtml = canAdmin()
-    ? `
-        <button class="btn btn-cyan" onclick="openEvModal('${ip}','SERVICE')" style="font-size:11px">🔧 ثبت سرویس</button>
-        <button class="btn btn-yellow" onclick="openEvModal('${ip}','REFILL')" style="font-size:11px">🖨 شارژ کارتریج</button>
-        <input type="datetime-local" class="printer-log-start" data-ip="${ip}" style="width:auto; font-family:var(--mono); font-size:11px;" title="شروع بازه">
-        <input type="datetime-local" class="printer-log-end" data-ip="${ip}" style="width:auto; font-family:var(--mono); font-size:11px;" title="پایان بازه">
-        <button class="btn btn-cyan" onclick="applyDateFilter('${ip}')">🔍 اعمال فیلتر</button>
-        
-        <div class="dropdown" id="export-dropdown-${ip.replace(/\./g, '-')}">
-          <button class="btn btn-yellow dropdown-toggle" onclick="toggleDropdown('export-dropdown-${ip.replace(/\./g, '-')}')">📥 خروجی گزارش‌ها ▼</button>
-          <div class="dropdown-menu">
-            <button class="dropdown-item" onclick="exportLogsWithRange('${ip}', 'excel')">📊 Excel (بازه انتخابی)</button>
-            <button class="dropdown-item" onclick="exportLogsWithRange('${ip}', 'csv')">📄 CSV (بازه انتخابی)</button>
-            <div class="topbar-dropdown-divider"></div>
-            <button class="dropdown-item" onclick="exportPrinterLogExcel('${ip}')">📈 کل لاگ (Excel)</button>
-            <button class="dropdown-item" onclick="exportPrinterLogJSON('${ip}')">🔗 کل لاگ (JSON)</button>
-          </div>
-        </div>
-
-        <button class="btn" style="border-color:rgba(255,61,61,.3);color:var(--red);background:rgba(255,61,61,.06)" onclick="clearPrinterLog('${ip}')">× پاک</button>
-      `
-    : canManage()
-      ? `
-        <input type="datetime-local" class="printer-log-start" data-ip="${ip}" style="width:auto; font-family:var(--mono); font-size:11px;" title="شروع بازه">
-        <input type="datetime-local" class="printer-log-end" data-ip="${ip}" style="width:auto; font-family:var(--mono); font-size:11px;" title="پایان بازه">
-        <button class="btn btn-cyan" onclick="applyDateFilter('${ip}')">🔍 اعمال فیلتر</button>
-        
-        <div class="dropdown" id="export-dropdown-${ip.replace(/\./g, '-')}">
-          <button class="btn btn-yellow dropdown-toggle" onclick="toggleDropdown('export-dropdown-${ip.replace(/\./g, '-')}')">📥 خروجی ▼</button>
-          <div class="dropdown-menu">
-            <button class="dropdown-item" onclick="exportLogsWithRange('${ip}', 'excel')">📊 Excel (بازه)</button>
-            <button class="dropdown-item" onclick="exportPrinterLogExcel('${ip}')">📈 کل لاگ (Excel)</button>
-          </div>
-        </div>
-      `
-      : '';
 
   // ========== بخش جدید آمار با نوارهای افقی ==========
   const isColorDeviceType = (p.device_type === 'color');
@@ -1379,6 +1348,7 @@ function buildPrinterDetail(p) {
           </div>
           <div class="stat-value">${fmtN(bw)} <span class="stat-percent">(${bwPct}%)</span></div>
         </div>
+        ${paperRows ? `<div style="margin-top:12px"><div class="stat-label" style="margin-bottom:6px">تفکیک اندازه کاغذ</div><div class="psize-rows">${paperRows}</div></div>` : ''}
       </div>
       <div class="stats-footer">
         <div class="stats-note">آخرین به‌روزرسانی: ${new Date(p.last_poll).toLocaleTimeString('fa-IR')}</div>
@@ -1520,8 +1490,7 @@ function buildSensorDetail(p) {
     : [{port: 1, value: c.hum1, status: c.hum1_status}, ...(c.hum2 !== null && c.hum2 !== undefined ? [{port: 2, value: c.hum2, status: c.hum2_status}] : [])];
   const displayName = p.nickname ? `${p.nickname} (${p.name})` : p.name;
   const editButtonHtml = canEditPrinters()
-    ? `<button class="btn btn-edit" onclick="openEditModal('${p.ip}')" 
-                 style="margin-right:8px;" title="ویرایش اطلاعات و گروه" aria-label="ویرایش اطلاعات و گروه">✎</button>`
+    ? `<button class="btn btn-edit" onclick="openEditModal('${p.ip}')" style="margin-right:8px" title="ویرایش اطلاعات و گروه" aria-label="ویرایش اطلاعات و گروه">✎</button>`
     : '';
   const sensorDeleteButtonHtml = canEditPrinters()
     ? `<button class="btn btn-orange" onclick="removePrinter('${p.ip}','${p.name}')" style="font-size:10px">× حذف</button>`
@@ -1565,7 +1534,7 @@ function buildSensorDetail(p) {
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
         <div>
           <div style="font-family:var(--mono);font-size:12px;color:var(--orange)">${p.ip} 🌡️</div>
-          <div style="font-size:18px;font-weight:700;margin-top:4px">${displayName}</div>
+          <div style="font-size:18px;font-weight:700;margin-top:4px">${displayName} ${editButtonHtml}</div>
           <div style="font-family:var(--mono);font-size:10px;color:var(--text3)">
             ${dev.model || 'ECS100G'} · S/N: ${dev.serial || '—'} · FW: ${dev.firmware || '—'}
           </div>

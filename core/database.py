@@ -387,6 +387,12 @@ def init_db():
         except ColumnAlreadyExists:      # فاز E.4.4: نوع مشترک هر دو backend
             pass
 
+    try:
+        from core.dashboard.manager import bootstrap_dashboard_tables
+        bootstrap_dashboard_tables(conn)
+    except Exception as exc:
+        log.warning("Could not bootstrap dashboard tables: %s", exc)
+
     conn.commit()
     conn.close()
 

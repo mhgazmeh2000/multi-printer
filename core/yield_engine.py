@@ -1321,3 +1321,169 @@ def write_yield_status_report(path: str = "yield_status_report.txt") -> None:
         f.write("\n".join(lines))
         if lines:
             f.write("\n")
+
+
+# =========================================================================
+# شش بهبود Yield Engine برای Toshiba رنگی و پشتیبانی چندرنگ (فاز I.5)
+# =========================================================================
+
+BRAND_COLOR_FALLBACKS: Dict[str, Dict[str, int]] = {
+    "toshiba": {
+        "black": 38400,
+        "cyan": 33600,
+        "magenta": 33600,
+        "yellow": 33600,
+        "default": 33600,
+    },
+    "hp": {
+        "black": 9000,
+        "cyan": 6000,
+        "magenta": 6000,
+        "yellow": 6000,
+        "default": 6000,
+    },
+    "canon": {
+        "black": 3100,
+        "cyan": 2300,
+        "magenta": 2300,
+        "yellow": 2300,
+        "default": 2500,
+    },
+    "brother": {
+        "black": 3000,
+        "cyan": 1500,
+        "magenta": 1500,
+        "yellow": 1500,
+        "default": 2000,
+    },
+}
+
+
+def filter_invalid_toner_levels(levels: list[Any]) -> list[float]:
+    """
+    فیلتر کردن مقادیر نامعتبر و sentinelهای منفی (-1, -2, -3) در محاسبه میانگین تونر.
+    فقط مقادیر عددی مجاز بین 0.0 تا 100.0 بازگردانده می‌شوند.
+    """
+    valid: list[float] = []
+    for val in levels:
+        if val is None:
+            continue
+        try:
+            f = float(val)
+            if 0.0 <= f <= 100.0:
+                valid.append(f)
+        except (ValueError, TypeError):
+            continue
+    return valid
+
+
+def estimate_yield_fallback(
+    brand: str,
+    color: str = "black",
+    default_pages: int = DEFAULT_YIELD_PER_PAGE,
+) -> int:
+    """
+    تخمین بازدهی پایه بر اساس برند و رنگ در صورت ناشناخته بودن مدل کارتریج (بهبود ۶).
+    """
+    b = (brand or "").strip().lower()
+    c = (color or "black").strip().lower()
+
+    if b in BRAND_COLOR_FALLBACKS:
+        return BRAND_COLOR_FALLBACKS[b].get(c, BRAND_COLOR_FALLBACKS[b].get("default", default_pages))
+
+    for known_brand, color_map in BRAND_COLOR_FALLBACKS.items():
+        if known_brand in b:
+            return color_map.get(c, color_map.get("default", default_pages))
+
+    return default_pages
+
+
+def compute_yield_per_color(
+    printer_ip: str,
+    color: str,
+    conn: Optional[Any] = None,
+    brand: Optional[str] = None,
+) -> Optional[float]:
+    """
+    محاسبه تفکیکی بازدهی کارتریج (yield_per_page) برای هر رنگ اختصاصی (بهبود ۱، ۴ و ۵).
+
+    الگوریتم:
+      ۱. استخراج داده‌های چرخه‌های گذشته از cartridge_lifecycle در صورت وجود.
+      ۲. استفاده از میانه (median) به‌جای میانگین ساده جهت فیلتر outlierها.
+      ۳. در صورت عدم وجود نمونه کافی، استفاده از نمونه‌های cartridge_state و yield_samples.
+      ۴. fallback به تخمین برند/رنگ در صورت نبود داده تاریخی.
+    """
+    color = (color or "black").strip().lower()
+
+    def _query(c: Any) -> Optional[float]:
+        # ۱. بررسی چرخه‌های بسته‌شده در cartridge_lifecycle
+        samples: list[float] = []
+        try:
+            rows = c.execute(
+                """
+                SELECT actual_yield_per_page
+                FROM cartridge_lifecycle
+                WHERE printer_ip = ? AND cartridge_color = ? AND actual_yield_per_page IS NOT NULL AND actual_yield_per_page > 0
+                ORDER BY id DESC LIMIT 20
+                """,
+                (printer_ip, color),
+            ).fetchall()
+            for r in rows:
+                if r[0] and MIN_ESTIMATED_YIELD <= r[0] <= MAX_ESTIMATED_YIELD:
+                    samples.append(float(r[0]))
+        except Exception:
+            pass
+
+        # ۲. بررسی نمونه‌های یادگیری در yield_samples
+        if len(samples) < 3:
+            try:
+                rows = c.execute(
+                    """
+                    SELECT yield_per_page
+                    FROM yield_samples
+                    WHERE printer_ip = ? AND color = ? AND accepted = 1 AND yield_per_page > 0
+                    ORDER BY id DESC LIMIT 20
+                    """,
+                    (printer_ip, color),
+                ).fetchall()
+                for r in rows:
+                    if r[0] and MIN_ESTIMATED_YIELD <= r[0] <= MAX_ESTIMATED_YIELD:
+                        samples.append(float(r[0]))
+            except Exception:
+                pass
+
+        # ۳. اگر نمونه کافی وجود دارد، محاسبه میانه (Median) با حذف outlierها
+        if samples:
+            samples.sort()
+            n = len(samples)
+            if n % 2 == 1:
+                median_val = samples[n // 2]
+            else:
+                median_val = (samples[n // 2 - 1] + samples[n // 2]) / 2.0
+            return round(median_val, 2)
+
+        # ۴. بررسی cartridge_state
+        b_name = brand
+        try:
+            r = c.execute(
+                "SELECT yield_per_page, printer_model FROM cartridge_state WHERE printer_ip = ? AND color = ?",
+                (printer_ip, color),
+            ).fetchone()
+            if r and r[0] and r[0] > 0:
+                return float(r[0])
+            if not b_name and r and r[1]:
+                b_name = str(r[1])
+        except Exception:
+            pass
+
+        # ۵. fallback بر اساس برند و رنگ
+        if b_name:
+            return float(estimate_yield_fallback(b_name, color))
+
+        return None
+
+    if conn is not None:
+        return _query(conn)
+
+    with db_connection() as c:
+        return _query(c)

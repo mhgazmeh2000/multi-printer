@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+
+{% block title %}پیش‌نمایش پنل‌های پایه ECharts - PrintGuard{% endblock %}
+
+{% block content %}
+<div style="padding: 24px 32px; max-width: 1400px; margin: 0 auto;">
+  <!-- Header -->
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:24px; border-bottom:1px solid var(--border); padding-bottom:16px;">
+    <div>
+      <h2 style="margin:0 0 6px; color:var(--text); font-size:22px; display:flex; align-items:center; gap:8px;">
+        <span>📊</span> پیش‌نمایش پنل‌های پایه ECharts (فاز J.1)
+      </h2>
+      <div style="color:var(--text3); font-size:13px;">نمایش ۸ پنل پایه سازمانی با تم Dark/Light، پشتیبانی کامل RTL و مقیاس‌پذیری واکنش‌گرا</div>
+    </div>
+    <div style="display:flex; gap:12px; align-items:center;">
+      <button class="btn btn-cyan" onclick="toggleTheme()" title="تغییر تم">🌓 تغییر تم (Dark / Light)</button>
+      <a href="/" class="btn" style="text-decoration:none;">بازگشت به پایش پرینترها 🖨</a>
+    </div>
+  </div>
+
+  <!-- Panels Grid -->
+  <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(420px, 1fr)); gap:20px;">
+    
+    <!-- 1. Stat Panel -->
+    <div class="card" style="height:220px; background:var(--bg2); border:1px solid var(--border); border-radius:10px; overflow:hidden;" id="panel-stat"></div>
+
+    <!-- 2. Bar Gauge Panel -->
+    <div class="card" style="height:220px; background:var(--bg2); border:1px solid var(--border); border-radius:10px; overflow:hidden;" id="panel-bargauge"></div>
+
+    <!-- 3. Pie Chart Panel -->
+    <div class="card" style="height:320px; background:var(--bg2); border:1px solid var(--border); border-radius:10px; overflow:hidden;" id="panel-pie"></div>
+
+    <!-- 4. Text Panel -->
+    <div class="card" style="height:320px; background:var(--bg2); border:1px solid var(--border); border-radius:10px; overflow:hidden;" id="panel-text"></div>
+
+    <!-- 5. Time Series Panel -->
+    <div class="card" style="grid-column: 1 / -1; height:340px; background:var(--bg2); border:1px solid var(--border); border-radius:10px; overflow:hidden;" id="panel-timeseries"></div>
+
+    <!-- 6. Table Panel -->
+    <div class="card" style="height:320px; background:var(--bg2); border:1px solid var(--border); border-radius:10px; overflow:hidden;" id="panel-table"></div>
+
+    <!-- 7. Alert List Panel -->
+    <div class="card" style="height:320px; background:var(--bg2); border:1px solid var(--border); border-radius:10px; overflow:hidden;" id="panel-alertlist"></div>
+
+    <!-- 8. Heatmap Panel -->
+    <div class="card" style="grid-column: 1 / -1; height:340px; background:var(--bg2); border:1px solid var(--border); border-radius:10px; overflow:hidden;" id="panel-heatmap"></div>
+
+  </div>
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  // 1. Stat Panel
+  PrintGuardPanels.render(
+    "stat",
+    document.getElementById("panel-stat"),
+    { value: 48920, history: [1200, 1900, 3100, 4200, 3900, 5100, 6200, 7800, 9100, 10500] },
+    {
+      title: "مجموع صفحات چاپ شده (۳۰ روز اخیر)",
+      unit: "صفحه",
+      decimals: 0,
+      show_sparkline: true,
+      thresholds: [
+        { value: 0, color: "var(--cyan)" },
+        { value: 30000, color: "var(--green)" },
+      ],
+    }
+  );
+
+  // 2. Bar Gauge Panel (Toner Levels)
+  PrintGuardPanels.render(
+    "barGauge",
+    document.getElementById("panel-bargauge"),
+    [
+      { name: "HP Flow E52645 (مشکی)", value: 85, color: "#00e676" },
+      { name: "Toshiba 2555C (زرد)", value: 24, color: "#ffd740" },
+      { name: "Canon MF240 (مشکی)", value: 8, color: "#ff3d3d" },
+      { name: "Brother MFC-8510 (درام)", value: 92, color: "#00d4ff" },
+    ],
+    { title: "سطح تونر کارتریج‌های بحرانی", unit: "%" }
+  );
+
+  // 3. Pie Chart Panel (Color vs Mono vs A3)
+  PrintGuardPanels.render(
+    "piechart",
+    document.getElementById("panel-pie"),
+    [
+      { name: "چاپ تک‌رنگ (A4)", value: 34200, itemStyle: { color: "#00d4ff" } },
+      { name: "چاپ رنگی (A4)", value: 11400, itemStyle: { color: "#ea80fc" } },
+      { name: "چاپ نقشه‌کشی (A3)", value: 3320, itemStyle: { color: "#ffd740" } },
+    ],
+    { title: "توزیع حجم چاپ بر اساس نوع و قطع", donut: true }
+  );
+
+  // 4. Text Panel
+  PrintGuardPanels.render(
+    "text",
+    document.getElementById("panel-text"),
+    `<div style="display:flex; flex-direction:column; gap:10px;">
+      <p>این سامانه در چارچوب <b>فاز J.1</b> مجهز به موتور تجسم داده‌ی اختصاصی بر پایه‌ی <b>Apache ECharts v5</b> گردیده است.</p>
+      <div style="background:rgba(0,212,255,0.08); padding:10px; border-radius:6px; border-right:3px solid var(--cyan);">
+        <b>ویژگی‌های فعال:</b>
+        <ul style="margin:6px 0 0; padding-right:18px;">
+          <li>پشتیبانی ۱۰۰٪ آفلاین بدون وابستگی به CDN خارجی</li>
+          <li>تغییر تم زنده (Dark / Light) بر مبنای متغیرهای CSS سیستم</li>
+          <li>محاسبه و نمایش اعداد با فرمت فارسی استاندارد</li>
+        </ul>
+      </div>
+    </div>`,
+    { title: "اطلاعیه فنی داشبورد سازمانی" }
+  );
+
+  // 5. Time Series Panel
+  const sampleDates = [];
+  const monoSeries = [];
+  const colorSeries = [];
+  const now = new Date();
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(now.getTime() - i * 86400000);
+    sampleDates.push(d.toISOString().slice(0, 10));
+    monoSeries.push(Math.floor(800 + Math.sin(i) * 300 + Math.random() * 200));
+    colorSeries.push(Math.floor(250 + Math.cos(i) * 100 + Math.random() * 80));
+  }
+
+  PrintGuardPanels.render(
+    "timeseries",
+    document.getElementById("panel-timeseries"),
+    {
+      dates: sampleDates,
+      series: [
+        { name: "چاپ تک‌رنگ (Mono)", data: monoSeries },
+        { name: "چاپ رنگی (Color)", data: colorSeries },
+      ],
+    },
+    {
+      title: "روند چاپ روزانه ناوگان (۳۰ روز گذشته)",
+      chart_type: "area",
+      smooth: true,
+      stack: true,
+      show_data_zoom: true,
+      y_axis_unit: "صفحه",
+    }
+  );
+
+  // 6. Table Panel
+  PrintGuardPanels.render(
+    "table",
+    document.getElementById("panel-table"),
+    [
+      { ip: "172.16.25.37", model: "HP LaserJet M425dn", pages: 44839, status: "online" },
+      { ip: "172.16.25.53", model: "Toshiba e-STUDIO257", pages: 536361, status: "online" },
+      { ip: "172.16.25.43", model: "Brother MFC-8510DN", pages: 36433, status: "online" },
+      { ip: "172.16.25.55", model: "Toshiba e-STUDIO3518A", pages: 121047, status: "online" },
+      { ip: "172.16.25.39", model: "Canon MF240 Series", pages: 14960, status: "online" },
+    ],
+    {
+      title: "وضعیت و کارکرد پرینترهای پرکاربرد",
+      columns: [
+        { field: "ip", title: "آدرس IP", type: "text" },
+        { field: "model", title: "مدل دستگاه", type: "text" },
+        { field: "pages", title: "کارکرد کل", type: "number" },
+        { field: "status", title: "وضعیت پایش", type: "badge" },
+      ],
+      page_size: 5,
+    }
+  );
+
+  // 7. Alert List Panel
+  PrintGuardPanels.render(
+    "alertlist",
+    document.getElementById("panel-alertlist"),
+    [
+      { severity: "critical", message: "سطح تونر کارتریج به زیر ۵٪ رسید", printer_name: "Canon MF240 (172.16.25.39)", time: "۱۰ دقیقه پیش" },
+      { severity: "warning", message: "دمای رک سنسور اتاق سرور ۲۸°C (آستانه هشدار)", printer_name: "ECS100G (172.16.25.44)", time: "۲۵ دقیقه پیش" },
+      { severity: "info", message: "شارژ کارتریج توشیبا با موفقیت ثبت شد", printer_name: "Toshiba 2555C (172.16.32.40)", time: "۱ ساعت پیش" },
+    ],
+    { title: "هشدارهای فعال و رویدادهای مهم", max_items: 5 }
+  );
+
+  // 8. Heatmap Panel (Hours × Days)
+  const heatmapMatrix = [];
+  for (let day = 0; day < 7; day++) {
+    for (let hour = 0; hour < 24; hour++) {
+      let val = 0;
+      if (day < 5 && hour >= 8 && hour <= 16) {
+        val = Math.floor(15 + Math.random() * 45);
+      } else {
+        val = Math.floor(Math.random() * 5);
+      }
+      heatmapMatrix.push([hour, day, val]);
+    }
+  }
+
+  PrintGuardPanels.render(
+    "heatmap",
+    document.getElementById("panel-heatmap"),
+    { matrix: heatmapMatrix, max_val: 60 },
+    { title: "نقشه حرارتی بار کاری چاپخانه‌ای (روزهای هفته × ساعات شبانه‌روز)" }
+  );
+});
+</script>
+{% endblock %}

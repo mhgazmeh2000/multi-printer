@@ -7,6 +7,17 @@
     <title>{% block title %}Multi Printer Monitoring{% endblock %}</title>
     <link rel="icon" href="{{ url_for('static', filename='favicon.ico', v=config.get('ASSET_VERSION', '20260609-2')) }}" type="image/x-icon">
     <script src="{{ url_for('static', filename='js/chart.umd.min.js', v=config.get('ASSET_VERSION', '20260609-2')) }}"></script>
+    <script src="{{ url_for('static', filename='vendor/echarts/echarts.min.js', v=config.get('ASSET_VERSION', '20260609-2')) }}"></script>
+    <script src="{{ url_for('static', filename='js/echarts-wrapper.js', v=config.get('ASSET_VERSION', '20260609-2')) }}"></script>
+    <script src="{{ url_for('static', filename='js/echarts-panels.js', v=config.get('ASSET_VERSION', '20260609-2')) }}"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/gridstack/gridstack.min.css', v=config.get('ASSET_VERSION', '20260609-2')) }}">
+    <script src="{{ url_for('static', filename='vendor/gridstack/gridstack-all.js', v=config.get('ASSET_VERSION', '20260609-2')) }}"></script>
+    <script src="{{ url_for('static', filename='js/dashboard-builder.js', v=config.get('ASSET_VERSION', '20260609-2')) }}"></script>
+    <script src="{{ url_for('static', filename='js/query-builder.js', v=config.get('ASSET_VERSION', '20260609-2')) }}"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/shepherd/shepherd.css', v=config.get('ASSET_VERSION', '20260609-2')) }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/shepherd/shepherd-rtl.css', v=config.get('ASSET_VERSION', '20260609-2')) }}">
+    <script src="{{ url_for('static', filename='vendor/shepherd/shepherd.min.js', v=config.get('ASSET_VERSION', '20260609-2')) }}"></script>
+    <script src="{{ url_for('static', filename='js/onboarding-tours.js', v=config.get('ASSET_VERSION', '20260609-2')) }}"></script>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css', v=config.get('ASSET_VERSION', '20260609-2')) }}">
 
     {% block head %}{% endblock %}

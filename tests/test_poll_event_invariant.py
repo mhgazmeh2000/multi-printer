@@ -1,25 +1,35 @@
 # -*- coding: utf-8 -*-
 """Poll/Event invariant tests: dedup, snapshot consistency, poll serialization."""
-import json, os, sqlite3, sys, tempfile, threading, unittest
+import json, os, shutil, sys, tempfile, threading, unittest
+from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import pytest
 
 from core.database import add_event, init_db
+from core.db import get_connection
 from core import store
 
 
-def _make_test_db():
+def _pin_sqlite(test):
+    """قفل کردن محیط تست روی SQLite ایزوله موقت برای عدم دستکاری یا تداخل با دیتابیس لایو."""
+    env = mock.patch.dict(os.environ, {"DB_BACKEND": "sqlite", "PG_DSN": ""})
+    env.start()
+    test.addCleanup(env.stop)
+
+
+def _make_test_db(test):
     """Create isolated test DB in a unique dir per test."""
+    _pin_sqlite(test)
+    store._prev._cache.clear()
     d = tempfile.mkdtemp(prefix="poll_test_")
     old = os.getcwd()
     os.chdir(d)
     init_db()
-    store._prev._cache.clear()
     return d, old
 
 
 def _query_events(etype=None):
-    with sqlite3.connect("logs.db") as conn:
+    with get_connection() as conn:
         q = "SELECT printer_ip, type, message, details FROM logs"
         params = []
         if etype:
@@ -27,19 +37,21 @@ def _query_events(etype=None):
             params.append(etype)
         q += " ORDER BY timestamp"
         rows = conn.execute(q, params).fetchall()
-    return [{"ip": r[0], "type": r[1], "message": r[2],
-             "details": json.loads(r[3]) if r[3] else {}} for r in rows]
+    return [{
+        "ip": r[0],
+        "type": r[1],
+        "message": r[2],
+        "details": json.loads(r[3]) if isinstance(r[3], str) else (r[3] or {}),
+    } for r in rows]
 
 
-# marker `sqlite_only`: این تست SQL/اسکیمای مختص SQLite می‌نویسد ⇒ زیر
-# `DB_BACKEND=postgresql` با auto-skip رد می‌شود (tests/conftest.py، docs/phase-e-plan.md §۵.۳).
-@pytest.mark.sqlite_only
 class TestPrintInvariant(unittest.TestCase):
     def setUp(self):
-        self._d, self._old = _make_test_db()
+        self._d, self._old = _make_test_db(self)
     def tearDown(self):
         store._prev._cache.clear()
-        os.chdir(self._old)
+        if hasattr(self, "_old") and self._old:
+            os.chdir(self._old)
     def test_pages_match_delta(self):
         add_event("10.0.0.1", "PRINT", {"message": "5 pages", "pages": 5,
                    "color": "BW", "prev_total": 1000, "current_total": 1005})
@@ -57,15 +69,13 @@ class TestPrintInvariant(unittest.TestCase):
                          e[0]["details"]["pages"])
 
 
-# marker `sqlite_only`: این تست SQL/اسکیمای مختص SQLite می‌نویسد ⇒ زیر
-# `DB_BACKEND=postgresql` با auto-skip رد می‌شود (tests/conftest.py، docs/phase-e-plan.md §۵.۳).
-@pytest.mark.sqlite_only
 class TestPrintDedup(unittest.TestCase):
     def setUp(self):
-        self._d, self._old = _make_test_db()
+        self._d, self._old = _make_test_db(self)
     def tearDown(self):
         store._prev._cache.clear()
-        os.chdir(self._old)
+        if hasattr(self, "_old") and self._old:
+            os.chdir(self._old)
     def test_same_totals_deduped(self):
         add_event("10.0.0.1", "PRINT", {"message": "5 p", "pages": 5,
                    "color": "BW", "prev_total": 1000, "current_total": 1005})
@@ -95,15 +105,13 @@ class TestPrintDedup(unittest.TestCase):
         self.assertEqual(len(_query_events("PRINT")), 1)
 
 
-# marker `sqlite_only`: این تست SQL/اسکیمای مختص SQLite می‌نویسد ⇒ زیر
-# `DB_BACKEND=postgresql` با auto-skip رد می‌شود (tests/conftest.py، docs/phase-e-plan.md §۵.۳).
-@pytest.mark.sqlite_only
 class TestCounterResetDedup(unittest.TestCase):
     def setUp(self):
-        self._d, self._old = _make_test_db()
+        self._d, self._old = _make_test_db(self)
     def tearDown(self):
         store._prev._cache.clear()
-        os.chdir(self._old)
+        if hasattr(self, "_old") and self._old:
+            os.chdir(self._old)
     def test_same_reset_deduped(self):
         add_event("10.0.0.1", "COUNTER_RESET", {"message": "reset",
                    "prev_total": 11737, "current_total": 0})
@@ -127,15 +135,13 @@ class TestCounterResetDedup(unittest.TestCase):
         self.assertEqual(len(_query_events("COUNTER_RESET")), 1)
 
 
-# marker `sqlite_only`: این تست SQL/اسکیمای مختص SQLite می‌نویسد ⇒ زیر
-# `DB_BACKEND=postgresql` با auto-skip رد می‌شود (tests/conftest.py، docs/phase-e-plan.md §۵.۳).
-@pytest.mark.sqlite_only
 class TestToshibaPaperSplit(unittest.TestCase):
     def setUp(self):
-        self._d, self._old = _make_test_db()
+        self._d, self._old = _make_test_db(self)
     def tearDown(self):
         store._prev._cache.clear()
-        os.chdir(self._old)
+        if hasattr(self, "_old") and self._old:
+            os.chdir(self._old)
     def test_paper_split_no_negative(self):
         add_event("10.0.0.1", "PRINT", {"message": "4 pages", "pages": 4,
                    "color": "unknown", "prev_total": 100, "current_total": 104,

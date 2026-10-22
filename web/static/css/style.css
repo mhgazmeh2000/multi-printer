@@ -312,7 +312,7 @@ body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(
 .topbar-meta{display:flex;gap:16px;font-family:var(--mono);font-size:11px;color:var(--text3);margin-right:auto}
 .meta-chip{display:flex;align-items:center;gap:5px}
 .meta-val{font-weight:700;font-size:13px}
-.meta-val.g{color: var(--green) !important;} .meta-val.r{color: var(--red) !important;} .meta-val.c{color:var(--cyan)}
+.meta-val.g{color:var(--green)} .meta-val.r{color:var(--red)} .meta-val.c{color:var(--cyan)}
 .topbar-actions{display:flex;gap:8px;align-items:center}
 .dot-live{width:7px;height:7px;border-radius:50%;background:var(--text3);transition:all .3s}
 .dot-live.on{background:var(--green);box-shadow:0 0 8px var(--green);animation:blink 2s infinite}

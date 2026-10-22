@@ -142,8 +142,8 @@ class MigrationScopeTests(unittest.TestCase):
         self.assertEqual((m.revision, m.down_revision), ("0004", "0003"))
 
     def test_0004_is_the_head_of_the_chain(self):
-        """سرِ زنجیره 0005 است (0004 پیش از migration 0005 بود)."""
-        self.assertEqual(migration_head(), "0005")
+        """سرِ زنجیره 0007 است (0004 پیش از migration 0005, 0006, 0007 بود)."""
+        self.assertEqual(migration_head(), "0007")
 
 
 class SqliteSchemaUnchangedTests(unittest.TestCase):

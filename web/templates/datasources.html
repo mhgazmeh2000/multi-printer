@@ -1,0 +1,290 @@
+{% extends "base.html" %}
+
+{% block title %}مدیریت منابع داده (Data Sources) - PrintGuard{% endblock %}
+
+{% block content %}
+<div style="padding: 24px 32px; max-width: 1400px; margin: 0 auto;">
+  
+  <!-- Header -->
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:24px; border-bottom:1px solid var(--border); padding-bottom:16px;">
+    <div>
+      <h2 style="margin:0 0 6px; color:var(--text); font-size:22px; display:flex; align-items:center; gap:8px;">
+        <span>🔌</span> منابع داده سازمانی (Data Sources - فاز J.6/J.7)
+      </h2>
+      <div style="color:var(--text3); font-size:13px;">پیکربندی اتصالات پایگاه‌داده PostgreSQL، وب‌سرویس‌های REST و سنجه‌های مخازن GitHub</div>
+    </div>
+    <div style="display:flex; gap:12px; align-items:center;">
+      <button class="btn btn-cyan" onclick="if(window.PrintGuardTours) window.PrintGuardTours.startDatasourceTour(true);" title="راهنمای تعاملی منابع داده">راهنما 💡</button>
+      <a href="/dashboards" class="btn" style="text-decoration:none;">داشبوردها 📊</a>
+      {% if current_user.role in ['admin', 'manager'] %}
+      <button id="btn-new-ds" class="btn btn-green" onclick="openAddDsModal()">＋ افزودن منبع داده</button>
+      {% endif %}
+      <a href="/" class="btn" style="text-decoration:none;">پایش پرینترها 🖨</a>
+    </div>
+  </div>
+
+  <!-- Data Sources Grid -->
+  <div id="ds-grid" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(360px, 1fr)); gap:20px;">
+    <div style="grid-column: 1 / -1; padding:40px; text-align:center; color:var(--text3);">در حال دریافت منابع داده...</div>
+  </div>
+
+</div>
+
+<!-- Modal: Add Data Source -->
+<div class="modal-overlay" id="modal-add-ds" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:9999; align-items:center; justify-content:center;">
+  <div class="card" style="width:560px; max-width:92%; max-height:85vh; overflow-y:auto; background:var(--bg2); border:1px solid var(--border); border-radius:12px; padding:24px; box-shadow:0 12px 36px rgba(0,0,0,0.6);">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+      <h3 style="margin:0; color:var(--text); font-size:18px;">🔌 افزودن منبع داده جدید</h3>
+      <button class="btn" style="padding:2px 8px;" onclick="closeAddDsModal()">×</button>
+    </div>
+
+    <div style="margin-bottom:14px;">
+      <label style="display:block; font-size:12px; color:var(--text2); margin-bottom:6px;">نوع منبع داده *</label>
+      <select id="ds-type-select" class="form-input" style="width:100%; box-sizing:border-box;" onchange="updateDsFormFields()">
+        <option value="postgresql">PostgreSQL (پایگاه‌داده رابطه‌ای)</option>
+        <option value="rest">REST API (وب‌سرویس JSON)</option>
+        <option value="github">GitHub Metrics (مخزن کد)</option>
+      </select>
+    </div>
+
+    <div style="margin-bottom:14px;">
+      <label style="display:block; font-size:12px; color:var(--text2); margin-bottom:6px;">نام نمایشی *</label>
+      <input type="text" id="ds-name-input" class="form-input" style="width:100%; box-sizing:border-box;" placeholder="مثال: دیتابیس انبار / API منابع انسانی" />
+    </div>
+
+    <!-- Dynamic Fields Container -->
+    <div id="ds-dynamic-fields" style="background:rgba(255,255,255,0.02); border:1px solid var(--border); border-radius:8px; padding:14px; margin-bottom:16px;">
+      <!-- Populated via JS -->
+    </div>
+
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:20px;">
+      <span id="ds-test-status" style="font-size:12px;"></span>
+      <div style="display:flex; gap:10px;">
+        <button class="btn" onclick="closeAddDsModal()">انصراف</button>
+        <button class="btn btn-green" onclick="submitCreateDataSource()">ثبت و اتصال</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let availableDrivers = [];
+
+async function loadDataSources() {
+  const grid = document.getElementById("ds-grid");
+  try {
+    const res = await fetch("/api/datasources");
+    if (!res.ok) throw new Error("خطا در بارگذاری منابع داده");
+    const data = await res.json();
+    const items = data.datasources || [];
+
+    if (items.length === 0) {
+      grid.innerHTML = `
+        <div style="grid-column: 1 / -1; padding:60px; text-align:center; background:var(--bg2); border:1px dashed var(--border); border-radius:12px;">
+          <div style="font-size:36px; margin-bottom:10px;">🔌</div>
+          <div style="color:var(--text); font-weight:600; font-size:16px;">هیچ منبع داده‌ای هنوز تعریف نشده است</div>
+          <div style="color:var(--text3); font-size:13px; margin:8px 0 18px;">می‌توانید به PostgreSQL، REST API یا GitHub متصل شوید.</div>
+          <button class="btn btn-green" onclick="openAddDsModal()">＋ اولین منبع داده را اضافه کنید</button>
+        </div>
+      `;
+      return;
+    }
+
+    grid.innerHTML = "";
+    items.forEach(ds => {
+      const card = document.createElement("div");
+      card.className = "card";
+      card.style.cssText = "background:var(--bg2); border:1px solid var(--border); border-radius:10px; padding:18px; display:flex; flex-direction:column; justify-content:space-between; gap:14px;";
+
+      let icon = ds.type === 'postgresql' ? '🐘' : ds.type === 'github' ? '🐙' : '🌐';
+      card.innerHTML = `
+        <div>
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px;">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <span style="font-size:20px;">${icon}</span>
+              <h4 style="margin:0; font-size:16px; color:var(--text);">${ds.name}</h4>
+            </div>
+            <span class="pill ${ds.is_default ? 'p2' : 'p1'}">${ds.type}</span>
+          </div>
+          <div style="font-size:11px; color:var(--text3); font-family:var(--mono); margin-top:4px;">UID: ${ds.uid}</div>
+        </div>
+
+        <div style="border-top:1px solid rgba(255,255,255,0.05); padding-top:12px; display:flex; justify-content:space-between; align-items:center;">
+          <button class="btn btn-cyan" style="font-size:11px; padding:4px 10px;" onclick="testDs('${ds.uid}', this)">⚡ تست اتصال</button>
+          <button class="btn" style="font-size:11px; padding:4px 8px; border-color:var(--red); color:var(--red);" onclick="deleteDs('${ds.uid}')">حذف</button>
+        </div>
+      `;
+      grid.appendChild(card);
+    });
+  } catch (err) {
+    grid.innerHTML = `<div style="grid-column: 1 / -1; color:var(--red); text-align:center;">${err.message}</div>`;
+  }
+}
+
+async function testDs(uid, btn) {
+  const origText = btn.textContent;
+  btn.textContent = "در حال تست...";
+  btn.disabled = true;
+  try {
+    const res = await fetch(`/api/datasources/${uid}/test`, {
+      method: "POST",
+      headers: { "X-CSRFToken": window.CSRF_TOKEN || "" }
+    });
+    const data = await res.json();
+    if (res.ok && data.status === "ok") {
+      alert("✔ " + data.message);
+    } else {
+      alert("✘ " + (data.message || data.error || "خطا در تست اتصال"));
+    }
+  } catch (e) {
+    alert("✘ " + e.message);
+  } finally {
+    btn.textContent = origText;
+    btn.disabled = false;
+  }
+}
+
+async function deleteDs(uid) {
+  if (!confirm("آیا از حذف این منبع داده اطمینان دارید؟")) return;
+  try {
+    const res = await fetch(`/api/datasources/${uid}`, {
+      method: "DELETE",
+      headers: { "X-CSRFToken": window.CSRF_TOKEN || "" }
+    });
+    if (!res.ok) throw new Error("حذف منبع داده ناموفق بود.");
+    loadDataSources();
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+function openAddDsModal() {
+  document.getElementById("modal-add-ds").style.display = "flex";
+  updateDsFormFields();
+}
+
+function closeAddDsModal() {
+  document.getElementById("modal-add-ds").style.display = "none";
+}
+
+function updateDsFormFields() {
+  const type = document.getElementById("ds-type-select").value;
+  const container = document.getElementById("ds-dynamic-fields");
+  if (type === "postgresql") {
+    container.innerHTML = `
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px;">
+        <div>
+          <label style="display:block; font-size:11px; color:var(--text3); margin-bottom:4px;">Host</label>
+          <input type="text" id="cfg-host" class="form-input" value="127.0.0.1" style="width:100%; box-sizing:border-box;" />
+        </div>
+        <div>
+          <label style="display:block; font-size:11px; color:var(--text3); margin-bottom:4px;">Port</label>
+          <input type="number" id="cfg-port" class="form-input" value="5432" style="width:100%; box-sizing:border-box;" />
+        </div>
+      </div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px;">
+        <div>
+          <label style="display:block; font-size:11px; color:var(--text3); margin-bottom:4px;">Database</label>
+          <input type="text" id="cfg-db" class="form-input" value="printguard" style="width:100%; box-sizing:border-box;" />
+        </div>
+        <div>
+          <label style="display:block; font-size:11px; color:var(--text3); margin-bottom:4px;">User</label>
+          <input type="text" id="cfg-user" class="form-input" value="printguard" style="width:100%; box-sizing:border-box;" />
+        </div>
+      </div>
+      <div>
+        <label style="display:block; font-size:11px; color:var(--text3); margin-bottom:4px;">Password</label>
+        <input type="password" id="cfg-pass" class="form-input" style="width:100%; box-sizing:border-box;" />
+      </div>
+    `;
+  } else if (type === "rest") {
+    container.innerHTML = `
+      <div style="margin-bottom:10px;">
+        <label style="display:block; font-size:11px; color:var(--text3); margin-bottom:4px;">Base URL *</label>
+        <input type="text" id="cfg-url" class="form-input" placeholder="https://api.example.com/v1" style="width:100%; box-sizing:border-box;" />
+      </div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+        <div>
+          <label style="display:block; font-size:11px; color:var(--text3); margin-bottom:4px;">Auth Type</label>
+          <select id="cfg-authtype" class="form-input" style="width:100%; box-sizing:border-box;">
+            <option value="none">None</option>
+            <option value="bearer">Bearer Token</option>
+            <option value="api_key">API Key Header</option>
+          </select>
+        </div>
+        <div>
+          <label style="display:block; font-size:11px; color:var(--text3); margin-bottom:4px;">Token / Key</label>
+          <input type="password" id="cfg-token" class="form-input" style="width:100%; box-sizing:border-box;" />
+        </div>
+      </div>
+    `;
+  } else if (type === "github") {
+    container.innerHTML = `
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px;">
+        <div>
+          <label style="display:block; font-size:11px; color:var(--text3); margin-bottom:4px;">Owner (سازمان یا کاربر) *</label>
+          <input type="text" id="cfg-owner" class="form-input" placeholder="مثال: prometheus" style="width:100%; box-sizing:border-box;" />
+        </div>
+        <div>
+          <label style="display:block; font-size:11px; color:var(--text3); margin-bottom:4px;">Repository (نام مخزن) *</label>
+          <input type="text" id="cfg-repo" class="form-input" placeholder="مثال: snmp_exporter" style="width:100%; box-sizing:border-box;" />
+        </div>
+      </div>
+      <div>
+        <label style="display:block; font-size:11px; color:var(--text3); margin-bottom:4px;">Personal Access Token (اختیاری)</label>
+        <input type="password" id="cfg-ghtoken" class="form-input" placeholder="جهت مخازن خصوصی یا افزایش سقف Rate-Limit" style="width:100%; box-sizing:border-box;" />
+      </div>
+    `;
+  }
+}
+
+async function submitCreateDataSource() {
+  const name = document.getElementById("ds-name-input").value.trim();
+  const type = document.getElementById("ds-type-select").value;
+  if (!name) {
+    alert("لطفاً نام منبع داده را مشخص فرمایید.");
+    return;
+  }
+
+  const config = {};
+  if (type === "postgresql") {
+    config.host = document.getElementById("cfg-host").value.trim();
+    config.port = Number(document.getElementById("cfg-port").value) || 5432;
+    config.database = document.getElementById("cfg-db").value.trim();
+    config.user = document.getElementById("cfg-user").value.trim();
+    config.password = document.getElementById("cfg-pass").value;
+  } else if (type === "rest") {
+    config.base_url = document.getElementById("cfg-url").value.trim();
+    config.auth_type = document.getElementById("cfg-authtype").value;
+    config.token = document.getElementById("cfg-token").value;
+  } else if (type === "github") {
+    config.owner = document.getElementById("cfg-owner").value.trim();
+    config.repo = document.getElementById("cfg-repo").value.trim();
+    config.token = document.getElementById("cfg-ghtoken").value.trim();
+  }
+
+  try {
+    const res = await fetch("/api/datasources", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRFToken": window.CSRF_TOKEN || "",
+      },
+      body: JSON.stringify({ name, type, config }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || "خطا در ثبت منبع داده");
+    }
+
+    closeAddDsModal();
+    loadDataSources();
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+document.addEventListener("DOMContentLoaded", loadDataSources);
+</script>
+{% endblock %}

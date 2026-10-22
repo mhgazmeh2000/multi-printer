@@ -4,7 +4,7 @@
 > 🗺️ **Interactive Architecture & Data-Flow Diagram:** [docs/architecture.html](docs/architecture.html) (exports to draw.io XML)  
 > 📋 **Database Cutover Runbook:** [docs/cutover-runbook.md](docs/cutover-runbook.md)
 
-A comprehensive enterprise monitoring, analytics, and fleet management system for multi-brand printers (**Toshiba, HP, Canon, Brother**) and **ECS100G** environmental sensors, powered by **SNMP (v1/v2c) + HTTP Web Scraping**, a high-throughput **Prometheus SNMP Exporter** pipeline, and a resilient **Dual-Backend Database (SQLite + PostgreSQL 16)** architecture.
+A comprehensive enterprise monitoring, analytics, and fleet management system for multi-brand printers (**Toshiba, HP, Canon, Brother**) and **ECS100G** environmental sensors, powered by **SNMP (v1/v2c) + HTTP Web Scraping**, a high-throughput **Prometheus SNMP Exporter** pipeline, and a resilient **Dual-Backend Database (SQLite + PostgreSQL 16+)** architecture (tested and verified on versions 16.x, 17.5, and 18.1).
 
 Built to track online/offline status, segregated page counters (A3/A4, color/mono, print/copy/scan), toner and drum levels, paper trays, active alerts, intelligent cartridge yield prediction (Yield Engine), granular event logs, analytical exports, printer grouping, and enterprise role-based access control (RBAC).
 
@@ -18,16 +18,19 @@ Built to track online/offline status, segregated page counters (A3/A4, color/mon
 4. [Project Structure & File Guide](#-project-structure)
 5. [Prerequisites](#-prerequisites)
 6. [Installation & Setup](#-installation--setup)
-7. [Environment Configuration](#-environment-configuration)
-8. [API Reference](#-api-reference)
-9. [Toner & Yield Engine](#-toner--consumables)
-10. [Log & Counter Integrity](#-log--counter-integrity)
-11. [Tools & CLI Utilities](#-tools)
-12. [Testing & Quality Assurance](#-testing--quality-assurance)
-13. [Enterprise Security](#-security)
-14. [Excel Export & Reports](#-excel-export)
-15. [Operational Notes](#-operational-notes)
-16. [License](#-license)
+7. [Windows Automation Suite (Setup / Migrate / Start)](#-windows-automation-suite)
+8. [PostgreSQL Windows Service & Enterprise Backup](#-postgresql-windows-service--enterprise-backup)
+9. [Environment Configuration](#-environment-configuration)
+10. [API Reference](#-api-reference)
+11. [Toner & Yield Engine](#-toner--consumables)
+12. [Log & Counter Integrity](#-log--counter-integrity)
+13. [Tools & CLI Utilities](#-tools)
+14. [Testing & Quality Assurance](#-testing--quality-assurance)
+15. [Roadmap & Phase Status](#-roadmap--phase-status)
+16. [Enterprise Security](#-security)
+17. [Excel Export & Reports](#-excel-export)
+18. [Operational Notes](#-operational-notes)
+19. [License](#-license)
 
 ---
 
@@ -40,10 +43,12 @@ Built to track online/offline status, segregated page counters (A3/A4, color/mon
 - **Brother MFC / NC Series:** Real-time counters, drum life, and cartridge status.
 - **ECS100G:** Live temperature and humidity monitoring for server rooms and print facilities.
 
-### 💾 Dual-Backend Database Architecture
-- Native support for both **SQLite** (local development and isolated environments) and **PostgreSQL 16** (high-concurrency production deployments) without code divergence.
+### 💾 Dual-Backend Database Architecture & Production Status
+- Native support for both **SQLite** (local development and isolated environments) and **PostgreSQL 16+** (high-concurrency production deployments; tested and validated across PostgreSQL **16.x**, **17.5**, and **18.1**).
+- **Completed Production Cutover (Phase F):** Live enterprise deployment running stably under real production load, actively monitoring **27 network devices** (printers and environmental sensors).
+- **Cartridge State Completeness:** 100% data integrity with **51/51 rows** migrated and verified across all 26 printers and active color channels.
 - Unified database abstraction and adapter layer (`core/db/`) handling parameterization, connection pooling, and cross-backend UPSERT operations.
-- Strict adherence to the **UTC Timezone Contract** at the database layer (`docs/timezone-contract.md`), with localized conversion to `Asia/Tehran` for UI and reporting.
+- Strict adherence to the **UTC Timezone Contract** at the database layer (`docs/timezone-contract.md`) with standardized UTC-Z formatting, accompanied by transparent localization to `Asia/Tehran` for UI and reporting.
 - Production-grade schema migrations using **Alembic** (`0001` through `0005`), supporting `BOOLEAN` types, modern `IDENTITY` columns, and high-performance `JSONB` log storage.
 
 ### 🚀 Prometheus & SNMP Exporter Pipeline
@@ -122,7 +127,7 @@ Built to track online/offline status, segregated page counters (A3/A4, color/mon
 | **Core Engine** | Poller + Collectors + Yield Engine (`core/`) | Background polling threads, snapshot reconciliation, and consumable yield learning |
 | **Device Protocol** | In-house SNMP v1/v2c over **UDP/161** (`core/snmp/`) + HTTP Web Scraping | Low-level UDP communication, OID catalog mapping, and web scraper fallbacks |
 | **Metrics & Monitoring** | Prometheus Exposition (`/metrics`) + `snmp_exporter` | High-throughput metrics endpoint with Backoff & Circuit Breaker client |
-| **Storage (Dual Backend)**| **SQLite** (`logs.db`) or **PostgreSQL 16** via `core/db/` | Unified adapter, Alembic migrations (`0001`–`0005`), and strict UTC timezone enforcement |
+| **Storage (Dual Backend)**| **SQLite** (`logs.db`) or **PostgreSQL 16+** (16.x, 17.5, 18.1) via `core/db/` | Unified adapter, Alembic migrations (`0001`–`0005`), strict UTC enforcement, and 100% cartridge state completeness |
 
 🗺️ For an **interactive architectural diagram** illustrating component interactions and data pipelines (with draw.io XML export), open **[docs/architecture.html](docs/architecture.html)** in a browser.
 
@@ -282,13 +287,17 @@ Multi-Printer/
 │
 ├── tools/                      # CLI Diagnostic and Migration Tooling
 │   ├── auto_migrate.py         # Automated preflight check and idempotent migration runner
-│   ├── migrate_sqlite_to_pg.py # High-speed SQLite-to-PostgreSQL data migration tool
+│   ├── migrate_sqlite_to_pg.py # High-speed SQLite-to-PostgreSQL migration with sequence synchronization
+│   ├── migrate_timestamps_to_utc.py # Timestamp migration to standardized UTC-Z project contract
+│   ├── check_cutover_readiness.py   # Comprehensive pre-cutover checklist and verification tool
 │   ├── diagnose_data_quality.py# Database health and column data quality inspection tool
+│   ├── export_from_pg.py       # Rollback utility: reverse data export from PostgreSQL to SQLite
 │   ├── build_snmp_yml.py       # Compiles Prometheus snmp.yml from project OIDs
 │   ├── compare_snmp_sources.py # Verifies parity between direct SNMP and snmp_exporter
 │   ├── check_oid_coverage.py   # Analyzes OID coverage against device profiles
 │   ├── diagnose_printer.py     # Comprehensive SNMP and web dump tool for new printer models
 │   ├── init_pg_database.py     # PostgreSQL role and database initialization helper
+│   ├── test_pg_connection.py   # Verifies PostgreSQL credentials, permissions, and DDL rights
 │   └── verify_server_timezone.py# Server timezone verification against the UTC contract
 │
 ├── tests/                      # Automated test suite (>850 tests)
@@ -306,6 +315,11 @@ Multi-Printer/
     └── tech-debt.md            # Technical debt registry and architectural decisions
 ```
 
+### Windows Automation Suite (Root Scripts)
+- **`setup.bat`:** 7-step self-healing Windows provisioning script (checks admin rights, Python, venv, PG tools, dirs).
+- **`migrate.bat`:** Fail-safe production migration script with automated backups to `E:\pgbackup` and UTC-Z conversion.
+- **`start.bat`:** Production runner with dynamic port selection, conflict PID clearance, and PostgreSQL auto-discovery.
+
 ### Runtime Files (Excluded from Git)
 `logs.db` (when running SQLite), `printers.json`, `groups.json`, `oid_profiles.json`, `oid_validation_errors.txt`, `toner_report.txt`, `yield_status_report.txt`, `.env`.
 
@@ -316,7 +330,7 @@ Multi-Printer/
 - **Python 3.8+** (recommended and tested on **Python 3.10+**).
 - Network access to printer IP addresses with **UDP/161** open (SNMP v1 or v2c).
 - HTTP access to printer web panels on ports **80/TCP** or **443/TCP** (for brands utilizing web scraping).
-- Database: Local **SQLite** (default) or a running **PostgreSQL 16** cluster for enterprise loads.
+- Database: Local **SQLite** (default) or **PostgreSQL 16+** (tested and verified on **16.x**, **17.5**, and **18.1**).
 - Packages installed via `requirements.txt` (includes `Flask`, `openpyxl`, `psycopg[binary]`, `alembic`, `bcrypt`, `authlib`, and `tzdata`).
 
 ---
@@ -359,11 +373,88 @@ If no users exist in the database, the **first registered user** is automaticall
 python create_admin.py
 ```
 
-### 🪟 Windows Quick Start (`start.bat`)
-On Windows Server, the bundled `start.bat` script handles environment preflight checks, dependency validation, and database setup automatically:
-* **PostgreSQL Test Mode:** When a `.env` file configured for PostgreSQL (`DB_BACKEND=postgresql`) is present, `start.bat` dynamically detects the running PostgreSQL service, applies pending Alembic migrations, and invokes `tools/auto_migrate.py` to safely migrate data if the target database is empty.
-* **Production Mode:** In production, no test `.env` file should be present; `start.bat` runs safely against the primary operational database without modifying production data.
-* **Pre-TRUNCATE Safety Guards:** `tools/auto_migrate.py` enforces strict guardrails: if existing users or operational print records are found in PostgreSQL, the script immediately aborts with an error, ensuring that live production data is never overwritten.
+### 🪟 Windows Automation Suite
+
+To ensure smooth operation, zero-touch deployments, and foolproof operations on Windows Server environments, PrintGuard includes three dedicated batch scripts:
+
+#### 1. Self-Healing Setup Script (`setup.bat` — 7 Steps)
+The `setup.bat` script inspects and prepares the entire host environment in seven sequential phases:
+1. **Administrator Privileges Check:** Verifies elevated permissions to configure services and directory paths.
+2. **Python Environment Discovery:** Identifies a valid Python installation (Python 3.10+ recommended) and executable path.
+3. **Virtual Environment Self-Healing (`.venv`):** Automatically initializes or repairs a corrupted virtual environment if directories were moved.
+4. **Dependency Installation & Updates:** Silently installs packages from `requirements.txt` and ensures `pip` is current.
+5. **PostgreSQL Client & Service Discovery:** Detects client binaries (`psql`, `pg_dump`, `pg_restore`) and checks for active PostgreSQL Windows services.
+6. **Database Schema Readiness:** Inspects and applies official Alembic schema migrations (`alembic upgrade head`).
+7. **Directory & Configuration Provisioning:** Prepares enterprise backup folders (such as `E:\pgbackup`), log directories, and runtime files.
+
+#### 2. Fail-Safe Database Cutover & Migration (`migrate.bat`)
+The `migrate.bat` script executes a rock-solid, verifiable transition from SQLite to PostgreSQL:
+- **Preflight Sanity Inspection:** Executes `tools/check_cutover_readiness.py` to ensure all connectivity and permission prerequisites are met.
+- **Automated Dual-Sided Backups to `E:\pgbackup`:** Prior to any schema or data changes, creates a point-in-time snapshot of `logs.db` and an enterprise custom-format dump (`pg_dump -Fc`) of PostgreSQL, verifying SHA256 hashes.
+- **Timestamp Standardization to UTC-Z:** Executes `tools/migrate_timestamps_to_utc.py` to systematically convert all legacy timestamps to strict ISO-8601 UTC with the trailing `Z` designator.
+- **Alembic Schema Upgrade:** Applies official schema migrations through revision `0005`.
+- **High-Throughput Data Migration & Verification:** Runs `tools/migrate_sqlite_to_pg.py --verify` with type safety enforcement, GENERATED column handling, sequence synchronization, and complete row-count verification.
+
+#### 3. Daily Production Runner (`start.bat`)
+The `start.bat` script launches and monitors the application with resilient failure-recovery:
+- **UNC & Parentheses Path Resilience:** Uses `pushd` to map script directories to temporary drive letters, eliminating batch syntax issues with parentheses or network paths.
+- **Multi-Tier Python Discovery:** Scans via priority: local `.venv` -> `py` launcher -> system `PATH` -> standard AppData directories for Python 3.10 through 3.14.
+- **Cache Eviction:** Automatically purges `__pycache__` directories and stale `*.pyc` files.
+- **Interactive Port Prompt & Conflict Clearance:** Prompts for target port (defaults to `5050`, configurable to `5053` or other ports in production), scans active listeners via `netstat -aon`, and forcefully terminates conflicting processes via `taskkill /F /PID`.
+- **Dynamic PostgreSQL Service Recovery:** Auto-detects running PostgreSQL services across all versions (`postgresql-x64-16`, `postgresql-x64-17`, `postgresql-x64-18`); provides clear service start instructions (`net start <service>`) if stopped.
+- **Safety Preflight (`auto_migrate.py`):** Protects live data by refusing destructive operations if the destination database already contains operational data.
+- **Automated Browser Launch:** Automatically opens the PrintGuard monitoring dashboard upon successful startup.
+
+---
+
+## 🐘 PostgreSQL Windows Service & Enterprise Backup
+
+### 1. Registering & Managing PostgreSQL as a Windows Service
+In enterprise Windows Server deployments, PostgreSQL can be registered as a managed service with automatic recovery:
+
+```cmd
+:: Register PostgreSQL service using pg_ctl (Run as Administrator)
+"C:\Program Files\PostgreSQL\17\bin\pg_ctl.exe" register -N "postgresql-x64-17" -D "C:\Program Files\PostgreSQL\17\data" -w
+
+:: Configure Automatic Startup on system boot
+sc.exe config "postgresql-x64-17" start= auto
+
+:: Configure Auto-Recovery on service failure
+sc.exe failure "postgresql-x64-17" reset= 86400 actions= restart/60000/restart/60000/restart/60000
+
+:: Control and query service status
+net start postgresql-x64-17
+sc query postgresql-x64-17
+net stop postgresql-x64-17
+```
+
+### 2. Enterprise Backup & Disaster Recovery (`E:\pgbackup`)
+Scheduled backups are taken using PostgreSQL's compressed custom format (`pg_dump -Fc`), targeted to the dedicated backup storage path (`E:\pgbackup`):
+
+#### A. Generating an Enterprise Backup (`pg_dump -Fc`):
+```powershell
+# PowerShell with administrative access
+$timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+$backupFile = "E:\pgbackup\printguard_$timestamp.dump"
+$env:PGPASSWORD = "your_secure_db_password"
+
+pg_dump -Fc -h localhost -p 5432 -U printguard -f $backupFile printguard
+Write-Host "Backup successfully created at: $backupFile"
+```
+
+#### B. Verifying Backup Archive Integrity (`pg_restore -l`):
+```powershell
+# Validate the Table of Contents (TOC) to ensure the archive is complete and uncorrupted
+pg_restore -l $backupFile | Measure-Object -Line
+# Confirms 740+ tables, sequences, and indexes are intact
+```
+
+#### C. Disaster Recovery & Restoration:
+```powershell
+$env:PGPASSWORD = "your_secure_db_password"
+# Restore database schema and data, dropping and recreating existing objects cleanly
+pg_restore --clean --if-exists -h localhost -p 5432 -U printguard -d printguard "E:\pgbackup\printguard_live_cutover.dump"
+```
 
 ---
 
@@ -526,10 +617,18 @@ Dumps raw SNMP trees (system, counters, trays, supplies) and fetches web adminis
 ### 2. Migration & Data Quality Tooling (`tools/`)
 - **`tools/auto_migrate.py`:** Automated startup migration runner with built-in safety guards that prevents data overwrite on non-empty databases.
 - **`tools/migrate_sqlite_to_pg.py`:** High-speed SQLite-to-PostgreSQL migration utility with type coercion, GENERATED column handling, sequence synchronization, and post-migration `--verify`.
+- **`tools/migrate_timestamps_to_utc.py`:** Converts and normalizes all historical database timestamps to standardized UTC with trailing `Z` designator per the project contract, featuring `--dry-run` and automated backups.
+- **`tools/check_cutover_readiness.py`:** Automated pre-cutover checklist verification runner (exit code 0 for fully ready, 1 for blocking errors, 2 for warnings).
 - **`tools/diagnose_data_quality.py`:** Scans database records for type anomalies, column shifts, and data corruption, outputting a comprehensive JSON diagnostic report.
-- **`tools/compare_snmp_sources.py`:** Compares live SNMP walk output against Prometheus Exporter telemetry to ensure complete parity.
-- **`tools/build_snmp_yml.py`:** Generates `monitoring/snmp.yml` from the project's OID catalog.
+- **`tools/export_from_pg.py`:** Rollback utility exporting PostgreSQL data back to a clean SQLite database.
+- **`tools/init_pg_database.py`:** Initializes PostgreSQL role, database, UTF8 encoding, and `C` collation settings.
+- **`tools/test_pg_connection.py`:** Validates PostgreSQL connectivity, DDL/DML capabilities, and user permission boundaries.
 - **`tools/verify_server_timezone.py`:** Asserts server host and database timezone compliance with the UTC contract.
+- **`tools/build_snmp_yml.py`:** Generates `monitoring/snmp.yml` for Prometheus `snmp_exporter`.
+- **`tools/compare_snmp_sources.py`:** Compares live SNMP walk output against Prometheus Exporter telemetry to ensure complete parity.
+- **`tools/check_oid_coverage.py`:** Analyzes OID coverage against device profiles.
+- **`tools/probe_cartridge_id.py`:** Field probe for cartridge unique identifiers and chip serial numbers.
+- **`tools/audit_pages.py`:** Auditing utility for reconciling printed page counts across time windows.
 
 ### 3. In-Browser Diagnostic Endpoints
 - `GET /api/debug/printer/<ip>` — Raw extracted state for a specific printer
@@ -554,6 +653,19 @@ PG_DSN="postgresql://postgres:pass@127.0.0.1:5432/printguard_test" python -m pyt
 
 ### Golden Scenario Verification
 `tests/test_golden.py` replays production hardware snapshots (`tests/fixtures/golden/*.json`) through the processing pipeline, guaranteeing **Zero-Diff** stability across counter reconciliation, paper splitting, and cartridge replacement detection.
+
+---
+
+## 🗺️ Roadmap & Phase Status
+
+| Phase | Milestone | Status | Description |
+|---|---|---|---|
+| **Phases A–D** | Multi-brand monitoring, enhanced collector, Yield Engine, chip UID detection | ✅ Completed | Stable operation in production across multi-brand printer fleet |
+| **Phase E** | Dual Backend architecture (SQLite + PostgreSQL) and UTC Timezone Contract | ✅ Completed | Database adapter layer, Alembic migrations 0001 through 0005 |
+| **Phase F** | Production Cutover & Data Migration to PostgreSQL | ✅ Completed | Enterprise cutover completed, 27 network devices monitored, 51/51 cartridge states verified, automated backups at `E:\pgbackup` |
+| **Phase G** | Prometheus snmp_exporter pipeline and resilient client | ✅ Completed | Hybrid exporter adapter, Circuit Breaker, Exponential Backoff, Windows service installer |
+| **Phase H** | Collector refinement and scraper decoupling | ✅ Completed | Scraper isolation, delegated merging, test standardization |
+| **Phase I** | Time-Series Retention, Rollups, Toshiba Yield Engine & TD-006 | ✅ Completed | Alembic 0006 migration, data retention & rollup engines, background scheduler, 6 Toshiba color yield improvements, Asia/Tehran quiet hours fix, and Dual-Backend test promotion |
 
 ---
 

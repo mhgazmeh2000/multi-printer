@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+
+{% block title %}{{ dashboard.title }} - PrintGuard{% endblock %}
+
+{% block content %}
+<style>
+@media (max-width: 768px) {
+  .dashboard-view-wrapper {
+    padding: 10px 12px !important;
+  }
+  .view-toolbar {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 12px !important;
+    padding: 10px 14px !important;
+  }
+  .view-toolbar > div {
+    justify-content: space-between !important;
+    flex-wrap: wrap !important;
+    gap: 8px !important;
+  }
+  .grid-stack-item {
+    min-height: 260px !important;
+  }
+}
+</style>
+<div class="dashboard-view-wrapper" style="padding: 20px 30px; max-width: 1600px; margin: 0 auto; overflow-x:hidden;">
+  
+  <!-- View Toolbar -->
+  <div class="view-toolbar" style="display:flex; justify-content:space-between; align-items:center; background:var(--bg2); border:1px solid var(--border); border-radius:10px; padding:12px 20px; margin-bottom:20px; box-shadow:0 4px 14px rgba(0,0,0,0.2);">
+    <div style="display:flex; align-items:center; gap:14px;">
+      <a href="/dashboards" class="btn" style="padding:6px 10px; font-size:12px; text-decoration:none;">➔ داشبوردها</a>
+      <div>
+        <h3 style="margin:0; font-size:18px; color:var(--text); display:flex; align-items:center; gap:8px;">
+          <span>📊</span> {{ dashboard.title }}
+        </h3>
+        {% if dashboard.description %}
+        <span style="font-size:12px; color:var(--text3); margin-top:2px; display:inline-block;">{{ dashboard.description }}</span>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div style="display:flex; align-items:center; gap:10px;">
+      <button class="btn btn-cyan" onclick="toggleTheme()" title="تغییر تم">🌓 تم</button>
+      {% if can_edit %}
+      <a href="/dashboards/{{ dashboard.uid }}/edit" class="btn btn-green" style="padding:6px 14px; font-size:13px; text-decoration:none; font-weight:600;">ویرایش داشبورد ✏️</a>
+      {% endif %}
+      <a href="/" class="btn" style="padding:6px 12px; font-size:12px; text-decoration:none;">پایش پرینترها 🖨</a>
+    </div>
+  </div>
+
+  <!-- Static 12-Column GridStack Container -->
+  <div class="grid-stack" id="viewer-grid" style="min-height: 500px;"></div>
+
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  const dashData = {{ dashboard | tojson | safe }};
+  new PrintGuardBuilder("viewer-grid", {
+    uid: dashData.uid,
+    dashboard: dashData,
+    isEditable: false,
+  });
+});
+</script>
+{% endblock %}

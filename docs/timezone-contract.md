@@ -440,7 +440,7 @@ cartridge_discovery}.py`, `core/poller.py`, `core/cartridge_change_engine.py`،
 |---|---|
 | `web/routes/security.py:135` — `log` تعریف‌نشده در مسیر خطا | باگ قبلی (نه مربوط به زمان)؛ TD-004 |
 | بازنویسی manifest ابزار مهاجرت در اجرای بعدی | TD-005؛ فعلاً با هش + بکاپ + دستور بازتولید پوشش داده شد |
-| `sensor_alert.datetime.now().hour` (ساعات سکوت) | تصمیم «ساعت کاری» است نه timestamp ذخیره‌شده؛ TD-006 |
+| `sensor_alert.datetime.now().hour` (ساعات سکوت) | تصمیم «ساعت کاری» است نه timestamp ذخیره‌شده؛ در فاز I.6 با استفاده از منطقه‌ی زمانی `Asia/Tehran` حل و بسته شد (TD-006). |
 | TD-001 (کد مردهٔ `_save_counters_to_db`) و TD-002 (`next` در ۴۰۱) | طبق `docs/phase-e-plan.md` در E.4/بازبینی auth |
 
 *این سند فقط مستندات است؛ هیچ تغییری در کد، schema یا داده ایجاد نمی‌کند.*
