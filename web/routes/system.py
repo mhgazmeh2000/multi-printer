@@ -1,7 +1,21 @@
+# =============================================================================
+# @file:         web/routes/system.py
+# @brief:        System endpoints: current status and an on-demand poll trigger.
+# @details:      Responsibilities: Report status and start a poll cycle on request.
+#                Main API: api_status(), api_poll_now()
+#                Side effects: starts threads, defines HTTP routes
+# @dependencies: internal: config.settings, core, core.poller | external: flask, flask_wtf
+# @notes:        None.
+# =============================================================================
+
+"""System status and manual poll API routes."""
+
 import logging
-from flask import Blueprint, jsonify, request
+
+from flask import Blueprint, jsonify
+
 from core import store
-from config.settings import POLL_INTERVAL, FLASK_PORT
+from config.settings import POLL_INTERVAL
 
 log = logging.getLogger("PrinterMonitor")
 
@@ -10,17 +24,19 @@ bp = Blueprint("system", __name__)
 
 @bp.route('/api/status')
 def api_status():
-    # 🔒 امنیت: host_ip و dashboard_url حذف شدند — نشت IP داخلی سرور
-    # به کلاینت (و در گذشته به کاربران مهمان) لازم نیست.
-    # فرانت داشبورد از همین origin استفاده می‌کند و به host_ip نیاز ندارد.
+    # 🔒 Security: Removed host_ip and dashboard_url — server internal IP leak
+    # It is not necessary for the client (and in the past for guest users).
+    # The front dashboard uses the same origin and does not need host_ip.
+    """Return the application status."""
+
     from flask_wtf.csrf import generate_csrf
     return jsonify({
         "status":        "running",
         "poll_interval": POLL_INTERVAL,
-        # توکن CSRF تازه: داشبورد صفحه‌ای long-lived است و توکن متا پس از
-        # WTF_CSRF_TIME_LIMIT منقضی می‌شود (اعمال 400 روی همه POSTها).
-        # فرانت با هر پاسخ status توکن را سایلنت به‌روز می‌کند.
-        # امن برای افشا در این endpoint: same-origin + لاگین‌شده + بدون CORS.
+        # Fresh CSRF Token: Dashboard is long-lived page and meta token after
+        # WTF_CSRF_TIME_LIMIT expires (apply 400 to all POSTs).
+        # The frontend silently updates the status of the token with each response.
+        # Safe to expose on this endpoint: same-origin + logged in + no CORS.
         "csrf_token":    generate_csrf(),
         **store.poll_stats,
     })
@@ -28,6 +44,8 @@ def api_status():
 
 @bp.route('/api/poll/now', methods=['POST'])
 def api_poll_now():
+    """Start a poll cycle immediately."""
+
     import threading
     from core.poller import poll_all, _polling_lock
 
@@ -41,5 +59,5 @@ def api_poll_now():
         return jsonify({"status": "started"})
     except Exception:
         log.exception('Failed to start manual pull')
-        # 🔒 امنیت: جزئیات خطای داخلی (str(e)) به کلاینت برنگردد
+        # 🔒 Security: Do not return internal error details (str(e)) to the client
         return jsonify({"status": "error", "error": "internal server error"}), 500

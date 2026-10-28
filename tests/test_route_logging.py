@@ -1,19 +1,29 @@
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tests/test_route_logging.py
+# @brief:        Tests for logging on error paths and the 'log is undefined' guard (TD-004).
+# @details:      Responsibilities: Verify route error logging.
+#                Main API: SecurityStatsErrorPathTests, LogBindingGuardTests
+#                Side effects: none at import time
+# @dependencies: internal: core.database, models, web, web.routes.security
+# @notes:        Can be run directly as a script.
+# =============================================================================
+
 r"""
-تست‌های E.6.7 (TD-004) — لاگ‌گذاری در مسیر خطا، و نگهبان «`log` تعریف‌نشده».
+Tests E.6.7 (TD-004) — Logging on error path, and "`log` undefined" guard.
 
-چرا این فایل هست
+Why is this file?
 ----------------
-`web/routes/security.py:135` در `except Exception` صدا می‌زد `log.exception(...)`،
-در حالی که ماژول هرگز `log را` نمی‌ساخت. نتیجه در عمل: هر خطای داخلی
-`/api/security/stats` به‌جای `500 {"error": …}` یک `NameError` روی `NameError`
-می‌داد — یعنی هم پاسخ JSON برنامه‌ریزی‌شده نمی‌رسید، هم **هیچ رکورد لاگی** نوشته
-نمی‌شد (دقیقاً همان چیزی که handler برای ثبت آن ساخته شده بود).
+`web/routes/security.py:146` called `log.exception(...)` in `except Exception`,
+While the module never creates ``log''. Result in practice: any internal error
+`/api/security/stats` instead of `500 {"error": …}` a `NameError` on `NameError`
+was giving — that is, the scheduled JSON response was not received, and **no log record** was written
+Couldn't (exactly what the handler was designed to record).
 
-بخش دوم فایل، یک قفل ساختاری است: هر ماژول `web/` و `core/` که `log.<level>()`
-را صدا می‌زند باید `log` را در همان scope تعریف کرده باشد. pyflakes این را می‌فهمد
-و در بازبینی دستی هم پیدا می‌شود، ولی در CI این قفل، *تست* است نه هشدار — پس
-refactor بعدی نمی‌تواند بی‌صدا همان حالت را برگرداند.
+The second part of the file is a structural lock: each `web/` and `core/` module that `log.<level>()`
+calls must have defined ``log'' in the same scope. pyflakes understands this
+And it is also found in manual review, but in CI this lock is a *test*, not a warning - so
+The next refactor cannot silently return the same state.
 """
 import ast
 import logging
@@ -27,9 +37,10 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 class SecurityStatsErrorPathTests(unittest.TestCase):
-    """مسیر خطای `/api/security/stats`: ۵۰۰ با JSON و یک رکورد لاگ — بدون NameError."""
+    """Error path `/api/security/stats`: 500 with JSON and a log record — no NameError."""
 
     def setUp(self):
+        """Prepare the fixtures that each test in this class uses."""
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.old_cwd = os.getcwd()
@@ -53,6 +64,7 @@ class SecurityStatsErrorPathTests(unittest.TestCase):
             sess["_fresh"] = True
 
     def test_handler_error_returns_json_500_and_logs(self):
+        """Verifies handler error returns json 500 and logs."""
         boom = RuntimeError("security_events unavailable")
         with mock.patch("web.routes.security._db_conn", side_effect=boom):
             with self.assertLogs("PrinterMonitor", level="ERROR") as captured:
@@ -68,7 +80,7 @@ class SecurityStatsErrorPathTests(unittest.TestCase):
                         "exc_info باید در رکورد لاگ باشد، نه فقط پیام")
 
     def test_name_error_is_not_possible_in_the_handler(self):
-        """شاهد مستقیم TD-004: `log` در سطح ماژول bound است و `exception` را دارد."""
+        """Direct witness TD-004: `log` is bound at module level and has `exception`."""
         import web.routes.security as security
         self.assertIsInstance(security.log, logging.Logger)
         self.assertTrue(callable(security.log.exception))
@@ -78,17 +90,18 @@ class SecurityStatsErrorPathTests(unittest.TestCase):
 
 class LogBindingGuardTests(unittest.TestCase):
     """
-    هیچ ماژولی `log.<level>()` را بدون binding دیده‌شده صدا نزند.
+    No module should call `log.<level>()` without a binding seen.
 
-    binding پذیرفته: انتساب سطح‌ماژول (`log = …`)، انتساب داخل همان تابع، یا
-    import با نام `log`. حالت «داخل تابع داخلی» هم counted است چون scope پایتون
-    همان را می‌بیند؛ قاعدهٔ این تست عمداً ساده نگه داشته شده تا خوانا بماند.
+    binding accepted: module-level assignment (`log =...`), assignment within the same function, or
+    import with the name `log`. "Inside internal function" mode is also counted because it is Python's scope
+    sees the same; The rule of this test is deliberately kept simple to keep it readable.
     """
 
     LEVELS = {"info", "warning", "error", "exception", "debug", "critical", "log"}
     DIRS = ("web", "core")
 
     def _module_offenders(self, path: Path):
+        """Helper: module offenders."""
         source = path.read_text(encoding="utf-8")
         tree = ast.parse(source)
         module_bound = set()
@@ -118,7 +131,7 @@ class LogBindingGuardTests(unittest.TestCase):
             if not local and "log" not in module_bound:
                 first = uses[0]
                 offenders.append(f"{path.relative_to(ROOT).as_posix()}:{first.lineno}")
-        # استفادهٔ بیرون از هیچ تابعی (سطح ماژول) هم باید binding داشته باشد
+        # External use of any function (module level) must also have binding
         top_uses = [
             node for node in ast.walk(tree)
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
@@ -133,6 +146,7 @@ class LogBindingGuardTests(unittest.TestCase):
         return offenders
 
     def test_no_unbound_log_calls(self):
+        """Verifies no unbound log calls."""
         offenders = []
         for d in self.DIRS:
             for path in sorted((ROOT / d).rglob("*.py")):

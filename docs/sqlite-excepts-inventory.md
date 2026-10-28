@@ -1,4 +1,4 @@
-# فهرست `except sqlite3.*` و معادل PostgreSQL — فاز E.0، کار E.0.5
+# Inventory of `except sqlite3.*` and PostgreSQL equivalents — phase E.0, task E.0.5
 
 **وضعیت:** فقط مستندات + یک ابزار تشخیصی. هیچ کد production، هیچ schema و هیچ داده‌ای تغییر نکرده است.
 **ابزار:** `tools/find_sqlite_excepts.py` (اسکن **AST**-محور؛ SQL پویا را هم با بافتِ حلقه/تابع تک‌منبع حل می‌کند).
@@ -6,7 +6,7 @@
 
 ---
 
-## ۱. چرا این فهرست لازم است
+## 1. Why this inventory is needed
 
 استثناهای `sqlite3.*` بعد از مهاجرت **دیگر پرتاب نمی‌شوند**. اگر یک `except sqlite3.OperationalError` باقی بماند، خطای پستگرس از کنارش رد می‌شود و به کاربر ۵۰۰ می‌رسد؛ اگر هم نوعی که کد جست‌وجو می‌کند عوض شود، مسیرهای «تحمل خطا» (مثل `pass` روی ALTER تکراری) بی‌اثر می‌شوند.
 
@@ -25,7 +25,7 @@
 
 ---
 
-## ۲. فهرست کامل (۲۱ محل — هیچ‌کدام بدون تصمیم نمانده)
+## 2. Full list (21 locations — none left without a decision)
 
 > ⚠ **این جدول snapshot زمان E.0.5 است** (۲۱ محل). شمارش امروز، پس از E.4.4:
 > `جمع: 16 محل (کد برنامه/ابزار/تست: 13، adapter: 3) | نیاز به بازبینی: 0` و
@@ -61,7 +61,7 @@
 
 ---
 
-## ۳. نکات مهمِ ردیف‌به‌ردیف
+## 3. Notes item by item
 
 ### ۳.۱ مهارهایی که «تحمل خطا»ی معنادار دارند (باید دقیق ترجمه شوند)
 
@@ -105,7 +105,7 @@ if "full" in str(e).lower():           # create_admin.py:40
 
 ---
 
-## ۴. جمع‌بندی و پیوند
+## 4. Summary and links
 
 - ✅ **انجام شد (E.4.4، کامیت `d4e6cf9`):** در `core/` و `web/` هیچ `except sqlite3.*` نمانده — صفر، و این با گارد AST در `tests/test_exceptions_pg.py::AppCodeContractTests` قفل شده است (اجرای تست، نه grep). همه به نوع مشترک `core.db.DatabaseError` یا کلاس‌های زیرمجموعه‌اش (`UniqueViolation`, `UndefinedTable`, `UndefinedColumn`, `ColumnAlreadyExists`, `DatabaseOperationalError`) رفته‌اند؛ ترجمه در خود adapter است (`_translate_error`) و **هیچ `except` دوگانه‌ای** نوشته نشد.
 - دو مورد **بازنویسی منطقی** (نه فقط تغییر نوع) لازم دارند:
@@ -115,7 +115,7 @@ if "full" in str(e).lower():           # create_admin.py:40
 
 ---
 
-## ۵. بازتولید
+## 5. Reproduction
 
 ```bash
 python tools/find_sqlite_excepts.py                    # گزارش خوانا (کد خروج 0 = همه تصمیم دارند)
@@ -133,7 +133,7 @@ python tools/find_sqlite_excepts.py --include-adapter  # نمایش ردیف‌�
 
 ---
 
-## ۶. وضعیت پس از E.4.4 (۲۰۲۶-۱۰-۰۴)
+## 6. Status after E.4.4 (2026-10-04)
 
 ### ۶.۱ ۱۳ محلی که منتقل شدند (گروه A — مصرف‌کنندهٔ adapter)
 

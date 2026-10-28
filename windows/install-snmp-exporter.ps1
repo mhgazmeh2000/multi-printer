@@ -1,52 +1,60 @@
 ﻿<#
 .SYNOPSIS
-  نصب/به‌روزرسانیِ snmp_exporter روی ویندوز (فاز G · گام G.4).
+  Install/update snmp_exporter on Windows (Phase G · Step G.4).
 
 .DESCRIPTION
-  این اسکریپت idempotent است: اجرای دوباره نباید خطا بدهد و نباید چیزی را خراب کند.
-  - snmp_exporter را از GitHub releases با نسخهٔ pin‌شده می‌گیرد (اگر همان نسخه نصب باشد، دانلود نمی‌کند)
-  - با NSSM آن را به سرویسِ ویندوز تبدیل می‌کند و log rotation را تنظیم می‌کند
-  - قاعدهٔ فایروال می‌زند: پیش‌فرض فقط localhost؛ با -AllowSubnetAccess برای scrape از ماشین دیگر
-  - monitoring/snmp.yml (از همین مخزن) را کنارِ باینری می‌گذارد
+  This script is idempotent: running it again shouldn't throw an error and shouldn't break anything.
+  - Gets snmp_exporter from GitHub releases with pinned version (does not download if same version is installed)
+  - With NSSM, it turns it into a Windows service and sets the log rotation
+  - Firewall rules: default localhost only; with -AllowSubnetAccess to scrape from another machine
+  - puts monitoring/snmp.yml (from the same repository) next to the binary
 
-  listen-address و فایروال از یک سوئیچ می‌آیند (تصمیمِ G.4.2):
-    پیش‌فرض          → 127.0.0.1:9116  و  -RemoteAddress 127.0.0.1,::1
-    -AllowSubnetAccess→ 0.0.0.0:9116   و  -RemoteAddress LocalSubnet
-  دلیلِ پیش‌فرضِ localhost: مصرف‌کنندهٔ این exporter همان `core/exporter_client.py`
-  است که روی همین ماشین اجرا می‌شود؛ exporter هیچ احراز هویتی ندارد، پس بازکردنِ
-  9116 روی subnet یعنی خوانا‌شدنِ دادهٔ پرینترها برای کل شبکه (و یک بازتاب‌دهندهٔ SNMP).
+  The listen-address and the firewall come from the same switch (decision G.4.2):
+    Default → 127.0.0.1:9116 and -RemoteAddress 127.0.0.1,::1
+    -AllowSubnetAccess→ 0.0.0.0:9116 and -RemoteAddress LocalSubnet
+  The default reason for localhost: the consumer of this exporter is `core/exporter_client.py`
+  is running on the same machine; The exporter has no authentication, so open the
+  9116 on the subnet means readability of printer data for the entire network (and an SNMP reflector).
 
 .NOTES
   exit codes:
-    0 = موفق
-    1 = خطای قابل‌توجه (دانلود/extract/شروعِ سرویس/تأیید نشد)
-    2 = نیازمند اقدامِ دستی (ادمین نیستید، snmp.yml در مخزن نیست، فایل قفل است، نسخهٔ اشتباه)
-  اجرا:
+    0 = successful
+    1 = significant error (download/extract/start service/verify failed)
+    2 = manual action required (not admin, snmp.yml not in repository, file locked, wrong version)
+  Execution:
     powershell -ExecutionPolicy Bypass -File windows\install-snmp-exporter.ps1
     powershell -ExecutionPolicy Bypass -File windows\install-snmp-exporter.ps1 -AllowSubnetAccess
-  حذف:
+  Delete:
     nssm remove printguard-snmp-exporter confirm
-  به‌روزرسانیِ نسخه:
-    فقط $SNMP_EXPORTER_VERSION را در همین فایل عوض کنید و اسکریپت را دوباره اجرا کنید.
-  این اسکریپت در sandbox توسعه اجرا **نمی‌شود** (ویندوز نیست، دانلود هم ممنوع است)؛
-  آنجا فقط ساختار/parser سنجیده می‌شود. سند: docs/windows-services.md
+  Version update:
+    Just change $SNMP_EXPORTER_VERSION in the same file and run the script again.
+  This script **does not run** in the development sandbox (it is not Windows, downloading is also prohibited);
+  There, only the structure/parser is measured. Document: docs/windows-services.md
 #>
+# =============================================================================
+# @file:         windows/install-snmp-exporter.ps1
+# @brief:        Installs or updates snmp_exporter as a Windows service with NSSM.
+# @details:      Responsibilities: Download the pinned release, create the service, write the firewall rule and copy monitoring/snmp.yml.
+# @dependencies: PowerShell 5.1+, NSSM, GitHub releases (snmp_exporter), monitoring/snmp.yml
+# @notes:        Idempotent. Default listen address is localhost only; -AllowSubnetAccess opens it to the subnet.
+# =============================================================================
+
 [CmdletBinding()]
 param(
-    # با این سوئیچ، exporter روی همهٔ اینترفیس‌ها listen می‌کند و فایروال subnet را می‌پذیرد.
+    # With this switch, the exporter listens on all interfaces and accepts the firewall subnet.
     [switch]$AllowSubnetAccess,
-    # اگر مقدار بگیرید، sha256ِ zipِ دانلودی با آن مقایسه می‌شود (خالی = فقط چاپِ hash).
+    # If you get a value, the sha256 of the downloaded zip will be compared to it (empty = just print the hash).
     [string]$ExpectedSha256 = ""
 )
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
-# ── نسخه‌های pin‌شده ───────────────────────────────────────────────────────────
+# Pinned Versions
 $SNMP_EXPORTER_VERSION = "0.26.0"
 $NSSM_VERSION          = "2.24"
 
-# ── مسیرها و نام‌ها ────────────────────────────────────────────────────────────
+# Paths and Names
 $ServiceName = "printguard-snmp-exporter"
 $DisplayName = "PrintGuard SNMP Exporter"
 $Port        = 9116
@@ -68,8 +76,8 @@ $ExporterUrl  = "https://github.com/prometheus/snmp_exporter/releases/download/v
 $NssmZip      = "nssm-$NSSM_VERSION.zip"
 $NssmUrl      = "https://nssm.cc/release/$NssmZip"
 
-# ── حالتِ شبکه: یک سوئیچ، دو متغیر ─────────────────────────────────────────────
-# -RemoteAddress یک array می‌گیرد؛ «"127.0.0.1,::1"» به‌عنوان یک رشتهٔ تنها نامعتبر است.
+# Network mode: one switch, two variables
+# -RemoteAddress takes an array; ""127.0.0.1,::1"" is invalid as a single string.
 if ($AllowSubnetAccess) {
     $ListenAddress  = "0.0.0.0:9116"
     $FirewallRemote = @("LocalSubnet")
@@ -77,9 +85,9 @@ if ($AllowSubnetAccess) {
     $ListenAddress  = "127.0.0.1:9116"
     $FirewallRemote = @("127.0.0.1", "::1")
 }
-$FirewallRemoteText = $FirewallRemote -join ","          # همان "127.0.0.1,::1" برای پیام/مقایسه
+$FirewallRemoteText = $FirewallRemote -join ","          # Same as "127.0.0.1,::1" for message/comparison
 
-# ── توابع کمکی ─────────────────────────────────────────────────────────────────
+# Auxiliary functions
 function Write-Log {
     param([string]$Message, [string]$Level = "INFO")
     $line = "{0} [{1}] {2}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Level, $Message
@@ -130,7 +138,7 @@ function Invoke-Nssm {
 }
 
 function Install-FromZip {
-    # یک zip از منبعِ pin‌شده ⇒ بیرون‌کشیدن ⇒ فقط فایلِ موردنیظر به $InstallDir
+    # A zip from the pinned source ⇒ extract ⇒ just the file in $InstallDir
     param([string]$Url, [string]$ExeName, [string]$PreferFolder)
     $tmp = Join-Path $env:TEMP ("printguard-snmp-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
     New-Item -ItemType Directory -Path $tmp -Force | Out-Null
@@ -204,8 +212,8 @@ function Update-FirewallRule {
 }
 
 function Set-V3Environment {
-    # رمزها هرگز از خطِ فرمان نمی‌گذرند (در non-loopback این‌ها در فهرستِ فرآیند دیده می‌شود):
-    # مستقیم در Parametersِ سرویس نوشته می‌شوند.
+    # Passwords are never passed through the command line (in non-loopback these are seen in the process directory):
+    # They are written directly in the Service Parameters.
     $vars = @("SNMP_V3_USERNAME", "SNMP_V3_AUTH_PASSPHRASE", "SNMP_V3_PRIV_PASSPHRASE")
     $extra = @()
     foreach ($v in $vars) {
@@ -225,7 +233,7 @@ function Set-V3Environment {
 }
 
 function Test-Endpoint {
-    # چند تلاش: سرویس تازه بالا آمده و bind کردن لحظه‌ای طول می‌کشد
+    # A few tries: The service is just up and binding takes a moment
     for ($i = 0; $i -lt 10; $i++) {
         try {
             $resp = Invoke-WebRequest -Uri ("http://localhost:" + $Port + "/") -UseBasicParsing -TimeoutSec 10
@@ -237,7 +245,7 @@ function Test-Endpoint {
     return $false
 }
 
-# ── جریان اصلی ──────────────────────────────────────────────────────────────────
+# Main stream
 Write-Log "=== PrintGuard · snmp_exporter installer ==="
 Write-Log ("snmp_exporter=" + $SNMP_EXPORTER_VERSION + "  nssm=" + $NSSM_VERSION + "  listen=" + $ListenAddress + "  remote=" + $FirewallRemoteText)
 if ($AllowSubnetAccess) {
@@ -261,7 +269,7 @@ try {
     }
     Write-Log ("مسیرها: install=" + $InstallDir + "  data=" + $DataDir + "  logs=" + $LogDir)
 
-    # ۱) باینریِ snmp_exporter — اگر همان نسخه نصب است، دانلود نمی‌شود
+    # 1) snmp_exporter binary — if it is the same version installed, it will not be downloaded
     $installed = Get-InstalledVersion
     if ($installed -eq $SNMP_EXPORTER_VERSION) {
         Write-Log ("نسخهٔ " + $installed + " از قبل نصب است ⇒ دانلود رد شد (idempotent)")
@@ -275,7 +283,7 @@ try {
         Install-FromZip -Url $ExporterUrl -ExeName "snmp_exporter.exe" -PreferFolder $null
     }
 
-    # ۲) NSSM — فقط اگر نباشد دانلود می‌شود
+    # 2) NSSM — Download only if not
     if (-not (Test-Path -LiteralPath $NssmPath)) {
         $onPath = Get-Command nssm.exe -ErrorAction SilentlyContinue
         if ($onPath) {
@@ -288,7 +296,7 @@ try {
         Write-Log "nssm.exe از قبل در مسیر نصب است ⇒ دانلود رد شد"
     }
 
-    # ۳) config — کپیِ monitoring/snmp.yml (بدون تغییر؛ فایل مستقل از OS است)
+    # 3) config — copy of monitoring/snmp.yml (unchanged; the file is OS independent)
     if ((Test-Path -LiteralPath $TargetConfig) -and ((Get-FileSha $SpecConfig) -eq (Get-FileSha $TargetConfig))) {
         Write-Log "snmp.yml در محلِ نصب عیناً همان فایلِ مخزن است ⇒ کپی نشد"
     } else {
@@ -296,8 +304,8 @@ try {
         Write-Log ("snmp.yml کپی شد: " + $TargetConfig + "  sha256=" + (Get-FileSha $TargetConfig))
     }
 
-    # ۴) سرویس: install یا update
-    # معادلِ دستیِ این مرحله (همان کاری که Invoke-Nssm می‌کند؛ برای عیب‌یابی روی سرور):
+    # 4) Service: install or update
+    # The manual equivalent of this step (same as Invoke-Nssm does; for troubleshooting on the server):
     #   nssm install printguard-snmp-exporter C:\PrintGuard\snmp-exporter\snmp_exporter.exe
     #   nssm set printguard-snmp-exporter AppParameters "--config.file=…\snmp.yml --web.listen-address=… --config.expand-env"
     #   nssm set printguard-snmp-exporter AppDirectory C:\PrintGuard\snmp-exporter
@@ -332,10 +340,10 @@ try {
     }
     Set-V3Environment
 
-    # ۵) فایروال
+    # 5) Firewall
     Update-FirewallRule
 
-    # ۶) شروع و تأیید
+    # 6) Start and confirm
     Write-Log ("شروعِ سرویسِ " + $ServiceName)
     Invoke-Nssm @("start", $ServiceName) | Out-Null
     $ready = $false
@@ -350,7 +358,7 @@ try {
         Stop-WithCode 1 ("پاسخ 200 از http://localhost:" + $Port + "/ گرفته نشد؛ لاگ: " + $OutLog)
     }
 
-    # ۷) گزارشِ نهایی
+    # 7) Final report
     Write-Log "─" "INFO"
     Write-Log ("موفق: سرویسِ " + $ServiceName + " در حالِ اجراست")
     Write-Log ("  binary   : " + $ExePath + "  (v" + $SNMP_EXPORTER_VERSION + ")")

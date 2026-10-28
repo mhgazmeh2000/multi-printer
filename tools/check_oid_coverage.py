@@ -1,27 +1,37 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tools/check_oid_coverage.py
+# @brief:        Count gate that checks monitoring/generator.yml against docs/oid-matrix.md.
+# @details:      Responsibilities: Read the matrix, compare coverage and fail on mismatch.
+#                Main API: read_matrix(), lcp(), needs_ignore(), check(), main()
+#                Side effects: none at import time
+# @dependencies: external: yaml
+# @notes:        Can be run directly as a script.
+# =============================================================================
+
 """
-tools/check_oid_coverage.py — گیتِ شمارش: `monitoring/generator.yml` ⊡ `docs/oid-matrix.md`.
+tools/check_oid_coverage.py — count gate: `monitoring/generator.yml` ⊡ `docs/oid-matrix.md`.
 
-«پوشش ۱۰۰٪» یعنی چه؟ (همین‌جا تعریف می‌شود، نه جای دیگر)
-    ۱. ماژول‌های generator دقیقاً ماژول‌های §۲ ماتریس باشند؛
-    ۲. در هر ماژول: {oidهای `get`} ∪ {oidهای `walk[].metrics`} = ردیف‌های ماتریسِ همان
-       ماژول — نه کم، نه زیاد، و هیچ ردیفی دو بار مصرف‌کننده نداشته باشد؛
-    ۳. هر OIDِ *زنده* در فایل (یعنی هر مقدارِ داخل YAML، کامنت‌ها نه) یا ردیفِ ماتریس
-       است یا `subtree` همان ورودیِ walk — و `subtree` باید دقیقاً طولانی‌ترین پیشوند
-       مشترکِ سطرهای خودش باشد (پس «OID اضافهٔ بدون مصرف‌کننده» ممکن نیست)؛
-    ۴. `lookups[].label_oid` ها ردیفِ همان ماژول در ماتریس‌اند (نگاشت index→description
-       از کد می‌آید، نه از تخیل)؛
-    ۵. `source:` هر متریک باید دقیقاً همان `منبع` ردیفِ خودش در ماتریس باشد؛
-    ۶. `ignore_values: ["-2", "-3"]` روی دقیقاً همان متریک‌هایی باشد که قانونِ سند
-       می‌گوید (تابع `needs_ignore`؛ متریک‌های رشته‌ای هرگز sentinel نمی‌گیرند)؛
-    ۷. OIDهای یتیم (ماتریس §۵) فقط در **کامنت** ظاهر شوند، نه به‌عنوان متریک زنده؛
-    ۸. `auths` = public_v1 + public_v2 + secure_v3، و هر اعتبارنامهٔ v3 الگوی
-       `${VAR_ENV}` باشد (رمز در git نمی‌نشیند).
+What does "100% coverage" mean? (defined here, not elsewhere)
+    1. The generator modules are exactly the modules of §2 of the matrix;
+    2. In each module: {oids `get`} ∪ {oids `walk[].metrics`} = rows of the same matrix
+       module — not too few, not too many, and no rows used twice;
+    3. Any *live* OID in the file (ie any value inside YAML, not comments) or matrix row
+       is or `subtree` the same as the input of walk — and `subtree` must be exactly the longest prefix
+       be common to its own rows (so "add OID without consumer" is not possible);
+    4. `lookups[].label_oid` are rows of the same module in the matrix (map index→description
+       comes from code, not imagination);
+    5. `source:' each metric must be exactly the same as the `source' of its own row in the matrix;
+    6. `ignore_values: ["-2", "-3"]` on exactly the same metrics as the document rule
+       says (function `needs_ignore`; string metrics never get sentinel);
+    7. orphaned OIDs (matrix §5) only appear in **comments**, not as live metrics;
+    8. `auths` = public_v1 + public_v2 + secure_v3, and any template v3 credentials
+       be `${VAR_ENV}` (the password does not sit in git).
 
-کد خروج: 0 = همه درست · 1 = شکست (پیام‌ها روی stderr) · 2 = فایل/سند پیدا نشد.
-    python tools\\check_oid_coverage.py            # برای آدم
-    python tools\\check_oid_coverage.py --json     # برای CI
+Exit code: 0 = all true · 1 = failure (messages on stderr) · 2 = file/document not found.
+    python tools\\check_oid_coverage.py # for Adam
+    python tools\\check_oid_coverage.py --json # for CI
 """
 
 from __future__ import annotations
@@ -47,19 +57,19 @@ ORPHAN_RE = re.compile(r"^\|\s*`(\d+(?:\.\d+){6,})`\s*\|\s*`([a-z0-9_]+)`\s*\|\s
 PROBE_COMMENT_RE = re.compile(r"^\s*#\s*(\d+(?:\.\d+){6,})\s+←", re.M)
 ENV_PLACEHOLDER_RE = re.compile(r"^\$\{[A-Z0-9_]+\}$")
 
-#: متریک‌هایی که sentinel‌های «مقدار نیست» دارند — قانونِ صریح، تا گیت قابل بحث باشد:
-#:   (الف) ردیفِ کاتالوگ با دستهٔ `supply`، یا
-#:   (ب) نامِ متریک معنیِ درصد/سطح/ظرفیت می‌دهد، یا
-#:   (ج) منبعش `core/enhanced_collector.py` است — آنجا همه از یک حلقه خوانده می‌شوند که
-#:       فقط `0 <= v <= 100` را می‌پذیرد (enhanced_collector.py:229-235 و 244-250).
-#: شواهد در کد: hp.py:258,260 (`lvl == -2` / `lvl == -3`)، brother.py:182-183،
-#: canon.py:203 (fallback به -1)، brother.py:13 ( توضیحِ level=-3 در خانوادهٔ NC).
+#: Metrics that have "not value" sentinels — explicit rule, so that the gate is debatable:
+#: (a) catalog row with category ``supply'', or
+#: (b) metric name means percentage/level/capacity, or
+#: (c) the source is `core/enhanced_collector.py` — there they are all read from a loop that
+#: only accepts `0 <= v <= 100` (enhanced_collector.py:243-249 and 244-250).
+#: Evidence in code: hp.py:271,273 (`lvl == -2` / `lvl == -3`), brother.py:196-197,
+#: canon.py:216 (fallback to -1), brother.py:25 (explanation of level=-3 in NC family).
 IGNORE_NAME_RE = re.compile(r"(level|remain|cap|max|pct|toner|drum|black)", re.I)
 SENTINELS = ["-2", "-3"]
 
 
 def read_matrix(doc_path: Path) -> Tuple[Dict[str, Dict[str, Dict[str, str]]], Set[str]]:
-    """§۳ ردیف‌ها و §۵ یتیم‌ها را از سند می‌خواند."""
+    """§3 reads the rows and §5 orphans from the document."""
     text = doc_path.read_text(encoding="utf-8")
     modules: Dict[str, Dict[str, Dict[str, str]]] = {}
     current: Optional[str] = None
@@ -92,6 +102,8 @@ def read_matrix(doc_path: Path) -> Tuple[Dict[str, Dict[str, Dict[str, str]]], S
 
 
 def lcp(oids: Sequence[str]) -> str:
+    """Return the longest common prefix of a list of OIDs."""
+
     parts = [o.split(".") for o in oids]
     out: List[str] = []
     for tup in zip(*parts):
@@ -102,8 +114,8 @@ def lcp(oids: Sequence[str]) -> str:
 
 
 def needs_ignore(row: Dict[str, str], name: str) -> bool:
-    """قانونِ sentinel: فقط متریک‌های عددی. رشته‌ها (`type: str` / DisplayString) هیچ‌وقت
-    `-2`/`-3` نمی‌گیرند — مثلاً `toner_name_1` نامِ کارتریج است، نه درصد."""
+    """Sentinel Rule: Numeric metrics only. Strings (`type: str` / DisplayString) never
+    `-2`/`-3` do not take — eg `toner_name_1` is the name of the cartridge, not the percentage."""
     if row.get("type") == "str":
         return False
     if row.get("category") == "supply":
@@ -114,7 +126,7 @@ def needs_ignore(row: Dict[str, str], name: str) -> bool:
 
 
 def _walk_strings(node: object, path: str = "") -> Iterable[Tuple[str, object]]:
-    """همهٔ مقدارهای رشته‌ایِ داخل ساختار YAML (کامنت‌ها اینجا نمی‌آیند)."""
+    """All string values ​​inside the YAML structure (comments do not come here)."""
     if isinstance(node, dict):
         for k, v in node.items():
             yield from _walk_strings(v, f"{path}.{k}")
@@ -126,6 +138,8 @@ def _walk_strings(node: object, path: str = "") -> Iterable[Tuple[str, object]]:
 
 
 def check(doc_path: Path, gen_path: Path) -> Tuple[List[str], Dict[str, object]]:
+    """Compare the OID matrix with generator.yml and return the problems found."""
+
     problems: List[str] = []
     if not doc_path.is_file():
         return [f"سند ماتریس نیست: {doc_path}"], {}
@@ -133,7 +147,7 @@ def check(doc_path: Path, gen_path: Path) -> Tuple[List[str], Dict[str, object]]
         return [f"فایل ژنراتور نیست: {gen_path}"], {}
 
     try:
-        import yaml                                  # noqa: WPS433 (وابستگی dev)
+        import yaml                                  # noqa: WPS433 (dev dependency)
     except ImportError:
         return ["PyYAML نصب نیست: pip install -r requirements-dev.txt"], {}
 
@@ -146,7 +160,7 @@ def check(doc_path: Path, gen_path: Path) -> Tuple[List[str], Dict[str, object]]
     if not isinstance(modules, dict):
         return ["`modules:` وجود ندارد یا mapping نیست"], {}
 
-    # ۱) ماژول‌ها
+    # 1) Modules
     want = {m for m, rows in matrix.items() if rows}
     got = set(modules)
     if want - got:
@@ -156,7 +170,7 @@ def check(doc_path: Path, gen_path: Path) -> Tuple[List[str], Dict[str, object]]
 
     all_matrix_oids = {o for rows in matrix.values() for o in rows}
     used: Set[str] = set()
-    metric_oids: Set[str] = set()      # فقط oidهای متریک؛ `subtree` اینجا نمی‌آید
+    metric_oids: Set[str] = set()      # metric oids only; `subtree' does not come here
     per_module: Dict[str, Dict[str, int]] = {}
     ignore_actual: Set[str] = set()
 
@@ -212,9 +226,9 @@ def check(doc_path: Path, gen_path: Path) -> Tuple[List[str], Dict[str, object]]
                            "get": sum(1 for v in got_oids.values() if v == "get")}
         used |= {o for o in got_oids if o in rows}
         metric_oids |= set(got_oids)
-        # انتظارِ ignore_values از روی ماتریس محاسبه می‌شود (منبعِ قانون، کد است)
+        # The expectation of ignore_values is calculated from the matrix (the source of the rule is the code)
 
-    # ۲) هیچ OID زنده‌ای بیرون از ماتریس/ساب‌تری نباشد
+    # 2) No live OIDs outside of matrix/subtree
     live: Set[str] = set()
     for path, val in _walk_strings({"modules": modules, "auths": gen.get("auths") or {}}):
         v = val.strip()
@@ -228,10 +242,10 @@ def check(doc_path: Path, gen_path: Path) -> Tuple[List[str], Dict[str, object]]
         problems.append(f"{len(stray)} OID زنده در generator بیرون از ماتریس است (بدون "
                         f"مصرف‌کننده): {stray[:4]}")
 
-    # ۳) یتیم‌ها: فقط کامنت
+    # 3) Orphans: just a comment
     text = gen_path.read_text(encoding="utf-8")
     commented = set(PROBE_COMMENT_RE.findall(text))
-    live_orphans = sorted(orphans & metric_oids)   # subtreeِ walk یتیم را می‌پوشاند
+    live_orphans = sorted(orphans & metric_oids)   # The walk subtree covers the orphan
     if live_orphans:
         problems.append(f"یتیم‌ها نباید متریک زنده شوند: {live_orphans}")
     missing_comments = sorted(orphans - commented)
@@ -239,7 +253,7 @@ def check(doc_path: Path, gen_path: Path) -> Tuple[List[str], Dict[str, object]]
         problems.append(f"{len(missing_comments)} یتیم در کامنت‌های probe-only نیست: "
                         f"{missing_comments[:4]}")
 
-    # ۴) auths
+    # 4) auths
     auths = gen.get("auths") or {}
     if set(auths) != {"public_v1", "public_v2", "secure_v3"}:
         problems.append(f"auths باید دقیقاً public_v1/public_v2/secure_v3 باشد، هست: {sorted(auths)}")
@@ -255,7 +269,7 @@ def check(doc_path: Path, gen_path: Path) -> Tuple[List[str], Dict[str, object]]
         if not ENV_PLACEHOLDER_RE.match(val):
             problems.append(f"secure_v3.{key} باید placeholder محیطی باشد (`${{VAR}}`)، هست: {val!r}")
 
-    # ۵) تطبیق `source:` با سند
+    # 5) matching `source:` with the document
     for mod, cfg in modules.items():
         if not isinstance(cfg, dict):
             continue
@@ -272,7 +286,7 @@ def check(doc_path: Path, gen_path: Path) -> Tuple[List[str], Dict[str, object]]
             if src != want_src:
                 problems.append(f"{mod}/{e.get('name')}: source `{src}` ≠ ماتریس `{want_src}`")
 
-    # ۶) ignore_values — قانون باید دقیقاً رعایت شده باشد
+    # 6) ignore_values — the rule must be followed exactly
     expected_ignore = set()
     for mod, rows in matrix.items():
         cfg = modules.get(mod) or {}
@@ -309,6 +323,8 @@ def check(doc_path: Path, gen_path: Path) -> Tuple[List[str], Dict[str, object]]
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    """Command-line entry point of the OID coverage gate."""
+
     ap = argparse.ArgumentParser(description="گیت پوشش generator.yml در برابر docs/oid-matrix.md")
     ap.add_argument("--matrix", default=str(MATRIX_DOC))
     ap.add_argument("--generator", default=str(GENERATOR))

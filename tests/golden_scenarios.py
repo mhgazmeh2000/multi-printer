@@ -1,18 +1,28 @@
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tests/golden_scenarios.py
+# @brief:        Golden scenarios for the counter and enhanced collection tests.
+# @details:      Responsibilities: Define step sequences and the calls each golden test replays.
+#                Main API: none (no public functions or classes)
+#                Side effects: none at import time
+# @dependencies: internal: core, core.collectors.base, tests.golden_profiles
+# @notes:        None.
+# =============================================================================
+
 """
-سناریوهای golden (کار ۱ فاز C).
+golden scenarios (work 1 phase C).
 
-دو خانواده سناریو:
-  A) ``counters_steps()``  — ۵ گام ترتیبی روی *یک* دستگاه؛ خروجی هر گام یک fixture.
-     ترتیب: baseline → چاپ ۱۷ صفحه → counter reset → جهش تونر +۲۰٪ → بازگشت شمارنده پس از ریبوت.
-     هر fixture «کامل و مستقل» است: ``input.prev`` (کل prev)، ``input.db_seed``
-     (وضعیت DB در آن لحظه) و ``input.args`` در آن ذخیره می‌شود؛ بنابراین بازپخش
-     هر گام روی یک DB تازه، همان خروجی را می‌دهد.
+Two families of scenarios:
+  A) ``counters_steps()'' — 5 sequential steps on *one* device; The output of each step is a fixture.
+     Order: baseline → print 17 pages → counter reset → toner jump +20% → counter return after reboot.
+     Each fixture is ``complete and independent'': ``input.prev'' (whole prev), ``input.db_seed''
+     (state of the DB at that moment) and ``input.args'' are stored in it; So replay
+     Each step on a new DB gives the same output.
 
-  B) ``enhanced_scenarios()`` — ۵ سناریوی ``collect_enhanced`` روی دستگاه‌های مجازی
-     (پروفایل OID در ``tests/golden_profiles.py``).
+  B) ``enhanced_scenarios()'' — 5 ``collect_enhanced'' scenarios on virtual machines
+     (OID profile in ``tests/golden_profiles.py'').
 
-هشدار: هیچ‌کدام از این توابع منطق دامنه را تغییر نمی‌دهند؛ فقط ورودی می‌سازند.
+Warning: none of these functions change domain logic; They only make input.
 """
 from __future__ import annotations
 
@@ -21,16 +31,17 @@ from core import store
 
 COUNTERS_IP = "192.0.2.10"
 
-# پروفایل تونر پایه (مشترک بین گام‌ها تا تغییر واقعیِ سطح تونر قابل مشاهده باشد)
+# Basic toner profile (common between steps until the actual toner level change is visible)
 _BLACK_SUPPLY = "Black Cartridge HP CF287A"
 
 
 def _toner(level: int) -> dict:
+    """Helper: toner."""
     return {"black": {"level": level, "name": _BLACK_SUPPLY}}
 
 
 def counters_steps():
-    """۵ گام ترتیبی. ``args`` تابع است تا ``prev`` در زمان اجرا خوانده شود."""
+    """5 sequential steps. ``args'' is the function to call ``prev'' at runtime."""
     return [
         {
             "name": "counters_01_baseline",
@@ -105,20 +116,21 @@ def counters_steps():
 
 
 def build_counters_call(args: dict):
-    """تابع فراخوانی ``_counters_event`` مطابق امضای واقعی (۲۲ پارامتر)."""
+    """Call function ``_counters_event'' according to the actual signature (22 parameters)."""
     kw = dict(args)
     total = kw.pop("total")
     ip = kw.pop("ip", COUNTERS_IP)
 
     def _call():
+        """Helper: call."""
         return base_mod._counters_event(ip, total, store._prev.get(ip), [], [], **kw)
 
     return _call
 
 
-# ─── سناریوهای collect_enhanced (پروفایل‌ها در golden_profiles.py) ──────────
+# ─── collect_enhanced scenarios (profiles in golden_profiles.py) ──────────
 def enhanced_scenarios():
-    """۵ سناریوی collect_enhanced؛ ``import`` تنبل تا پروفایل‌ها جدا بمانند."""
+    """5 collect_enhanced scenarios; Lazy ``import'' to keep profiles separate."""
     from tests.golden_profiles import (
         hp_color_full, hp_color_empty, brother_unknown_toner,
         toshiba_offline_then_online, ecs100g_sensor,

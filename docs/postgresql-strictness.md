@@ -1,4 +1,4 @@
-# PostgreSQL strictness — چیزهایی که SQLite می‌بخشد و PG نمی‌بخشد
+# PostgreSQL strictness — what SQLite tolerates and PG does not
 
 **فاز:** E.0 (مستندسازی) — کار E.0.10. **وضعیت:** فقط مستندات؛ در این فاز هیچ کد/schema تغییر نکرده است.
 **مبنای اندازه‌گیری:** شاخه‌ی `phase-c`، تاریخ ۲۰۲۶-۱۰-۰۳؛ روش: grep/AST روی درخت کاری + شمارش دستی، نه حدس.
@@ -17,7 +17,7 @@
 > آنچه پس از اجرای E.4 بر هر ردیف گذشت، در **بند ۷ همین سند** با شمارهٔ کامیت ثبت شده:
 > ۱۳ ردیف بسته · ۳ ردیف ⬜ no-action آگاهانه · ۱ ردیف ⏳ موکول به E.6.
 
-## ۱. خلاصه
+## 1. Summary
 
 | # | موضوع | جای دقیق | کلاس | اقدام فاز E |
 |---|---|---|---|---|
@@ -41,7 +41,7 @@
 
 ---
 
-## ۲. جزئیات موارد بحرانی
+## 2. Details of the critical items
 
 ### ۱) `substr(timestamp, 1, 10)` — مرزهای روز — ✅ **رفع شد در E.3.4**
 
@@ -258,7 +258,7 @@ PG: `JSONB` و عملگرهای `->>`/`->`/`@>`؛ هم‌چنین `_USER_JSON_FI
 
 ---
 
-## ۳. موارد تأییدشده (🟢 — دوباره کاوش نکنید)
+## 3. Confirmed items (🟢 — do not re-investigate)
 
 | موضوع | نتیجه‌ی بررسی |
 |---|---|
@@ -273,7 +273,7 @@ PG: `JSONB` و عملگرهای `->>`/`->`/`@>`؛ هم‌چنین `_USER_JSON_FI
 
 ---
 
-## ۴. نقشه‌ی نوع (Type map) برای فاز E
+## 4. Type map for phase E
 
 | SQLite | PostgreSQL | نمونه در مخزن |
 |---|---|---|
@@ -286,7 +286,7 @@ PG: `JSONB` و عملگرهای `->>`/`->`/`@>`؛ هم‌چنین `_USER_JSON_FI
 
 ---
 
-## ۵. بازتولید اندازه‌گیری‌ها
+## 5. Reproducing the measurements
 
 ```bash
 # ۱) تابع تاریخ در SQL؟  (انتظار: فقط stats.py)
@@ -302,7 +302,7 @@ grep -rn "lastrowid\|executemany\|PRAGMA\|sqlite_master\|rowid" --include=*.py c
 
 ---
 
-## ۶. آنچه در فاز E باید تصمیم گرفته شود (چک‌لیست)
+## 6. What must be decided in phase E (checklist)
 
 1. ✅ مرز روز: سبد روزانه به پایتون منتقل شد (`to_local_day`) — نه `AT TIME ZONE` در SQL (E.3.4).
 2. ⬜ no-action: collation دیتابیس `C` است و `tools/init_pg_database.py` همان را
@@ -326,7 +326,7 @@ grep -rn "lastrowid\|executemany\|PRAGMA\|sqlite_master\|rowid" --include=*.py c
 
 ---
 
-## ۷. وضعیت پس از E.4 (جدول ۱۷ ردیفی)
+## 7. Status after E.4 (17-row table)
 
 **مبنای سنجش این جدول (پس از E.6، ۲۰۲۶-۱۰-۰۴):** `phase-c` تا `0a21aed`؛
 PG ۱۶.۱۵ زنده با اسکیمای Alembic=`0004` (jsonb ردیف ۱۵ از همین جدول) و SQLite؛

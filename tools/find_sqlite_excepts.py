@@ -1,29 +1,39 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""فهرست `except sqlite3.*` و معادل پستگرس هر مورد — گام E.0.5.
+# =============================================================================
+# @file:         tools/find_sqlite_excepts.py
+# @brief:        Lists 'except sqlite3.*' handlers and their PostgreSQL equivalents (step E.0.5).
+# @details:      Responsibilities: Scan the source and print a decision report.
+#                Main API: scan_file(), decide(), print_report(), to_markdown(), main()
+#                Side effects: file I/O
+# @dependencies: stdlib only
+# @notes:        Can be run directly as a script.
+# =============================================================================
 
-چرا؟ پس از مهاجرت، استثناهای `sqlite3.*` دیگر پرتاب نمی‌شوند (یا اگر شوند،
-نشانه‌ی اشتباه است). اگر کد به‌جای نوع خطای مشترکِ لایه‌ی داده به `sqlite3.Error`
-وابسته بماند، یک خطای پستگرس از دستِ همان `except` رد می‌شود و به کاربر ۵۰۰
-می‌رسد. این ابزار هر محلِ مهارِ `sqlite3.*` را با «عملیاتی که داخل try انجام
-می‌شود» و «معادل پستگرس» فهرست می‌کند تا مهاجرت آگاهانه باشد.
+"""list `except sqlite3.*` and the Postgres equivalent of each item — step E.0.5.
 
-سیاست این پروژه (فاز D): خطاهای لایه‌ی داده با انواع مشترک
-(`core.db.DatabaseError` / `DatabaseConnectionError`) بالا می‌آیند؛ ترجمه‌ی
-نوعِ خطا **فقط** کار adapter است. پس:
-  • استثناهای مهارشده در خودِ adapter (``core/db/connection.py``) و محل
-    ``sqlite3.connect`` خارج از دامنه‌ی این فهرست‌اند (با علامت ثبت می‌شوند).
-  • محلی که SQL خام اجرا می‌کند و `sqlite3.OperationalError` را برای «جدول/ستون
-    وجود ندارد» می‌گیرد، در پستگرس به `psycopg.errors.UndefinedTable/Column`
-    نگاشت می‌شود؛ برای `ALTER TABLE` تکراری به `DuplicateColumn`.
+why After migration, `sqlite3.*` exceptions are no longer thrown (or if they are,
+is a sign of error). If the code instead of the common error type of the data layer to `sqlite3.Error`
+remains dependent, a Postgres error will be thrown from the same `except' and the user will get 500
+arrives This tool replaces any ``sqlite3.*'' containment with the ``operations inside try.''
+can be” and lists “postgres equivalent” so that the migration is aware.
 
-اجرا:
+Policy of this project (Phase D): Data layer errors with common types
+(`core.db.DatabaseError` / `DatabaseConnectionError`) raise; Translation of
+The type of error is **only** adapter work. So:
+  • Caught exceptions in the adapter itself (``core/db/connection.py'') and locale
+    ``sqlite3.connect'' are outside the scope of this directory (they are marked with a sign).
+  • A place that executes raw SQL and throws `sqlite3.OperationalError` for ``table/column
+    does not exist', in Postgres it takes `psycopg.errors.UndefinedTable/Column'
+    is mapped; For duplicate `ALTER TABLE` to `DuplicateColumn`.
+
+Execution:
 
     python tools/find_sqlite_excepts.py
     python tools/find_sqlite_excepts.py --md /tmp/exc.md --json /tmp/exc.json
-    python tools/find_sqlite_excepts.py --include-adapter    # ثبت ردیف‌های adapter
+    python tools/find_sqlite_excepts.py --include-adapter # Register adapter rows
 
-کدهای خروج: 0 = همه‌ی ردیف‌ها تصمیم قطعی دارند، 2 = «نیاز به بازبینی» هست، 1 = خطا.
+Exit codes: 0 = all rows have a final decision, 2 = "needs revision", 1 = error.
 """
 
 from __future__ import annotations
@@ -41,7 +51,7 @@ ROOT_FILES = ("create_admin.py",)
 SELF = os.path.abspath(__file__)
 ADAPTER_FILE = "core/db/connection.py"
 
-# نگاشت پیشنهادی: sqlite3 → psycopg (psycopg 3)
+# Suggested mapping: sqlite3 → psycopg (psycopg 3)
 PSYCOPG_MAP = {
     "OperationalError": "psycopg.OperationalError",
     "IntegrityError": "psycopg.errors.UniqueViolation",
@@ -57,9 +67,9 @@ _PRAGMA_RE = re.compile(r"PRAGMA\s+(?P<name>\w+)", re.I)
 _SELECT_RE = re.compile(r"SELECT\b", re.I)
 
 
-# ────────────────────────────── کمکی‌های AST ────────────────────────────────
+# AST Helpers AST Helpers
 def _dotted(node) -> str:
-    """نام کامل یک گره (``sqlite3.OperationalError``)."""
+    """The full name of a node (``sqlite3.OperationalError'')."""
     if isinstance(node, ast.Attribute):
         base = _dotted(node.value)
         return f"{base}.{node.attr}" if base else node.attr
@@ -71,7 +81,7 @@ def _dotted(node) -> str:
 
 
 def _is_sqlite_exc(node) -> bool:
-    """آیا این نام/گره، استثنای sqlite3 است؟ (هم گره AST هم رشته را می‌پذیرد)"""
+    """Is this name/node a sqlite3 exception? (Both AST node accepts string)"""
     name = node if isinstance(node, str) else _dotted(node)
     return name.startswith("sqlite3.") or name in {
         "OperationalError", "IntegrityError", "DatabaseError", "ProgrammingError",
@@ -80,7 +90,7 @@ def _is_sqlite_exc(node) -> bool:
 
 
 def _sql_literal(node) -> str:
-    """رشته‌ی SQL یک گره (ثابت یا f-string با بخش‌های ثابت)."""
+    """SQL string of a node (fixed or f-string with fixed parts)."""
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
     if isinstance(node, ast.JoinedStr):
@@ -95,7 +105,7 @@ def _sql_literal(node) -> str:
 
 
 def _call_label(node: ast.Call) -> str:
-    """توصیف کوتاه یک فراخوانی: نام + SQL/متن اول."""
+    """Short description of a call: name + SQL/first text."""
     f = node.func
     name = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", "")
     sql = _sql_literal(node.args[0]) if node.args else ""
@@ -112,10 +122,10 @@ def _call_label(node: ast.Call) -> str:
 
 def _describe_ops(body: list, raw: str = "", loop_raw: str = "",
                   helper_cols: list | None = None) -> dict:
-    """عملیات داخل try: فراخوانی‌ها، SQLها و ویژگی‌های پرکاربرد.
+    """Operations inside try: Calls, SQLs and frequently used features.
 
-    ``raw`` = متن خام همان محدوده (برای SQLهای پویا مثل f-string یا متغیر؛
-    اسکن AST به‌تنهایی ALTER/SELECT پویا را نمی‌بیند).
+    ``raw'' = raw text of the same range (for dynamic SQLs such as f-string or variable;
+    AST scan alone does not see dynamic ALTER/SELECT).
     """
     ops, sqls, alters, pragmas = [], [], [], []
     calls = 0
@@ -133,7 +143,7 @@ def _describe_ops(body: list, raw: str = "", loop_raw: str = "",
                     alters.append(m.group("col").strip())
                 for pm in _PRAGMA_RE.finditer(flat):
                     pragmas.append(pm.group("name"))
-    # ALTERهای پنهان: داخل حلقه (متن حلقه) یا در تابع کمکی (تک‌منبع ستون‌ها)
+    # Hidden ALTERs: inside loop (loop text) or in helper function (single source columns)
     hidden_alters = _alter_columns_in_source(loop_raw or "")
     for col in (helper_cols or []):
         if col not in hidden_alters:
@@ -163,10 +173,10 @@ def _describe_ops(body: list, raw: str = "", loop_raw: str = "",
 
 
 def _describe_handler(handler: ast.ExceptHandler, raw: str = "") -> dict:
-    """رفتار handler: pass / log / raise / return / غیره + بررسی پیام خطا.
+    """Handler behavior: pass / log / raise / return / etc + error message checking.
 
-    تشخیص «بررسی پیام» فقط از ثابت‌های رشته‌ایِ *داخل خود handler* می‌آید
-    (نه اسکن متنی) تا مثلاً کلید ``res["exists"]`` در همسایه اشتباه گرفته نشود.
+    The "message check" detection comes only from string constants *inside the handler*
+    (not a text scan) so that, for example, the key ``res["exists"]'' is not confused in the neighbor.
     """
     kinds = set()
     for node in ast.walk(handler):
@@ -186,8 +196,9 @@ def _describe_handler(handler: ast.ExceptHandler, raw: str = "") -> dict:
                 kinds.add(nm)
     if any(isinstance(n, ast.Continue) for n in ast.walk(handler)):
         kinds.add("continue")
-    # بررسی پیام خطا (مثل: if "locked" not in str(exc)) — اختصاصی SQLite
+    # Error message checking (eg: if "locked" not in str(exc)) — SQLite specific
     def _involves_exc(node, alias: str) -> bool:
+        """Return True when the exception alias is used inside a node."""
         for sub in ast.walk(node):
             if isinstance(sub, ast.Name) and sub.id == alias:
                 return True
@@ -214,10 +225,11 @@ def _describe_handler(handler: ast.ExceptHandler, raw: str = "") -> dict:
 
 
 def _enclosing_map(tree: ast.AST) -> dict:
-    """نقشه‌ی «نود ← نام تابع/کلاس دربرگیرنده»."""
+    """Map "node → name of enclosing function/class"."""
     out = {}
 
     def walk(node, stack):
+        """Walk the AST and record exception handlers together with their enclosing scope."""
         for child in ast.iter_child_nodes(node):
             name = stack
             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -231,7 +243,7 @@ def _enclosing_map(tree: ast.AST) -> dict:
 
 
 def _parents(tree: ast.AST) -> dict:
-    """نقشه‌ی «فرزند ← والد» برای بالا رفتن در درخت."""
+    """"Child → Parent" map for climbing the tree."""
     out = {}
     for node in ast.walk(tree):
         for child in ast.iter_child_nodes(node):
@@ -240,7 +252,7 @@ def _parents(tree: ast.AST) -> dict:
 
 
 def _enclosing_for(parents: dict, node: ast.AST):
-    """نزدیک‌ترین حلقهٔ ``for`` دربرگیرنده (اگر داخل همان تابع باشد)."""
+    """The closest enclosing ``for'' loop (if inside the same function)."""
     cur = parents.get(node)
     while cur is not None:
         if isinstance(cur, (ast.For, ast.AsyncFor)):
@@ -252,14 +264,14 @@ def _enclosing_for(parents: dict, node: ast.AST):
 
 
 def _alter_columns_in_source(text: str) -> list:
-    """ستون‌های ALTER TABLE ADD COLUMN از یک متن پایتون."""
+    """ALTER TABLE ADD COLUMN columns from a Python script."""
     return sorted({m.group("col").strip().strip('"\'') for m in _ALTER_RE.finditer(text)})
 
 
 def _resolve_names(tree, source: str, name: str, depth: int = 0) -> list:
-    """نام ستون‌ها را از یک ثابت ماژول بیرون می‌کشد.
+    """Pulls column names from a module constant.
 
-    دو شکل رایج: ``X = (("col", "TEXT"), ...)`` و ``X = A + B``.
+    Two common forms: ``X = (("col", "TEXT"),...)'' and ``X = A + B''.
     """
     if depth > 4:
         return []
@@ -290,19 +302,19 @@ def _resolve_names(tree, source: str, name: str, depth: int = 0) -> list:
 
 
 def _helper_alter_columns(tree, source: str, name: str) -> list:
-    """اگر حلقه روی خروجی تابعی مثل ``_counter_column_alters()`` بچرخد،
-    ستون‌های ALTER را از بدنهٔ همان تابع بیرون می‌کشد (تک‌منبع ستون‌ها).
+    """If the loop spins on the output of a function like ``_counter_column_alters()'',
+    ALTER pulls columns from the body of the same function (single-source columns).
 
-    الگوی دو‌مرحله‌ای: ``for name, decl in _COUNTER_COLUMNS`` داخل تابع کمکی
-    ⇒ خودِ ``_COUNTER_COLUMNS`` (و ``A + B``هایش) تا نام ستون‌ها باز می‌شود.
+    Two-step pattern: ``for name, decl in _COUNTER_COLUMNS'' inside helper function
+    ⇒ ``_COUNTER_COLUMNS'' itself (and its ``A + B's'') expands to column names.
     """
     for node in ast.walk(tree):
         if not (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
                 and node.name == name):
             continue
         cols = _alter_columns_in_source(ast.get_source_segment(source, node) or "")
-        cols = [c for c in cols if "{" not in c]          # الگوهای f-string را رد کن
-        # نام‌ها را از متغیر حلقه‌ی درون تابع کمکی باز کن
+        cols = [c for c in cols if "{" not in c]          # Reject f-string patterns
+        # Unwrap the names from the loop variable inside the helper function
         for sub in ast.walk(node):
             if isinstance(sub, (ast.ListComp, ast.GeneratorExp, ast.SetComp)):
                 for gen in sub.generators:
@@ -315,8 +327,9 @@ def _helper_alter_columns(tree, source: str, name: str) -> list:
     return []
 
 
-# ─────────────────────────────── اسکن فایل‌ها ────────────────────────────────
+# - Scan files - Scan files
 def _iter_py_files():
+    """Yield the Python files under the search directories."""
     for d in SEARCH_DIRS:
         for root, _dirs, files in os.walk(os.path.join(REPO_ROOT, d)):
             if "__pycache__" in root:
@@ -331,6 +344,8 @@ def _iter_py_files():
 
 
 def scan_file(path: str) -> list:
+    """Find sqlite3 exception handlers in one source file."""
+
     rel = os.path.relpath(path, REPO_ROOT).replace(os.sep, "/")
     try:
         with open(path, encoding="utf-8") as fh:
@@ -376,9 +391,9 @@ def scan_file(path: str) -> list:
     return findings
 
 
-# ───────────────────────────────── تصمیم‌ها ──────────────────────────────────
+# Decisions
 def decide(f: dict) -> tuple:
-    """(تصمیم, معادل پستگرس, یادداشت) — قاعده‌محور و قابل بازبینی."""
+    """(decision, postgres equivalent, note) — rule-based and reviewable."""
     if f["file"] == ADAPTER_FILE:
         return ("خارج از دامنه (adapter)",
                 "— (ترجمه نوع خطا کار adapter است)", "")
@@ -394,7 +409,7 @@ def decide(f: dict) -> tuple:
             ") اختصاصی SQLite است؛ در پستگرس باید با نوع/SQLSTATE جایگزین شود "
             "(psycopg: exc.sqlstate)")
 
-    # ۱) ALTER TABLE تکراری (ثابت، داخل حلقه یا از تابع تک‌منبع) ⇒ ستون هست
+    # 1) Iterative ALTER TABLE (fixed, inside a loop or from a single source function) ⇒ there is a column
     alter_cols = ops["alter_columns"] or ops.get("hidden_alter_columns") or []
     if alter_cols or ops["has_alter_dynamic"]:
         target = (f" روی {', '.join(alter_cols)}" if alter_cols
@@ -404,19 +419,19 @@ def decide(f: dict) -> tuple:
             note = (" | ".join([note, "ALTER داخل حلقه/تابع تک‌منبع ستون‌ها"]).strip(" |"))
         return ("معادل دقیق psycopg", "psycopg.errors.DuplicateColumn" + target, note)
 
-    # ۲) PRAGMA ⇒ معادل ندارد؛ کار adapter
+    # 2) PRAGMA ⇒ has no equivalent; work adapter
     if ops["pragmas"]:
         prag = ", ".join(ops["pragmas"])
         return ("معادل دقیق psycopg",
                 f"PRAGMA({prag}) در پستگرس معادل ندارد؛ adapter باید به no-op "
                 "تبدیل کند", " | ".join(note_parts))
 
-    # ۳) IntegrityError ⇒ یکتایی
+    # 3) IntegrityError ⇒ uniqueness
     if short == "IntegrityError":
         return ("معادل دقیق psycopg", "psycopg.errors.UniqueViolation",
                 " | ".join(note_parts))
 
-    # ۴) خواندن از جدول/ستونی که ممکن است نباشد (یا SQL پویا)
+    # 4) Reading from a table/column that may not exist (or dynamic SQL)
     if short == "OperationalError" and (
             any(_SELECT_RE.search(x) for x in ops["sql"]) or ops["has_select_dynamic"]
             or ops.get("dynamic_sql_vars")):
@@ -427,12 +442,12 @@ def decide(f: dict) -> tuple:
         return ("معادل دقیق psycopg",
                 "psycopg.errors.UndefinedTable / UndefinedColumn", note)
 
-    # ۵) خطای عمومی
+    # 5) General error
     if short in ("DatabaseError", "Error"):
         return ("تبدیل به DatabaseError مشترک", "core.db.DatabaseError (مشترک)",
                 " | ".join(note_parts))
 
-    # ۶) OperationalError بدون نشانه‌ی روشن (مثل ساخت/دسترسی به DB)
+    # 6) OperationalError without a clear sign (such as creating/accessing the DB)
     if short == "OperationalError":
         return ("معادل دقیق psycopg", "psycopg.OperationalError",
                 " | ".join(note_parts))
@@ -442,8 +457,10 @@ def decide(f: dict) -> tuple:
             " | ".join(note_parts + [why]))
 
 
-# ──────────────────────────────── گزارش ─────────────────────────────────────
+# Report
 def print_report(findings: list, verbose=True) -> int:
+    """Print the sqlite3 exception findings and return an exit code."""
+
     print("=" * 80)
     print("فهرست except sqlite3.* — فاز E.0.5 (اسکن AST، بدون تغییر هیچ فایلی)")
     print("=" * 80)
@@ -480,6 +497,8 @@ def print_report(findings: list, verbose=True) -> int:
 
 
 def to_markdown(findings: list) -> str:
+    """Render the sqlite3 exception findings as a Markdown table."""
+
     lines = ["| فایل:خط | exception | عملیات داخل try | معادل PostgreSQL | تصمیم فاز E |",
              "|---|---|---|---|---|"]
     for f in findings:
@@ -498,6 +517,8 @@ def to_markdown(findings: list) -> str:
 
 
 def main(argv=None) -> int:
+    """Command-line entry point of the sqlite3 exception scan."""
+
     ap = argparse.ArgumentParser(description="فهرست except sqlite3.* — E.0.5")
     ap.add_argument("--md", default="", help="نوشتن جدول Markdown")
     ap.add_argument("--json", dest="json_path", default="", help="خروجی ماشینی")

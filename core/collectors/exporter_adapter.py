@@ -1,54 +1,67 @@
-"""تبدیلِ خروجیِ `snmp_exporter` به شکلِ collectorها — فاز G، گام G.5.3 (+ گام H.1).
+# =============================================================================
+# @file:         core/collectors/exporter_adapter.py
+# @brief:        Converts snmp_exporter output into the collector data shape (phase G.5).
+# @details:      Responsibilities: Map exporter metrics to collector fields and apply the HTTP
+#                toner fallback.
+#                Main API: apply_toner_http_fallback(), exporter_to_collector_shape(),
+#                collect_via_exporter()
+#                Side effects: network I/O
+# @dependencies: internal: core.collectors.base, core.collectors.canon, core.collectors.hp,
+#                core.exporter_client, core.time_utils
+# @notes:        None.
+# =============================================================================
+
+"""Convert the output of `snmp_exporter` to the form of collectors - phase G, step G.5.3 (+ step H.1).
 
     shape = exporter_to_collector_shape("172.16.0.5", "hp", metrics)   # metrics = dict
-    shape = collect_via_exporter(client, ip, name, brand, start)       # یا None
+    shape = collect_via_exporter(client, ip, name, brand, start) # or None
 
-خروجی همان dictی است که `core/collectors/hp.py` و `canon.py` برمی‌گردانند (همان کلیدها و
-همان مقدار‌های پیش‌فرض)، چون مسیرِ fallbackِ poller از قبل همین شکل را مصرف می‌کند و
-UI/DB با آن کار می‌کنند.
+The output is the same dict that `core/collectors/hp.py` and `canon.py` return (the same keys and
+the same default values), because the poller's fallback path already uses the same form and
+UI/DB work with it.
 
-**چه چیزی در این مسیر انجام نمی‌شود (و چرا پرچم پیش‌فرض خاموش است):** ثبتِ رویداد.
-`_counters_event`/YieldEngine/cartridge-change در کدِ collectorها زندگی می‌کنند و طبقِ
-تصمیمِ فاز `collectors/` دست‌نخورده می‌ماند؛ پس شکلِ ساخته‌شده «snapshot قابل‌نمایش» است،
-نه «چرخهٔ کاملِ poll». به همین دلیل `USE_SNMP_EXPORTER` پیش‌فرض ۰ است و تا گام G.6
-روشن‌کردنش توصیه نمی‌شود (§۹ `docs/snmp-exporter-setup.md`).
+**What this route doesn't do (and why the default flag is off):** Event logging.
+`_counters_event`/YieldEngine/cartridge-change live in the collectors code and according to
+The ``collectors/'' phase decision remains intact; So the constructed form is "displayable snapshot",
+Not the "full cycle of poll". For this reason `USE_SNMP_EXPORTER` default is 0 and until step G.6
+Enabling it is not recommended (§9 `docs/snmp-exporter-setup.md`).
 
-چهار تصمیم، با دلیل و جایگزینِ ردشده:
+Four decisions, with reasons and rejected alternatives:
 
-1. **آینه‌سازیِ فرمول‌ها، نه باز‌نویسیِ مسیرِ داده.** آستانه‌های درصدِ تونر، وضعیت
-   سینی، زنجیرهٔ جایگزینِ model/serial و شرطِ رنگ، سطر‌به‌سطر از `collect_hp`/
-   `collect_canon` گرفته شده‌اند و `si`/`ss`/`_hp_toner_key` import می‌شوند تا drift
-   ممکن نباشد. جایگزینِ ردشده: فرمولِ مستقلِ exporter — در G.6 عددِ «تفاضل» الکی می‌داد.
-   دو موردِ عمدی آینه نمی‌شوند چون از روی یک scrape شدنی نیستند: retryِ «total=0 مشکوک»
-   (نیاز به خواندنِ دوبارهٔ SNMP دارد) و شاخهٔ «کارتریج شارژی/`_used`» + سریال/صفحاتِ EWS
-   در `collect_enhanced` (کلیدهای `cartridge_*` را آینه نمی‌سازیم — بندِ «موکول» در
-   `docs/phase-h-decisions.md`). **گام H.1:** وب‌اسکرپِ تونر در این مسیر فعال است، ولی با
-   import از `core.collectors.{hp,canon}` و **صفر کپیِ اسکرپر** (تصمیمِ مالک) — اسکرپر همان‌جا
-   می‌ماند و آینه فقط صدا می‌زند. merge از تک‌درِ `_merge_scraped` می‌آید که *فقط deleg* است و
-   triggerِ هر دو برند یکی است: «SNMP عددی برای هیچ تونرِ واقعی ندارد»؛ واگراییِ آینه با
-   `collect_canon:325` (که همیشه اسکریپ می‌زند) تستِ صریح دارد: §H.1.
-2. **`ignore_values` یعنی «دستگاه این را گزارش نمی‌کند»، نه «صفر».** sentinel‌های
-   `-2`/`-3` فقط در همان متریک‌هایی دور ریخته می‌شوند که `monitoring/snmp.yml` برایششان
-   `# ignore_values:` دارد و جایشان `defaultِ` خودِ collector می‌نشیند؛ مثلاً
-   `toner_remain_2 = -2` → `level=None/status=unknown`، دقیقاً مثلِ مسیرِ مستقیم.
-   متریکِ بدونِ کامنت حتی با مقدارِ `-2` دست‌نخورده می‌ماند. فهرستِ ۳۱ متریک در
-   `IGNORED_METRICS` است و `tests/test_exporter_adapter.py` آن را با خودِ `snmp.yml`
-   مقایسه می‌کند. واگراییِ آگاهانهٔ تکمیلی: `prtInputCurrent = -2` در مسیرِ HP
-   `no_sensor` است؛ اینجا sentinel دور ریخته می‌شود و `empty` می‌شود — تستِ صریح دارد.
-3. **برندهای آینه‌سازی‌نشده → `None`.** `SUPPORTED_BRANDS = ("hp", "canon")`؛ برای
-   `toshiba`/`brother`/`sensor` دادهٔ exporter شکلِ کاملِ collector را نمی‌دهد
-   (`printer_toshiba` ۶۳ متریک دارد با پیام‌های هشدارِ متنی و سینی ۳/۶ که در
-   `printer_std` نیست) و حدس‌زدنِ بقیه یعنی دادهٔ جعلی. poller در این حالت به مسیرِ
-   مستقیم برمی‌گردد.
+1. **Formula mirroring, not data path rewriting.** Toner percentage thresholds, status
+   Tray, model/serial substitution string and color condition, line by line from `collect_hp`/
+   `collect_canon` are taken and `si`/`ss`/`_hp_toner_key` are imported to drift
+   not possible Rejected alternative: Exporter's independent formula - in G.6 gave a "difference" number.
+   Two intentional cases are not mirrored because they cannot be scraped: "total=0 suspicious" retry
+   (requires SNMP rereading) and "rechargeable cartridge/`_used`" folder + EWS serial/pages
+   In `collect_enhanced` (we don't mirror `cartridge_*' keys — the ``deferred'' clause in
+   `docs/phase-h-decisions.md`). **Step H.1:** Toner web scrap is active in this path, but with
+   import from `core.collectors.{hp,canon}` and **zero copies of scraper** (owner's decision) — scraper there
+   It stays and the mirror just calls. merge comes from the single `_merge_scraped`, which is *just deleg* and
+   The trigger for both brands is the same: "SNMP has no number for any real toner"; The divergence of the mirror with
+   `collect_canon:325` (which always scrips) has an explicit test: §H.1.
+2. **`ignore_values` means "the device will not report this", not "zero".** Sentinels
+   `-2`/`-3` are only discarded in the same metrics as `monitoring/snmp.yml` for them
+   ``# ignore_values:'' and the ``default'' of the collector sits in their place; For example
+   `toner_remain_2 = -2` → `level=None/status=unknown`, just like the direct path.
+   The uncommented metric remains intact even with the value `-2'. List of 31 metrics in
+   is `IGNORED_METRICS` and `tests/test_exporter_adapter.py` matches it with `snmp.yml` itself
+   compares Additional aware divergence: `prtInputCurrent = -2` in HP path
+   is `no_sensor`; Here the sentinel is discarded and becomes ``empty'' - it has an explicit test.
+3. **Unmirrored brands → `None`.** `SUPPORTED_BRANDS = ("hp", "canon")`; for
+   The `toshiba`/`brother`/`sensor` data exporter does not give the complete form of the collector
+   (`printer_toshiba' has 63 metrics with text warning messages and tray 3/6 that in
+   ``printer_std'' is not) and guessing the rest means fake data. poller in this case to the path
+   It comes straight back.
 
-4. **از گام H.2، `ExporterCircuitOpen` در سطحِ *debug** (بقیهٔ خطاها warning): با پرچمِ روشن
-   یک پرینترِ خاموش وگرنه هر ۶۰ ثانیه یک هشدارِ تازه می‌ساخت، چون شمارشِ شکست و «چقدر
-   صبر کنم» در خودِ کلاینت است (`core/exporter_client.py`) و `query_brand` پیش ازِ هر
-   درخواست می‌گوید «نوبت نیست». این فایل state نمی‌شمارد؛ فقط همان «صفر» را معنی می‌کند:
-   `return None` تا poller مسیرِ مستقیمِ کامل را بنویسد.
+4. **From step H.2, ``ExporterCircuitOpen'' at *debug** level (other errors are warning): with flag on
+   An otherwise off printer would generate a new alert every 60 seconds, as the failure count and "how much
+   wait" is in the client itself (`core/exporter_client.py`) and `query_brand` before each
+   The request says "no turn". This file does not count state; It only means the same as "zero":
+   `return None' to make the poller write the full direct path.
 
-هیچ عددی اینجا از سنجهٔ واقعی نیامده: fixtureها دست‌نویس‌اند و exporter در این sandbox
-اجرا نشده (`load_test_sandbox: not_attempted` در `monitoring/snmp-manifest.json`).
+No numbers here come from real metrics: the fixtures are handwritten and the exporter is in this sandbox
+Not executed (`load_test_sandbox: not_attempted` in `monitoring/snmp-manifest.json`).
 """
 from __future__ import annotations
 
@@ -65,12 +78,12 @@ from core.time_utils import utc_now_iso
 
 log = logging.getLogger("PrinterMonitor")
 
-#: برندهایی که شکلِ خروجی‌شان آینه‌سازی شده (بقیه → None تا مسیرِ مستقیم برود).
+#: Brands whose output shape is mirrored (the rest → None to go straight).
 SUPPORTED_BRANDS = ("hp", "canon")
 
-#: متریک‌هایی که در `monitoring/snmp.yml` کامنتِ `# ignore_values: ["-2", "-3"]` دارند.
-#: ۸ (printer_std) + ۳ (printer_hp) + ۲ (printer_canon) + ۲ (printer_brother)
-#: + ۱۶ (printer_toshiba) = ۳۱ — تستِ همین فایل با فایل مقایسه می‌کند.
+#: Metrics that have the comment `# ignore_values: ["-2", "-3"]` in `monitoring/snmp.yml`.
+#: 8 (printer_std) + 3 (printer_hp) + 2 (printer_canon) + 2 (printer_brother)
+#: + 16 (printer_toshiba) = 31 — the test compares the same file with the file.
 IGNORED_METRICS = frozenset({
     "toner_max_1", "toner_max_2", "toner_remain_1", "toner_remain_2",
     "tray1_cap", "tray2_cap", "tray1_level", "tray2_level",
@@ -85,9 +98,9 @@ IGNORED_METRICS = frozenset({
 IGNORED_SENTINELS = (-2.0, -3.0)
 
 
-# ── خواندنِ یک متریک از dictِ پارس‌شده ─────────────────────────────────────
+# ── Reading a metric from parsed dict ─────────────────────────────────────
 def _num(metrics: dict, name: str, default):
-    """عددِ متریک؛ `default` اگر نبود، غیرمحدود بود، یا sentinelِ ignore داشت."""
+    """metric number; If `default` was not there, it was unlimited, or had a sentinel of ignore."""
     raw = metric_value(metrics, name)
     if raw is None:
         return default
@@ -97,7 +110,7 @@ def _num(metrics: dict, name: str, default):
 
 
 def _int(metrics: dict, name: str, default):
-    """عددِ صحیح؛ `si()` خودِ collector هم همین تبدیل را می‌کند (و لاگِ خطا)."""
+    """Integer number; The `si()` of the collector itself does the same conversion (and the error log)."""
     raw = _num(metrics, name, None)
     if raw is None:
         return default
@@ -105,19 +118,19 @@ def _int(metrics: dict, name: str, default):
 
 
 def _text(metrics: dict, name: str, default: str = "") -> str:
-    """متریکِ متنی: مقدارِ لیبلِ هم‌نام (رفتارِ collector.go)، با `ss()` نرمال شده."""
+    """Text metric: the value of the label of the same name (collector.go behavior), normalized by `ss()`."""
     return ss(label_value(metrics, name, None), default)
 
 
 def _uptime_str(ticks) -> str:
-    """رشتهٔ uptimeِ collectorها: sysUptime در ۱/۱۰۰ ثانیه → «1d 01:40»."""
+    """collector uptime string: sysUptime in 1/100 second → "1d 01:40"."""
     us = int(ticks or 0) // 100
     return f"{us // 86400}d {(us % 86400) // 3600:02d}:{(us % 3600) // 60:02d}"
 
 
-# ── اجزای شکلِ خروجی ──────────────────────────────────────────────────────
+# Components of the output shape
 def _device(brand: str, metrics: dict) -> dict:
-    """زنجیرهٔ model/serial/firmware، آینهٔ `collect_hp`/`collect_canon`."""
+    """chain model/serial/firmware, mirror `collect_hp`/`collect_canon`."""
     if brand == "hp":
         model = _text(metrics, "hp_model", "")
         if not model:
@@ -144,10 +157,10 @@ def _device(brand: str, metrics: dict) -> dict:
 
 
 def _toners(brand: str, metrics: dict) -> dict:
-    """تونرها از `prtMarkerSuppliesTable`؛ شاخهٔ هر برند عیناً کدِ خودش است.
+    """toners from `prtMarkerSuppliesTable`; The branch of each brand is exactly its own code.
 
-    `printer_canon` در spec هیچ متریکِ تونری ندارد، پس برای canon هم تنها منبع همان
-    MIB استاندارد است؛ HTTP-scrapeهای `canon.py` اینجا انجام نمی‌شود (§۲ بالا).
+    `printer_canon' does not have any toner metrics in the spec, so it is the only source for canon
+    MIB is standard; ``canon.py'' HTTP-scrapes are not performed here (§2 above).
     """
     toners: dict = {}
     if brand == "hp":
@@ -194,24 +207,24 @@ def _toners(brand: str, metrics: dict) -> dict:
     return toners
 
 
-# ── H.1 — وب‌اسکرپِ تونر در مسیرِ exporter (fallback/اولویت، عیناً مثلِ collectorها) ─────
-#: timeoutهایِ legacy: `collect_canon` صریح ۳.۰ می‌دهد؛ `collect_enhanced` برای HP
-#: `_scrape_hp_toners(ip)` را با پیش‌فرضِ ۴.۰ صدا می‌زند. همین دو عدد اینجا.
+# ── H.1 — Toner web scrap in exporter path (fallback/priority, same as collectors) ─────
+#: legacy timeouts: `collect_canon` gives explicit 3.0; ``collect_enhanced'' for HP
+#: calls `_scrape_hp_toners(ip)` with a default of 4.0. These are the two numbers here.
 CANON_HTTP_TIMEOUT = 3.0
 HP_HTTP_TIMEOUT = 4.0
 
-#: چهار اسلاتِ CMYKِ canon — همان `toner_map`ِ `collect_canon` (برایِ اولویتِ HTTP).
+#: canon's four CMYK slots — same as `collect_canon''s `toner_map' (for HTTP priority).
 _CANON_TONER_MAP = ((1, "black", "Black Toner"), (2, "cyan", "Cyan Toner"),
                     (3, "magenta", "Magenta Toner"), (4, "yellow", "Yellow Toner"))
 
 
 def _toner_level_missing(toners: dict) -> bool:
-    """«هیچ عددی برای هیچ تونرِ واقعی نداریم؟» — قاعدهٔ `core/enhanced_collector.py:134`.
+    """"We don't have any numbers for any actual toners?" — rule `core/enhanced_collector.py:148`.
 
-    یک تطبیقِ لازم و عمداً: آن‌جا عددِ خام در `raw_level` است (شکلِ `collect_enhanced`) و
-    این‌جا در `level` (شکلِ `collect_hp` هیچ `raw_level` ندارد — افزودنش یعنی کلیدِ اضافه
-    در snapshot و یک سطرِ `only_in_exporter` ساختگی در مقایسهٔ G.6). «drum/opc شمرده
-    نمی‌شوند» عیناً از همان‌جا آمده: درامِ سالم نباید مانعِ fallback شود.
+    A necessary and intentional adaptation: there is the raw number in `raw_level` (the form of `collect_enhanced`) and
+    Here in `level` (the form `collect_hp` has no `raw_level` - its addition means the plus key
+    in the snapshot and a dummy `only_in_exporter' line in comparison G.6). "drum/opc counted
+    They will not" comes from the same place: a healthy drama should not prevent fallback.
     """
     toner_keys = [k for k in toners.keys() if k not in ("drum", "opc")]
     if not toner_keys:
@@ -220,12 +233,12 @@ def _toner_level_missing(toners: dict) -> bool:
 
 
 def _merge_scraped_toners(toners: dict, scraped: dict, source: str) -> int:
-    """ادغامِ نتیجهٔ وب‌اسکرپ در `toners` — قاعدهٔ `core/enhanced_collector.py:145`.
+    """Merging web scraping result into `toners` — rule `core/enhanced_collector.py:159`.
 
-    دو خطِ `raw_level` عمداً نیامده (توضیحِ بالا). باقیِ قاعده عیناً: کلیدهایِ «_» فراداده‌اند
-    و رد می‌شوند، bool شمارنده نیست، و شاخهٔ «تونرِ تازه» همان name/remaining/max و
-    آستانه‌هایِ empty/critical/low/ok را می‌سازد. شمارشِ برگشتی = تعدادِ تونرهایی که
-    تازه شدند (همان چیزی که legacy لاگ می‌کند).
+    The two `raw_level' lines are intentionally omitted (explanation above). The rest of the rule is the same: "_" keys are given
+    and are rejected, bool is not a counter, and the "new toner" branch is the same as name/remaining/max and
+    Creates empty/critical/low/ok thresholds. Return count = number of toners that
+    updated (the same thing that legacy logs).
     """
     merged = 0
     for color_key, pct in scraped.items():
@@ -257,21 +270,21 @@ def _merge_scraped_toners(toners: dict, scraped: dict, source: str) -> int:
 
 
 def _prefer_scraped_canon_toners(toners: dict, scraped: dict) -> int:
-    """اولویتِ HTTP بر SNMP، سطر‌به‌سطر از `collect_canon:329-347`.
+    """HTTP priority over SNMP, line by line from `collect_canon:329-347`.
 
-    در کد دو قاعدهٔ canon داریم: `collect_canon:325` («همیشه اسکریپ کن، HTTP برنده است»،
-    `source="http_scrape"`) و `enhanced_collector:1199` («فقط وقتی هیچ `raw_level` نداریم»،
-    `source="canon_remote_ui"`). آینه اولی را می‌گیرد، چون شکلِ این فایل از
-    `collect_canon` برگرفته است و `source` هم باید همان چیزی باشد که UI/DB برای آن شکل
-    می‌شناسند.
+    In the code we have two canon rules: `collect_canon:325` ("Always scrape, HTTP wins",
+    `source="http_scrape"`) and `enhanced_collector:1199` (``only when we have no `raw_level''');
+    `source="canon_remote_ui"`). The mirror takes the first one, because the shape of this file is from
+    `collect_canon' is derived and `source' must be the same as the UI/DB for that figure
+    they know
 
-    canon «fallback» نیست: `collect_canon` اسکریپ را **همیشه** صدا می‌زند و اگر برای کلیدی
-    عدد داشت، همان کلید را با `remaining=None`/`max=100`/`source="http_scrape"` و
-    نامِ پیش‌فرضِ برند بازنویسی می‌کند. آینه هم همین کار را می‌کند؛ قاعدهٔ «فقط وقتی SNMP
-    ناقص است» برای canon واگرایی می‌ساخت — ولی برنامهٔ گام H.1 همان قاعدهٔ یکنواخت را خواست،
-    پس آینه اول `_toner_level_missing` را می‌پرسد و *بعد* این بازنویسی را می‌کند؛ تفاوتِ
-    باقی‌مانده (کی اسکریپ می‌زنیم) در `apply_toner_http_fallback` و `docs/phase-h-decisions.md`
-    §H.1 ثبت و با تست قفل شده است.
+    canon is not a "fallback": `collect_canon' will **always** call the script and if for a key
+    number, same key with `remaining=None`/`max=100`/`source="http_scrape"` and
+    Overwrites the default brand name. The mirror does the same thing; The "only when SNMP
+    is incomplete" would diverge for the canon — but the H.1 step program called for the same uniform rule,
+    So the mirror first asks `_toner_level_missing' and *then* does this rewriting; The difference
+    Remaining (when we script) in `apply_toner_http_fallback` and `docs/phase-h-decisions.md`
+    §H.1 is registered and locked with testing.
     """
     merged = 0
     for _idx, key, default_name in _CANON_TONER_MAP:
@@ -295,17 +308,17 @@ def _prefer_scraped_canon_toners(toners: dict, scraped: dict) -> int:
 
 
 def _merge_scraped(toners: dict, brand: str, scraped: dict) -> int:
-    """تکِ درِ merge در این فایل — **فقط deleg می‌کند** (تصمیمِ گام H.1، بندِ ۱-۳).
+    """The only merge in this file — **only delegates** (decision of step H.1, paragraph 1-3).
 
-    `collect_via_exporter`/`apply_toner_http_fallback` هیچ‌وقت مستقیمِ `_merge_scraped_toners`
-    یا `_prefer_scraped_canon_toners` را صدا نمی‌زنند؛ انتخابِ قاعده این‌جا و فقط با نگاه‌کردن
-    به `brand` انجام می‌شود. دو قاعدهٔ زیر همچنان **کپیِ وفادار**‌اند (چرا کپی و نه import:
-    `docs/phase-h-decisions.md` §H.1) و متنشان با
-    `tests/test_exporter_adapter.py::test_merge_functions_are_faithful_copies` قفل شده.
+    `collect_via_exporter`/`apply_toner_http_fallback` never direct `_merge_scraped_toners`
+    or not calling `_prefer_scraped_canon_toners`; Choosing the rule here and just by looking
+    It is done to ``brand''. The following two rules are still **faithful copy** (why copy and not import):
+    `docs/phase-h-decisions.md` §H.1) and their text with
+    Locked `tests/test_exporter_adapter.py::test_merge_functions_are_faithful_copies'.
 
-    HP: پرکردنِ فیلدهایِ خالی + نردبانِ `0/10/25` (`source="hp_web"`).
-    canon: جاگذاریِ رکوردِ کاملِ HTTP (`remaining=None`/`max=100`/`source="http_scrape"`)،
-    که سطر‌به‌سطر `collect_canon:329-347` است.
+    HP: Filling empty fields + ladder of `0/10/25` (`source="hp_web"`).
+    canon: embed full HTTP record (`remaining=None`/`max=100`/`source="http_scrape"`),
+    which is line by line `collect_canon:329-347`.
     """
     if brand == "canon":
         return _prefer_scraped_canon_toners(toners, scraped)
@@ -313,27 +326,27 @@ def _merge_scraped(toners: dict, brand: str, scraped: dict) -> int:
 
 
 def apply_toner_http_fallback(shape: dict, brand: str, ip: str) -> int:
-    """تکمیلِ `shape["toners"]` با وب‌اسکرپِ خودِ دستگاه. تعدادِ تازه‌شده‌ها را برمی‌گرداند.
+    """Completion of `shape["toners"]` with the device's own web scrap. Returns the number of updates.
 
-    - **کجا صدا زده می‌شود:** فقط `collect_via_exporter` (مسیرِ runtime). خودِ
-      `exporter_to_collector_shape` خالص می‌ماند — وگرنه `tools/compare_snmp_sources.py`
-      که همان تابع را برای مقایسهٔ آفلاین مصرف می‌کند، ناگهانی شبکه می‌زد.
-    - **هیچ استثنایی بیرون نمی‌رود:** legacy هم همین‌جا `try/except` دارد (خطای وب فقط
-      debug است و اعدادِ SNMP سرِ جایشان می‌مانند).
-    - **merge:** فقط از راهِ `_merge_scraped(...)`؛ این تابع چیزی را بازنویسی نمی‌کند.
-    - **trigger، هر دو برند:** فقط وقتی `_toner_level_missing(toners)` — قاعدهٔ یکنواختِ
-      برنامهٔ H.1. `collect_canon` اما اسکریپ را **همیشه** می‌زند (`canon.py:325`)، پس روی
-      canonِ سالم دو مسیر فرق می‌کنند؛ واگرایی پین‌شده:
+    - **Where called:** Only `collect_via_exporter` (runtime path). self
+      `exporter_to_collector_shape` remains pure — otherwise `tools/compare_snmp_sources.py`
+      which uses the same function for offline comparison, it suddenly hit the network.
+    - **no exception thrown:** legacy also has `try/except' here (web error only
+      is debug and the SNMP numbers remain in place).
+    - **merge:** only through `_merge_scraped(...)`; This function does not overwrite anything.
+    - **trigger, both brands:** only when `_toner_level_missing(toners)` — uniform rule
+      Program H.1. ``collect_canon`' but it **always** hits the script (`canon.py:335`), so on
+      The healthy canon has two different paths; Pinned Divergence:
       `test_canon_divergence_from_the_collector_is_pinned`.
-    - `_used`/سریالِ EWS آینه نمی‌شود (کلیدهایش در قراردادِ ۱۲تاییِ G.5 نیست — TD-017) و
-      mirrorِ toshiba/brother هم TD-018 است. چیزی که بینِ دو برند فرق می‌کند *شکلِ
-      بازنویسی* است: canon رکوردِ HTTP را جاگذاری می‌کند، HP فیلدهایِ خالی را پر می‌کند.
+    - EWS `_used`/serial is not mirrored (its keys are not in G.5 12-bit contract - TD-017) and
+      Toshiba/Brother's mirror is also TD-018. The thing that differs between the two brands is the shape
+      Rewrite* is: canon embeds the HTTP record, HP fills in the empty fields.
     """
     toners = shape.get("toners")
     if not isinstance(toners, dict):
         return 0
-    if not _toner_level_missing(toners):    # قاعدهٔ یکنواختِ H.1: هر دو برند فقط وقتی SNMP
-        return 0                            # عددی برای هیچ تونرِ واقعی ندارد (برنامهٔ مالک)
+    if not _toner_level_missing(toners):    # H.1 uniform rule: both brands only when SNMP
+        return 0                            # No number for any actual toner (proprietary program)
     try:
         if brand == "canon":
             scraped = _scrape_canon_toners(ip, timeout=CANON_HTTP_TIMEOUT)
@@ -342,13 +355,13 @@ def apply_toner_http_fallback(shape: dict, brand: str, ip: str) -> int:
         if not scraped:
             return 0
         return _merge_scraped(toners, brand, scraped)
-    except Exception as exc:            # همان وسواسِ legacy: وب هر چه خواست، snapshot نمی‌میرد
+    except Exception as exc:            # The same obsession with legacy: no matter what the web wants, snapshot will not die
         log.debug("exporter: وب‌اسکرپِ تونرِ %s انجام نشد (%s) — اعدادِ SNMP دست‌نخورده", ip, exc)
         return 0
 
 
 def _trays(brand: str, metrics: dict) -> list[dict]:
-    """سینی‌ها از `prtInputTable`؛ برچسبِ پیش‌فرضِ هر برند از کدِ خودش."""
+    """trays from `prtInputTable`; The default label of each brand from its own code."""
     slots = ((1, "Tray 1"), (2, "Tray 2")) if brand == "hp" else ((1, "Bypass"), (2, "Tray 1"))
     trays = []
     for idx, label in slots:
@@ -376,21 +389,23 @@ def _trays(brand: str, metrics: dict) -> list[dict]:
 
 
 def _alerts(metrics: dict) -> list[dict]:
-    """تنها هشداری که spec فعلی می‌دهد: درِ باز (`prtCoverStatus …1.1`).
+    """The only warning the current spec gives: open door (`prtCoverStatus …1.1`).
 
-    `printer_canon` هم متریکِ در ندارد، پس همین قاعدهٔ مشترک برای هر دو برند.
+    `printer_canon' also has no metric, so the same rule is common for both brands.
     """
     cover = _int(metrics, "cover_status", 4)
     return [] if cover == 4 else [{"message": "درب پرینتر باز است", "code": cover}]
 
 
 def _counters(brand: str, metrics: dict, toners: dict) -> dict:
+    """Build the counter values for a brand from exporter metrics and toner values."""
     if brand == "hp":
         return _counters_hp(metrics, toners)
     return _counters_canon(metrics)
 
 
 def _counters_hp(metrics: dict, toners: dict) -> dict:
+    """Build HP counter values from exporter metrics."""
     total = _int(metrics, "bro_total", 0)
     color_print = _int(metrics, "hp_print_color", -1)
     copy_mono = _int(metrics, "hp_copy_mono", -1)
@@ -415,6 +430,7 @@ def _counters_hp(metrics: dict, toners: dict) -> dict:
 
 
 def _counters_canon(metrics: dict) -> dict:
+    """Build Canon counter values from exporter metrics."""
     total_std = _int(metrics, "bro_total", -1)
     color_std = _int(metrics, "bro_color", -1)
     bw_std = _int(metrics, "bw_std", -1)
@@ -428,10 +444,10 @@ def _counters_canon(metrics: dict) -> dict:
     alt_print = _int(metrics, "alt_print", -1)
 
     if color_std >= 0 and total_std >= 0 and color_std >= total_std:
-        color_std = -1  # canon.py: رنگ ≥ کل ⇒ دادهٔ رنگ بی‌اعتبار
+        color_std = -1  # canon.py: color ≥ total ⇒ invalid color data
     is_mf = total_mf >= 0 or alt_total >= 0
     if not is_mf and "MF" in _text(metrics, "canon_model", "").upper():
-        is_mf = True  # canon.py: تشخیصِ MF از نامِ مدل وقتی شمارندهٔ MF ندارد
+        is_mf = True  # canon.py: Detect MF from model name when it has no MF counter
 
     if is_mf:
         if total_mf < 0 and alt_total >= 0:
@@ -479,13 +495,13 @@ def _counters_canon(metrics: dict) -> dict:
     }
 
 
-# ── دروازهٔ «دادهٔ معنادار هست؟» ──────────────────────────────────────────
+# ── Gate "Is the data meaningful?" ───────────────────────────┄
 _ESSENTIAL = ("bro_total", "sys_uptime", "sys_descr", "model_mib")
 _VENDOR_MODEL = {"hp": ("hp_model", "hp_print_color"), "canon": ("canon_model", "canon_total")}
 
 
 def _has_signal(brand: str, metrics: dict) -> bool:
-    """اگر نه متریکِ استاندارد باشد و نه vendor، پاسخِ exporter بی‌فایده است."""
+    """If it is neither a standard metric nor a vendor, the exporter's response is useless."""
     if not metrics:
         return False
     names = set(metrics)
@@ -494,12 +510,12 @@ def _has_signal(brand: str, metrics: dict) -> bool:
 
 def exporter_to_collector_shape(ip: str, brand: str, metrics: dict, *,
                                 name: str = "", start: float | None = None) -> dict | None:
-    """`dict` با شکلِ `collect_{hp,canon}`، یا `None` اگر قابل‌ساخت نباشد.
+    """`dict` of the form `collect_{hp,canon}`, or `None` if not constructable.
 
-    کلیدهای خروجی دقیقاً کلیدهایِ returnِ `collect_hp` است (`ip`, `name`, `brand`,
+    The output keys are exactly the return keys of `collect_hp` (`ip`, `name`, `brand`,
     `online`, `last_poll`, `poll_ms`, `device`, `counters`, `paper_sizes`, `trays`,
-    `toners`, `alerts`) — بدونِ کلیدِ جدید، تا مصرف‌کننده‌ها چیزی برای «حالتِ exporter»
-    لازم نداشته باشند.
+    `toners`, `alerts`) — no new key, so consumers have something for ``exporter mode''
+    do not have to
     """
     brand = (brand or "").strip().lower()
     if brand not in SUPPORTED_BRANDS or not _has_signal(brand, metrics):
@@ -522,23 +538,23 @@ def exporter_to_collector_shape(ip: str, brand: str, metrics: dict, *,
     }
 
 
-#: برندهایِ آینه‌سازی‌نشده‌ای که یک‌بار درباره‌شان هشدار داده‌ایم — برایِ هر چرخهٔ poll یک
-#: هشدارِ تکراری خبرِ تازه‌ای ندارد (مسیرِ legacy برای این برندها سالم است) و سیلِ لاگ هم
-#: می‌سازد؛ H.2 همین‌جا stateِ per-device را می‌گیرد.
+#: Non-mirrored brands we've warned about once — one per poll cycle
+#: Repeated warning is not new news (the legacy route is healthy for these brands) and the flood of logs.
+#: makes; H.2 takes the per-device state here.
 _WARNED_UNSUPPORTED: set = set()
 
 
 def collect_via_exporter(client: ExporterClient, ip: str, name: str, brand: str,
                          start: float | None = None, auth: str | None = None) -> dict | None:
-    """ماژول‌های برند را می‌خواند و شکلِ collector را می‌سازد. `None` ⇒ «به مسیرِ مستقیم برگرد».
+    """It reads the modules of the brand and creates the shape of the collector. ``None'' ⇒ "Go back to the direct path".
 
-    هیچ استثنایی بیرون نمی‌رود: `ExporterError` (و هر خطای غیرمنتظرهٔ دیگر) به `None`
-    تبدیل و لاگ می‌شود، چون exporter در این فاز یک **امکان** است نه یک وابستگیِ poll.
+    No exception is thrown: `ExporterError` (and any other unexpected errors) to `None`
+    It is converted and logged, because the exporter is a **possibility** in this phase, not a dependency of poll.
     """
     norm = (brand or "").strip().lower()
     if norm not in SUPPORTED_BRANDS:
         key = (norm or "?", ip)
-        if key not in _WARNED_UNSUPPORTED:   # یک هشدار به ازای (brand, ip) — نه هر ۶۰ ثانیه
+        if key not in _WARNED_UNSUPPORTED:   # One alert per (brand, ip) — not every 60 seconds
             _WARNED_UNSUPPORTED.add(key)
             log.warning("exporter: برندِ «%s» آینه‌سازی نشده ⇒ هیچ کوئری‌ای به exporter "
                         "نمی‌رود و مسیرِ مستقیم می‌نویسد (محدودهٔ H.1 = hp/canon؛ "
@@ -546,13 +562,13 @@ def collect_via_exporter(client: ExporterClient, ip: str, name: str, brand: str,
         return None
     try:
         metrics = client.query_brand(ip, brand, auth or DEFAULT_AUTH)
-    except ExporterCircuitOpen as exc:      # گام H.2 — «نوبتِ ما نیست» نه «خطا»: بی‌سروصدا
+    except ExporterCircuitOpen as exc:      # Step H.2 — "It's not our turn" not "fault": quietly
         log.debug("exporter: %s در backoff است (%s) — این چرخه مسیرِ مستقیم می‌نویسد", ip, exc)
         return None
     except ExporterError as exc:
         log.warning("exporter: خواندنِ %s نشد (%s) — مسیرِ مستقیم", ip, exc)
         return None
-    except Exception as exc:  # هر چیزِ غیرمنتظره‌ای؛ poller نباید بمیرد
+    except Exception as exc:  # anything unexpected; poller must not die
         log.warning("exporter: خطای غیرمنتظره برای %s: %s — مسیرِ مستقیم", ip, exc)
         return None
     shape = exporter_to_collector_shape(ip, brand, metrics, name=name, start=start)

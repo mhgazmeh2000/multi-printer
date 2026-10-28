@@ -1,35 +1,45 @@
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tests/test_collation_ordering.py
+# @brief:        Tests text ordering equivalence between SQLite and PostgreSQL (E.6.3).
+# @details:      Responsibilities: Check collation-sensitive ordering on both backends.
+#                Main API: SqliteBaselineOrderTests, PostgresOrderingEquivalenceTests
+#                Side effects: database access, file I/O
+# @dependencies: external: psycopg
+# @notes:        Reads environment variables: PG_DSN. Can be run directly as a script.
+# =============================================================================
+
 r"""
-تست‌های E.6.3 — هم‌ارزی ترتیب متن: `C` روی PG در برابر `BINARY` روی SQLite.
+Tests E.6.3 — Text Order Equivalence: `C' on PG vs. `BINARY' on SQLite.
 
-پیشینۀ تصمیم (شواهد، نه حدس)
+Background to the decision (evidence, not guesswork)
 ----------------------------
-سؤال فاز E این بود که آیا ترتیب‌دهی PG باید از `C` (مقایسهٔ بایت/کدپوینت) به
-`fa-IR-x-icu` (الفبای فارسی) تغییر کند. اندازه‌گیری روی همین سرور (PG 16.15، ICU
-ساخته‌شده، `datcollate = C`) با ۱۸ نام واقعیِ فارسی/لاتین/رقمی:
+The phase E question was whether PG ordering should be changed from `C' (byte/codepoint comparison) to
+``fa-IR-x-icu'' (Persian alphabet) should be changed. Measured on the same server (PG 16.15, ICU
+built, `datcollate = C`) with 18 real Farsi/Latin/numerical names:
 
-* **۱۵ ردیف از ۱۸** جای خود را عوض می‌کردند ⇒ تفاوت «ناچیز» **نیست**؛
-* زیر `C` ترتیب دقیقاً همان `sorted()` پایتون و `COLLATE BINARY` نتایج SQLite است
-  (این تست همان را قفل می‌کند)؛
-* زیر `fa-IR-x-icu` رقم فارسی کنار رقم لاتین می‌آید (`۲ستاره` از آخر به دوم) و
-  `admin office` **پیش از** `Admin Office` — یعنی حتی حالت لاتین هم جابه‌جا می‌شود؛
-* `=` همچنان به‌بزرگی‌حساس می‌ماند (`'ADMIN OFFICE' = 'admin office'` زیر هر دو
-  collation نادرست است) ⇒ ICU جای حل مسئلۀ NOCASE نیست.
+* **15 rows out of 18** were changing their places ⇒ **not insignificant** difference;
+* Under `C', the order is exactly the same as Python's `sorted()' and SQLite's `COLLATE BINARY' results
+  (this test locks the same);
+* Under ``fa-IR-x-icu'' the Persian numeral comes next to the Latin numeral (`2 stars' from the last to the second) and
+  ``admin office'' **before** ``Admin Office'' — means even the Latin mode is moved;
+* `=` remains case sensitive (``ADMIN OFFICE'' = 'admin office'` under both
+  collation is incorrect) ⇒ ICU is not the place to solve the NOCASE problem.
 
-تصمیم: **`C` می‌ماند.**
-دلیل، «کم‌اثر بودن تفاوت» نیست (اثر زیاد است)؛ دلیل این است که در دورۀ موازی و
-rollback، «ترتیب یکسان روی دو backend» از «ترتیب زیباتر روی یک backend» مهم‌تر است
-— و SQLite ICU ندارد (`PRAGMA compile_options` هیچ گزینهٔ ICU ندارد ⇒ راهِ هم‌سو
-کردن SQLite با ICU وجود ندارد). هرچند ORDER BYهای متنی برنامه فقط روی `printer_ip`
-و `username` (ASCII) و `lower(username)` است و ترتیب فارسیِ نمایشی در UI با
-`localeCompare` مرورگر انجام می‌شود، پس تغییر collation سود کاربریِ فوری هم ندارد.
+Decision: **`C` remains.**
+The reason is not "the effect of the difference is small" (the effect is large); The reason is that in the parallel period and
+rollback, "same layout on two backends" is more important than "prettier layout on one backend".
+— and SQLite has no ICU (`PRAGMA compile_options' has no ICU option ⇒ same way
+SQLite does not exist with ICU). However, the program's textual ORDER BYs only on `printer_ip'
+and `username` (ASCII) and `lower(username)`, and the display Persian order in the UI with
+``localeCompare'' is done by the browser, so changing the collation does not have any immediate user benefit.
 
-اگر روزی ترتیب الفبای فارسی در SQL لازم شد: لازم نیست کل schema عوض شود — همان
-per-query ``ORDER BY col COLLATE "fa-IR-x-icu"`` کافی است (یا this-index با همان
-collation)؛ این ردیف به‌عنوان TD-013 در docs/tech-debt.md ثبت شده است.
+If one day the order of Persian alphabet in SQL becomes necessary: it is not necessary to change the whole schema - the same
+per-query ``ORDER BY col COLLATE "fa-IR-x-icu"'' is sufficient (or this-index with the same
+collation); This row is registered as TD-013 at docs/tech-debt.md.
 
-نکتهٔ ایزولاسیون: همه‌چیز روی temp table در connection خودش می‌گذارد؛ نه schema
-برنامه دست می‌خورد و نه `logs.db`.
+Isolation note: everything is placed on the temp table in its own connection; Not schema
+The application crashes and not `logs.db`.
 """
 import os
 import sqlite3
@@ -40,8 +50,8 @@ FIXTURE = [
     "2ستاره", "۲ستاره", "چاپگر شبکه", "بیضی پرینتر", "گسترش اداری",
 ]
 
-# ترتیب کدپوینتی = «انتظار»؛ اگر کسی fixture را عوض کند، هر دو فهرست باید با هم
-# به‌روز شوند (این عمداً duplicate است تا تست، ادعای مستقل داشته باشد).
+# codepoint order = "expect"; If someone changes the fixture, both lists should be together
+# be updated (this is a duplicate on purpose so that the test has an independent claim).
 EXPECTED_CODEPOINT_ORDER = [
     "2ستاره", "Admin Office", "admin office", "بیضی پرینتر", "ثابت کار",
     "رضا محمدی", "پارسه چاپگر", "چاپگر شبکه", "گسترش اداری", "۲ستاره",
@@ -51,11 +61,13 @@ _PG_DSN = (os.getenv("PG_DSN", "") or "").strip()
 
 
 def _pg_connect():
+    """Helper: pg connect."""
     import psycopg
     return psycopg.connect(_PG_DSN, connect_timeout=3)
 
 
 def _pg_available():
+    """Helper: pg available."""
     if not _PG_DSN:
         return False, "PG_DSN ست نشده ⇒ قیاس ترتیب روی PG انجام نشد"
     try:
@@ -72,7 +84,7 @@ _HAS_ICU_FA = None
 
 
 def _icu_fa_available():
-    """`fa-IR-x-icu` روی این سرور هست؟ (ICU در build قدیمی PGها نیست.)"""
+    """Is `fa-IR-x-icu` on this server? (ICU is not in the old build of PGs.)"""
     global _HAS_ICU_FA
     if _HAS_ICU_FA is None:
         try:
@@ -86,9 +98,10 @@ def _icu_fa_available():
 
 
 class SqliteBaselineOrderTests(unittest.TestCase):
-    """سمت SQLite: BINARY همان کدپوینت است — این لنگرِ تصمیم است، نه ادعای جدید."""
+    """The SQLite side: BINARY is the codepoint — it's the decision anchor, not the new assertion."""
 
     def test_binary_order_is_codepoint_order(self):
+        """Verifies binary order is codepoint order."""
         self.assertEqual(EXPECTED_CODEPOINT_ORDER, sorted(FIXTURE),
                          "فهرست انتظار باید همان sort پایتون (کدپوینت) باشد")
         conn = sqlite3.connect(":memory:")
@@ -102,8 +115,8 @@ class SqliteBaselineOrderTests(unittest.TestCase):
 
     def test_sqlite_build_has_no_icu(self):
         """
-        اگر روزی SQLite با ICU ساخته شد، «C بماند» بازبینی می‌شود؛ این تست زنگِ
-        تغییر است (اگر ICU بیاید، ترتیب را می‌توان در دو backend هم‌سان کرد).
+        If SQLite is ever built with ICU, "Stay C" will be revised; This is the bell test
+        Change is (if ICU comes, order can be matched in two backends).
         """
         conn = sqlite3.connect(":memory:")
         try:
@@ -116,11 +129,12 @@ class SqliteBaselineOrderTests(unittest.TestCase):
 
 @unittest.skipUnless(_PG_OK, _PG_SKIP or "")
 class PostgresOrderingEquivalenceTests(unittest.TestCase):
-    """PG با collation پیش‌فرضش (`C`) باید دقیقاً همان ترتیب SQLite را بدهد."""
+    """PG with its default collation (`C`) should give exactly the same collation as SQLite."""
 
     def _order(self, conn, expr):
-        # `executemany` متد *cursor* است (روی Connection در psycopg 3 نیست) — و expr
-        # از همین فایل می‌آید، نه ورودی کاربر.
+        # `executemany' is the *cursor* method (not on Connection in psycopg 3) — and expr
+        # It comes from this file, not user input.
+        """Helper: order."""
         with conn.cursor() as cur:
             cur.execute("CREATE TEMP TABLE coll_probe (s text) ON COMMIT DROP")
             cur.executemany("INSERT INTO coll_probe VALUES (%s)", [(x,) for x in FIXTURE])
@@ -128,7 +142,7 @@ class PostgresOrderingEquivalenceTests(unittest.TestCase):
             return [r[0] for r in cur.fetchall()]
 
     def test_database_collation_is_c(self):
-        """`C` بودنِ collation دیتابیس، مبنای این تصمیم است — پس قفل می‌شود."""
+        """The fact that the database collation is `C' is the basis for this decision - so it locks."""
         with _pg_connect() as conn:
             row = conn.execute(
                 "SELECT datcollate FROM pg_database WHERE datname = current_database()").fetchone()
@@ -136,6 +150,7 @@ class PostgresOrderingEquivalenceTests(unittest.TestCase):
                          "collation دیتابیس عوض شده؛ ترتیب متن (و این تست) باید بازبینی شود")
 
     def test_default_order_matches_sqlite_binary(self):
+        """Verifies default order matches sqlite binary."""
         with _pg_connect() as conn:
             self.assertEqual(self._order(conn, "s"), EXPECTED_CODEPOINT_ORDER,
                              "ترتیب پیش‌فرض PG از SQLite BINARY جدا شد — واگرایی خاموش")
@@ -143,9 +158,9 @@ class PostgresOrderingEquivalenceTests(unittest.TestCase):
     @unittest.skipUnless(_icu_fa_available(), "collation fa-IR-x-icu روی این سرور نیست")
     def test_icu_fa_order_would_diverge_and_is_rejected(self):
         """
-        سندی که «چرا ICU نه»: دو جابه‌جاییِ مشخص را اندازه می‌گیرد، تا اگر روزی
-        کسی تصمیم را با تغییر collation کلی برگرداند، بداند دقیقاً چه چیزی عوض
-        می‌شود (این تست ادعا نمی‌کند ICU بد است؛ می‌گوید **واگرا** است).
+        A document that “Why not ICU” measures two specific shifts, if ever
+        Someone reverted the decision by changing the overall collation, know what exactly changed
+        (This test does not claim that ICU is bad; it says that it is **divergent**).
         """
         with _pg_connect() as conn:
             fa = self._order(conn, 's COLLATE "fa-IR-x-icu"')
@@ -161,9 +176,9 @@ class PostgresOrderingEquivalenceTests(unittest.TestCase):
         self.assertLess(pos["۲ستاره"], pos["2ستاره"] + 2,
                         "رقم فارسی زیر ICU کنار رقم لاتین می‌نشیند، نه آخرِ فهرست")
 
-    # ORDER BY روی ستون متنی: امروز فقط شناسه‌های ASCII (IP/username). این فهرست
-    # «شاهد» است، نه تأیید: اگر محلِ تازه‌ای اضافه شود، تست قرمز می‌شود تا
-    # نویسنده تصمیم E.6.3 را ببیند (برای ترتیب فارسی باید COLLATE صریح گرفت).
+    # ORDER BY on text column: Today only ASCII identifiers (IP/username). This list
+    # It is a "witness", not a confirmation: if a new location is added, the test turns red
+    # Author should see decision E.6.3 (COLLATE should be explicit for Persian order).
     ALLOWED_TEXT_ORDER_SITES = {
         "core/database.py": "ORDER BY printer_ip — شناسهٔ ASCII",
         "core/yield_engine.py": "ORDER BY printer_ip, color — شناسهٔ ASCII",
@@ -173,6 +188,7 @@ class PostgresOrderingEquivalenceTests(unittest.TestCase):
     TEXT_TOKENS = ("USERNAME", "PRINTER_IP", "IP_COL", "NAME", "TITLE")
 
     def test_text_order_by_sites_are_only_ascii_identifiers(self):
+        """Verifies text order by sites are only ascii identifiers."""
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         found = set()
         for pkg in ("core", "web"):
@@ -189,13 +205,15 @@ class PostgresOrderingEquivalenceTests(unittest.TestCase):
                             tail = up.split("ORDER BY", 1)[1]
                             if any(tok in tail for tok in self.TEXT_TOKENS) \
                                     and "COLLATE" not in tail:
-                                found.add(os.path.relpath(path, root))
+                                # The separator must be the same as the ALLOWED_TEXT_ORDER_SITES keys
+                                # (``/``); On Windows ``os.path.relpath'' gives a backslash.
+                                found.add(os.path.relpath(path, root).replace(os.sep, "/"))
         self.assertEqual(found, set(self.ALLOWED_TEXT_ORDER_SITES),
                          "محل تازه‌ای ORDER BY متنی دارد؛ برای ترتیب عمدی باید "
                          "COLLATE صریح بگیری یا تصمیم E.6.3 را بازبینی کنی")
 
     def test_allowed_sites_are_still_the_documented_ones(self):
-        """اگر یکی از این چهار محل حذف/بازنویسی شد، فهرست بالا هم باید به‌روز شود."""
+        """If one of these four locations is deleted/overwritten, the list above should also be updated."""
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         for rel, _reason in self.ALLOWED_TEXT_ORDER_SITES.items():
             self.assertTrue(os.path.exists(os.path.join(root, rel)), f"{rel} دیگر نیست")

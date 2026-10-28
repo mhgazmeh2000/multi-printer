@@ -1,23 +1,36 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tools/migrate_sqlite_to_pg.py
+# @brief:        Command-line tool that migrates data from SQLite to PostgreSQL (phase F).
+# @details:      Responsibilities: Plan, convert and copy each table, then verify the result.
+#                Main API: TablePlan, MigrationStats, resolve_pg_dsn(), connect_sqlite_ro(),
+#                connect_pg(), get_sqlite_tables(), get_sqlite_table_ddl(),
+#                detect_sqlite_generated_columns() (+16 more)
+#                Side effects: database access
+# @dependencies: external: psycopg
+# @notes:        The source SQLite file is opened read-only. Run with --dry-run first. Reads
+#                environment variables: ALEMBIC_DB_URL, PG_DSN. Can be run directly as a script.
+# =============================================================================
+
 """
-tools/migrate_sqlite_to_pg.py — ابزار مستقل خط فرمان برای مهاجرت داده از SQLite به PostgreSQL (فاز F).
+tools/migrate_sqlite_to_pg.py — command-line standalone tool to migrate data from SQLite to PostgreSQL (Phase F).
 
-چارچوب معماری و ایمنی:
+Architecture and safety framework:
 --------------------
-۱. منبع SQLite به صورت کاملاً فقط-خواندنی با URI باز می‌شود (mode=ro&immutable=1) تا هیچ قفل یا تغییری رخ ندهد.
-۲. استراتژی هیبرید: جداول کلان‌داده (> 10000 سطر) با COPY FROM STDIN و جداول تنظیمی با Batch Insert (1000 سطر).
-۳. همگام‌سازی توالی‌ها (Identity Sequence Sync): اجرای اجباری setval برای هر ۷ جدول دارای IDENTITY (رفع ریسک R-1).
-۴. بازگشت خودکار (Rollback): در صورت بروز خطای بحرانی، اجرای سریع TRUNCATE ... RESTART IDENTITY CASCADE.
-۵. اعتبارسنجی نوع‌ها: تبدیل بولی‌ها (bool)، اعتبارسنجی زمان UTC-Z، و اعتبارسنجی فیلدهای JSON.
-۶. جدول alembic_version در SQLite هرگز به PostgreSQL منتقل نمی‌شود.
+1. The SQLite resource is opened as strictly read-only with the URI (mode=ro&immutable=1) so that no locks or changes occur.
+2. Hybrid strategy: big data tables (> 10000 rows) with COPY FROM STDIN and regular tables with Batch Insert (1000 rows).
+3. Synchronization of sequences (Identity Sequence Sync): mandatory execution of setval for all 7 tables with IDENTITY (R-1 risk removal).
+4. Automatic rollback: in case of a critical error, quick TRUNCATE... RESTART IDENTITY CASCADE.
+5. Type validation: Bool conversion, UTC-Z time validation, and JSON field validation.
+6. The alembic_version table in SQLite is never passed to PostgreSQL.
 
-کدهای خروج (Exit Codes):
+Exit Codes:
 ------------------------
-0 = success (مهاجرت با موفقیت کامل انجام شد)
-1 = partial failure (برخی سطرها به دلیل فرمت نامعتبر رد شدند — skip)
-2 = fatal (خطای بحرانی رخ داد و Rollback کامل انجام شد)
-3 = --dry-run only (فقط شبیه‌سازی و شمارش بدون هیچ تغییری)
+0 = success (the migration was completed successfully)
+1 = partial failure (some lines were rejected due to invalid format — skip)
+2 = fatal (a critical error occurred and a full rollback was performed)
+3 = --dry-run only (only simulation and counting without any changes)
 """
 
 from __future__ import annotations
@@ -43,17 +56,17 @@ except ImportError:
 
 log = logging.getLogger("migrate_sqlite_to_pg")
 
-# ── کدهای خروج ──────────────────────────────────────────────────
+# Exit Codes
 EXIT_SUCCESS = 0
 EXIT_PARTIAL = 1
 EXIT_FATAL = 2
 EXIT_DRY_RUN = 3
 
-# ── آستانه سوئیچ به استراتژی COPY ──────────────────────────────
+# Switch threshold to COPY strategy
 COPY_THRESHOLD = 10000
 BATCH_SIZE = 1000
 
-# ── جداول دارای ستون IDENTITY (برگرفته از migration 0003) ───────
+# ── Tables with IDENTITY column (taken from migration 0003) ───────
 IDENTITY_TABLES: Tuple[str, ...] = (
     "logs",
     "toner_history",
@@ -64,7 +77,7 @@ IDENTITY_TABLES: Tuple[str, ...] = (
     "toner_snapshots_v2",
 )
 
-# ── ستون‌های بولی (برگرفته از migration 0002) ───────────────────
+# ── boolean columns (taken from migration 0002) ────────────────────
 BOOLEAN_COLUMNS: Set[Tuple[str, str]] = {
     ("users", "is_verified"),
     ("users", "email_verified"),
@@ -73,12 +86,12 @@ BOOLEAN_COLUMNS: Set[Tuple[str, str]] = {
     ("security_events", "success"),
 }
 
-# ── ستون‌های JSONB در PostgreSQL (برگرفته از migration 0004) ────
+# ── JSONB columns in PostgreSQL (taken from migration 0004) ────
 JSONB_COLUMNS: Set[Tuple[str, str]] = {
     ("logs", "details"),
 }
 
-# ── ترتیب مهاجرت جداول با رعایت وابستگی‌ها (FK-safe) ─────────────
+# ── Migration order of tables respecting dependencies (FK-safe) ──────────────
 TABLE_MIGRATION_ORDER: Tuple[str, ...] = (
     "users",
     "meta",
@@ -93,23 +106,25 @@ TABLE_MIGRATION_ORDER: Tuple[str, ...] = (
     "security_events",
 )
 
-# ── جداول معاف از مهاجرت ───────────────────────────────────────
+# Tables exempted from migration
 EXCLUDED_TABLES: Set[str] = {
     "alembic_version",
     "sqlite_sequence",
     "sqlite_stat1",
 }
 
-# ── شمارنده‌ی سراسری timestampهای بدون Z ──────────────────────
+# ── Global counter of timestamps without Z ─────────────────────────
 _naive_ts_counter: int = 0
 
-# ── الگوهای اعتبارسنجی زمان در جدول logs ───────────────────────
+# Time validation patterns in the logs table
 LOG_TS_WITH_Z_REGEX = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$")
 LOG_TS_NAIVE_REGEX = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?$")
 
 
 @dataclasses.dataclass
 class TablePlan:
+    """Migration plan of one table (columns, types and row counts)."""
+
     name: str
     sqlite_rows: int
     pg_rows: int
@@ -120,6 +135,8 @@ class TablePlan:
 
 @dataclasses.dataclass
 class MigrationStats:
+    """Counters collected during a migration run."""
+
     table: str
     read_count: int = 0
     inserted_count: int = 0
@@ -129,7 +146,7 @@ class MigrationStats:
 
 
 def resolve_pg_dsn(cli_target: Optional[str]) -> str:
-    """استخراج DSN اتصال PostgreSQL از آرگومان، متغیر محیطی یا فایل پیکربندی."""
+    """Extract PostgreSQL connection DSN from argument, environment variable or configuration file."""
     if cli_target and cli_target.strip():
         return cli_target.strip()
     env_dsn = os.environ.get("PG_DSN", "").strip()
@@ -142,7 +159,7 @@ def resolve_pg_dsn(cli_target: Optional[str]) -> str:
 
 
 def connect_sqlite_ro(source_path: str) -> sqlite3.Connection:
-    """اتصال قطعی فقط-خواندنی به پایگاه‌داده SQLite."""
+    """Secure read-only connection to SQLite database."""
     if not os.path.exists(source_path):
         raise FileNotFoundError(f"فایل دیتابیس SQLite منبع پیدا نشد: {source_path}")
     abs_path = os.path.abspath(source_path)
@@ -153,14 +170,14 @@ def connect_sqlite_ro(source_path: str) -> sqlite3.Connection:
 
 
 def connect_pg(dsn: str) -> psycopg.Connection:
-    """برقراری اتصال به PostgreSQL با کتابخانه psycopg 3."""
+    """Connecting to PostgreSQL with the psycopg 3 library."""
     if psycopg is None:
         raise RuntimeError("کتابخانه psycopg نصب نیست. لطفاً وابستگی‌ها را نصب کنید.")
     return psycopg.connect(dsn, autocommit=False)
 
 
 def get_sqlite_tables(conn: sqlite3.Connection) -> List[str]:
-    """فهرست جدول‌های موجود در SQLite بدون جداول سیستمی."""
+    """List of tables in SQLite without system tables."""
     cur = conn.cursor()
     cur.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
@@ -169,7 +186,7 @@ def get_sqlite_tables(conn: sqlite3.Connection) -> List[str]:
 
 
 def get_sqlite_table_ddl(conn: sqlite3.Connection, table: str) -> str:
-    """دریافت عبارت CREATE TABLE از sqlite_master جهت بررسی تعاریف خاص (مانند GENERATED)."""
+    """Get the CREATE TABLE statement from sqlite_master to check specific definitions (such as GENERATED)."""
     cur = conn.cursor()
     cur.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name = ?",
@@ -180,7 +197,7 @@ def get_sqlite_table_ddl(conn: sqlite3.Connection, table: str) -> str:
 
 
 def detect_sqlite_generated_columns(conn: sqlite3.Connection, table: str) -> List[str]:
-    """شناسایی ستون‌های محاسباتی GENERATED در جدول بر اساس DDL و table_xinfo."""
+    """Identification of GENERATED calculation columns in the table based on DDL and table_xinfo."""
     gen_cols: List[str] = []
     cur = conn.cursor()
     try:
@@ -192,7 +209,7 @@ def detect_sqlite_generated_columns(conn: sqlite3.Connection, table: str) -> Lis
     except Exception:
         pass
 
-    # بررسی تکمیلی DDL در sqlite_master.sql برای کلمه GENERATED
+    # Additional DDL check in sqlite_master.sql for GENERATED word
     ddl = get_sqlite_table_ddl(conn, table)
     if "GENERATED" in ddl.upper() and not gen_cols:
         import re
@@ -207,7 +224,7 @@ def detect_sqlite_generated_columns(conn: sqlite3.Connection, table: str) -> Lis
 
 
 def get_pg_tables(conn: psycopg.Connection) -> List[str]:
-    """فهرست جدول‌های موجود در اسکیمای فعلی PostgreSQL."""
+    """List of tables in the current PostgreSQL schema."""
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -221,7 +238,7 @@ def get_pg_tables(conn: psycopg.Connection) -> List[str]:
 
 
 def get_table_columns_sqlite(conn: sqlite3.Connection, table: str) -> List[str]:
-    """فهرست نام ستون‌های جدول در SQLite (شامل ستون‌های عادی و محاسباتی GENERATED/VIRTUAL)."""
+    """List of table column names in SQLite (including normal and calculated GENERATED/VIRTUAL columns)."""
     cur = conn.cursor()
     cols: List[str] = []
     try:
@@ -244,7 +261,7 @@ def get_table_columns_sqlite(conn: sqlite3.Connection, table: str) -> List[str]:
 
 
 def get_table_columns_pg(conn: psycopg.Connection, table: str) -> List[str]:
-    """فهرست نام ستون‌های جدول در PostgreSQL بر اساس ترتیب تعریف."""
+    """List of table column names in PostgreSQL by definition order."""
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -259,7 +276,7 @@ def get_table_columns_pg(conn: psycopg.Connection, table: str) -> List[str]:
 
 
 def get_table_row_count_sqlite(conn: sqlite3.Connection, table: str) -> int:
-    """شمارش تعداد سطرهای یک جدول در SQLite."""
+    """Counting the number of rows in a table in SQLite."""
     cur = conn.cursor()
     cur.execute(f"SELECT COUNT(*) FROM {table}")
     row = cur.fetchone()
@@ -267,7 +284,7 @@ def get_table_row_count_sqlite(conn: sqlite3.Connection, table: str) -> int:
 
 
 def get_table_row_count_pg(conn: psycopg.Connection, table: str) -> int:
-    """شمارش تعداد سطرهای یک جدول در PostgreSQL."""
+    """Counting the number of rows in a table in PostgreSQL."""
     with conn.cursor() as cur:
         cur.execute(f"SELECT COUNT(*) FROM {table}")
         row = cur.fetchone()
@@ -277,7 +294,7 @@ def get_table_row_count_pg(conn: psycopg.Connection, table: str) -> int:
 def build_migration_plan(
     sqlite_conn: sqlite3.Connection, pg_conn: psycopg.Connection
 ) -> List[TablePlan]:
-    """بررسی ساختار، هماهنگی ستون‌ها و تعیین استراتژی به ازای هر جدول."""
+    """Checking the structure, coordination of the columns and determining the strategy for each table."""
     sqlite_tables = set(get_sqlite_tables(sqlite_conn))
     pg_tables = set(get_pg_tables(pg_conn))
 
@@ -294,7 +311,7 @@ def build_migration_plan(
                 "ابتدا مایگریشن‌های Alembic را اعمال کنید."
             )
 
-        # اسکن sqlite_master.sql برای بررسی ستون‌های محاسباتی GENERATED
+        # Scan sqlite_master.sql to check GENERATED calculated columns
         ddl = get_sqlite_table_ddl(sqlite_conn, table)
         gen_cols = detect_sqlite_generated_columns(sqlite_conn, table)
         if "GENERATED" in ddl.upper() or gen_cols:
@@ -308,7 +325,7 @@ def build_migration_plan(
         s_cols = get_table_columns_sqlite(sqlite_conn, table)
         p_cols = get_table_columns_pg(pg_conn, table)
 
-        # اعتبارسنجی تطابق ستون‌ها
+        # Column matching validation
         if set(s_cols) != set(p_cols):
             diff = set(s_cols) ^ set(p_cols)
             raise RuntimeError(
@@ -340,12 +357,12 @@ def _preflight_data_quality(
     max_allowed_ratio: float = 0.05,
 ) -> Dict[str, List[Dict[str, Any]]]:
     """
-    اعتبارسنجی کیفیت داده‌های SQLite پیش از آغاز مهاجرت به PostgreSQL.
+    SQLite data quality validation before starting the migration to PostgreSQL.
 
-    جداول منبع را برای شناسایی ردیف‌های با نوع داده‌ی ناهمخوان (مثلاً ستون‌های INTEGER
-    که مقدار غیرعددی یا متنی دارند — ناشی از خرابی دیتابیس یا recovery ناقص) اسکن می‌کند.
-    اگر نرخ خطا در یک جدول بیش از ۵٪ (یا max_allowed_ratio) باشد، RuntimeError صادر کرده
-    و مانع از اجرای مهاجرت ناقص می‌شود؛ در غیر این صورت صرفاً گزارش و لاگ ثبت می‌کند.
+    Source tables to identify rows with inconsistent data types (eg INTEGER columns
+    which have a non-numeric or text value - caused by database failure or incomplete recovery).
+    If the error rate in a table is more than 5% (or max_allowed_ratio), RuntimeError is issued
+    and prevents the implementation of incomplete immigration; Otherwise, it only records reports and logs.
     """
     findings: Dict[str, List[Dict[str, Any]]] = {}
     cur = sqlite_conn.cursor()
@@ -434,7 +451,7 @@ def _preflight_data_quality(
 
 
 def truncate_all_pg_tables(pg_conn: psycopg.Connection) -> None:
-    """تخلیه کامل تمام جداول مقصد و ریست کردن توالی‌های IDENTITY به صورت یکپارچه."""
+    """Full dump of all destination tables and reset of IDENTITY sequences in one go."""
     tables_to_truncate = [
         "logs",
         "toner_history",
@@ -459,17 +476,17 @@ def truncate_all_pg_tables(pg_conn: psycopg.Connection) -> None:
 
 def sync_identity_sequences(pg_conn: psycopg.Connection) -> Dict[str, int]:
     """
-    همگام‌سازی توالی‌های IDENTITY (setval) برای رفع ریسک بحرانی R-1.
+    Synchronization of IDENTITY sequences (setval) to remove critical risk R-1.
 
-    پس از درج شناسه‌های تاریخی با مقادیر صریح، مقدار توالی داخلی با حداکثر شناسه
-    تراز می‌شود تا اولین INSERT بعدی منجر به خطای UniqueViolation نشود.
+    After inserting historical identifiers with explicit values, the internal sequence value with the maximum identifier
+    aligned so that the next first INSERT does not result in a UniqueViolation error.
     """
     synced: Dict[str, int] = {}
     with pg_conn.cursor() as cur:
         for table in IDENTITY_TABLES:
             cur.execute(
                 f"""
-                SELECT CASE 
+                SELECT CASE
                     WHEN MAX(id) IS NOT NULL THEN setval(pg_get_serial_sequence('{table}', 'id'), MAX(id), true)
                     ELSE setval(pg_get_serial_sequence('{table}', 'id'), 1, false)
                 END
@@ -491,29 +508,29 @@ def transform_row(
     details_idx: int,
     convert_naive: bool = False,
 ) -> Optional[Tuple[Any, ...]]:
-    """تبدیل انواع داده از SQLite به PostgreSQL همراه با اعتبارسنجی الزامی."""
+    """Convert data types from SQLite to PostgreSQL with required validation."""
     vals = list(row)
 
-    # ۱. اعتبارسنجی رشته زمان در جدول logs
+    # 1. Time string validation in the logs table
     if ts_idx >= 0:
         raw_ts = vals[ts_idx]
 
-        # None یا غیر-string → skip
+        # None or non-string → skip
         if raw_ts is None or not isinstance(raw_ts, str):
             log.warning("[%s] timestamp خالی/غیر-string رد شد: %r", table, raw_ts)
             return None
 
-        # حالت ۱: با Z → قبول
+        # Mode 1: With Z → Accept
         if LOG_TS_WITH_Z_REGEX.match(raw_ts):
             pass  # OK
 
-        # حالت ۲: ISO معتبر بدون Z
+        # Mode 2: Valid ISO without Z
         elif LOG_TS_NAIVE_REGEX.match(raw_ts):
             global _naive_ts_counter
             _naive_ts_counter += 1
 
             if not convert_naive:
-                # پیش‌فرض: skip
+                # Default: skip
                 if _naive_ts_counter <= 5:
                     log.warning("[%s] timestamp بدون Z رد شد: %r", table, raw_ts)
                 elif _naive_ts_counter == 6:
@@ -524,7 +541,7 @@ def transform_row(
                     )
                 return None
             else:
-                # حالت ۲ با flag: تبدیل به Z
+                # Mode 2 with flag: Convert to Z
                 if _naive_ts_counter <= 5:
                     log.warning(
                         "[%s] timestamp بدون Z تبدیل شد (با flag): %r → %rZ",
@@ -532,17 +549,17 @@ def transform_row(
                     )
                 vals[ts_idx] = raw_ts + "Z"
 
-        # حالت ۳: فرمت کاملاً نامعتبر → skip
+        # Mode 3: Completely invalid format → skip
         else:
             log.warning("[%s] timestamp نامعتبر رد شد: %r", table, raw_ts)
             return None
 
-    # ۲. تبدیل مقادیر پرچمی به boolean واقعی
+    # 2. Convert flag values to actual booleans
     for bi in bool_indices:
         v = vals[bi]
         vals[bi] = bool(v) if v is not None else None
 
-    # ۳. اعتبارسنجی فیلد JSON در logs.details
+    # 3. JSON field validation in logs.details
     if details_idx >= 0:
         raw_det = vals[details_idx]
         if raw_det is not None:
@@ -574,7 +591,7 @@ def migrate_table_batch(
     plan: TablePlan,
     convert_naive: bool = False,
 ) -> MigrationStats:
-    """مهاجرت داده‌های جدول با استراتژی Batch Insert (دسته‌های ۱۰۰۰ تایی)."""
+    """Table data migration with Batch Insert strategy (1000 batches)."""
     t0 = time.time()
     table = plan.name
     cols = plan.columns
@@ -621,7 +638,7 @@ def migrate_table_copy(
     plan: TablePlan,
     convert_naive: bool = False,
 ) -> MigrationStats:
-    """مهاجرت داده‌های کلان‌جدول با استراتژی پرسرعت COPY FROM STDIN."""
+    """Migration of macro table data with high-speed COPY FROM STDIN strategy."""
     t0 = time.time()
     table = plan.name
     cols = plan.columns
@@ -661,11 +678,11 @@ def execute_migration(
     quiet: bool = False,
     convert_naive: bool = False,
 ) -> Tuple[List[MigrationStats], bool]:
-    """اجرای ترتیبی و امن کل فرآیند مهاجرت با مدیریت خطا و Rollback خودکار."""
+    """Orderly and safe implementation of the entire migration process with error management and automatic rollback."""
     global _naive_ts_counter
     _naive_ts_counter = 0
 
-    # بررسی خالی بودن مقصد در صورت عدم وجود --force
+    # Check if the destination is empty if there is no --force
     if not force:
         non_empty = [p.name for p in plan if p.pg_rows > 0]
         if non_empty:
@@ -707,7 +724,7 @@ def execute_migration(
                     stats.duration_seconds,
                 )
 
-        # همگام‌سازی توالی‌ها
+        # Synchronization of sequences
         synced = sync_identity_sequences(pg_conn)
         if not quiet:
             log.info("همگام‌سازی توالی‌های IDENTITY با موفقیت انجام شد: %s", synced)
@@ -729,7 +746,7 @@ def verify_migration(
     plan: List[TablePlan],
     quiet: bool = False,
 ) -> bool:
-    """اعتبارسنجی دقیق و مقایسه Checksum میان SQLite و PostgreSQL پس از مهاجرت."""
+    """Detailed validation and checksum comparison between SQLite and PostgreSQL after migration."""
     print("\n" + "=" * 78)
     print(" اعتبارسنجی و تطابق یکپارچگی داده‌ها (--verify)")
     print("=" * 78)
@@ -742,12 +759,12 @@ def verify_migration(
         s_count = get_table_row_count_sqlite(sqlite_conn, table)
         p_count = get_table_row_count_pg(pg_conn, table)
 
-        # مقایسه تعداد سطرها
+        # Compare the number of rows
         count_match = s_count == p_count
         if not count_match:
             all_ok = False
 
-        # مقایسه max(id) برای جداول دارای شناسه
+        # Compare max(id) for tables with IDs
         id_label = "—"
         if p.has_identity:
             s_cur = sqlite_conn.cursor()
@@ -773,7 +790,7 @@ def verify_migration(
                 verdict = f"✘ (extra={diff})"
         print(f"{table:<24} | {s_count:<8} | {p_count:<8} | {id_label:<14} | {verdict}")
 
-    # اعتبارسنجی عمیق برای جدول کلیدی logs
+    # Deep validation for the logs key table
     print("-" * 78)
     print(" اعتبارسنجی تکمیلی جدول logs (Checksum & Recent Events)")
     print("-" * 78)
@@ -790,7 +807,7 @@ def verify_migration(
         all_ok = False
     print(f"SUM(id) لاگ‌ها           : SQLite={s_sum} | PG={p_sum} | {'✔ تطابق' if sum_match else '✘ مغایرت'}")
 
-    # اضافه کردن MAX(timestamp) logs
+    # Add MAX(timestamp) logs
     s_cur.execute("SELECT MAX(timestamp) FROM logs")
     s_max_ts = s_cur.fetchone()[0]
     with pg_conn.cursor() as p_cur:
@@ -831,7 +848,7 @@ def verify_migration(
 def print_dry_run_report(
     plan: List[TablePlan], source_path: str, target_dsn: str, quiet: bool = False
 ) -> None:
-    """نمایش گزارش کامل و خوانا از وضعیت شبیه‌سازی مهاجرت (Dry-Run)."""
+    """Display a complete and readable report of the migration simulation status (Dry-Run)."""
     if quiet:
         total_s = sum(p.sqlite_rows for p in plan)
         print(f"[dry-run] tables={len(plan)} total_source_rows={total_s} (zero rows written)")
@@ -868,7 +885,7 @@ def print_dry_run_report(
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
-    """تجزیه و تحلیل آرگومان‌های خط فرمان."""
+    """Parse command line arguments."""
     parser = argparse.ArgumentParser(
         description="ابزار مستقل مهاجرت داده از SQLite به PostgreSQL (PrintGuard Phase F)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -913,7 +930,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    """نقطه ورود اصلی اسکریپت مهاجرت."""
+    """The main entry point of the migration script."""
     args = parse_args(argv)
 
     logging.basicConfig(
@@ -923,7 +940,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     target_dsn = resolve_pg_dsn(args.target)
 
-    # اتصال به منبع و مقصد
+    # Connection to source and destination
     try:
         sqlite_conn = connect_sqlite_ro(args.source)
     except Exception as exc:
@@ -938,18 +955,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return EXIT_FATAL
 
     try:
-        # تهیه نقشه مهاجرت
+        # Preparation of migration map
         plan = build_migration_plan(sqlite_conn, pg_conn)
 
-        # پیش‌اعتبارسنجی کیفیت داده‌ها (Preflight Data Quality Validation)
+        # Preflight Data Quality Validation
         _preflight_data_quality(sqlite_conn, plan)
 
-        # حالت Dry-Run
+        # Dry-Run mode
         if args.dry_run:
             print_dry_run_report(plan, args.source, target_dsn, quiet=args.quiet)
             return EXIT_DRY_RUN
 
-        # اجرای واقعی مهاجرت
+        # Real immigration enforcement
         stats, has_skips = execute_migration(
             sqlite_conn,
             pg_conn,
@@ -959,13 +976,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             convert_naive=args.convert_naive_timestamps,
         )
 
-        # اعتبارسنجی در صورت درخواست
+        # Validation upon request
         if args.verify:
             verify_ok = verify_migration(sqlite_conn, pg_conn, plan, quiet=args.quiet)
             if not verify_ok:
                 return EXIT_PARTIAL
 
-        # بررسی و گزارش شمارنده timestampهای بدون Z
+        # Checking and reporting counter of timestamps without Z
         if _naive_ts_counter > 0:
             if not args.convert_naive_timestamps:
                 log.error(

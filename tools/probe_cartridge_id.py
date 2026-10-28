@@ -1,27 +1,38 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tools/probe_cartridge_id.py
+# @brief:        Probe for the unique cartridge ID, to detect cartridge replacement on a real
+#                machine.
+# @details:      Responsibilities: Query the candidate OIDs and print what each returns.
+#                Main API: g(), fmt(), main()
+#                Side effects: network I/O, file I/O
+# @dependencies: internal: core.collectors, core.collectors.base, core.snmp.protocol
+# @notes:        Can be run directly as a script.
+# =============================================================================
+
 """
-پروب تشخیص «شناسه‌ی یکتای کارتریج» — برای فعال‌سازی تشخیص قطعی تعویض کارتریج
-روی یک دستگاه واقعی، با یک اجرا.
+"Unique Cartridge ID" detection probe — to enable definitive detection of cartridge replacement
+On a real machine, with a run.
 
-کارهایی که انجام می‌دهد:
-  ۱) اطلاعات پایه‌ی دستگاه (sysDescr/sysObjectID/مدل/سریال پرینتر).
-  ۲) خواندن verbatim جدول مصرفی‌های Printer-MIB (بعضی دستگاه‌ها سریال را در
-     description جاساز می‌کنند — متن خام را می‌خوانیم).
-  ۳) اجرای واقعی خواننده‌ی runtime (core/collectors/cartridge_id.py با
-     force_refresh — بدون کش) تا دقیقاً همان چیزی را ببینیم که سیستم می‌بیند.
-  ۴) دامپ صفحات وب برند به‌صورت فایل HTML کنار گزارش (برای دقیق‌کردن regexها)
-     + استخراج خودکار شواهد (Serial / Pages printed with this supply).
-  ۵) پیشنهاد آماده برای چسباندن در config/cartridge_id_map.json.
+What it does:
+  1) basic device information (sysDescr/sysObjectID/printer model/serial).
+  2) Verbatim reading of Printer-MIB consumption table (some devices include serial in
+     description — we read the raw text).
+  3) The actual execution of the runtime reader (core/collectors/cartridge_id.py with
+     force_refresh — no cache) to see exactly what the system sees.
+  4) Dump the brand web pages as an HTML file next to the report (to make the regexs more accurate)
+     + Automatic evidence extraction (Serial / Pages printed with this supply).
+  5) Suggestion ready to paste in config/cartridge_id_map.json.
 
-اجرا (در پوشه‌ی ریشه‌ی پروژه روی کامپیوتر شما):
+Run (in the root folder of the project on your computer):
     venv\\Scripts\\python tools\\probe_cartridge_id.py 172.16.25.34 --brand hp
     venv\\Scripts\\python tools\\probe_cartridge_id.py 172.16.32.10 --brand brother
-    # اگر OID خاصی از پنل/مستندات مدل دارید:
+    # If you have a specific OID from the model's panel/docs:
     venv\\Scripts\\python tools\\probe_cartridge_id.py <ip> --oid 1.3.6.1.4.1.x.y.z
 
-خروجی:
-    probe_identity_<ip>.md      → این فایل + فایل‌های probe_web_<ip>_*.html را بفرستید.
+Output:
+    probe_identity_<ip>.md → Send this file + probe_web_<ip>_*.html files.
 """
 import argparse
 import datetime
@@ -60,10 +71,14 @@ SUPPLY_PAGES_HINT = re.compile(
 
 
 def g(ip, community, oid, timeout, version=None):
+    """Read one SNMP OID from a printer with the fallback logic."""
+
     return snmp_get_with_fallback(ip, oid, community, version=version, timeout=timeout)
 
 
 def fmt(v):
+    """Format an SNMP value for display."""
+
     if v is None:
         return "—"
     s = str(v)
@@ -71,6 +86,8 @@ def fmt(v):
 
 
 def main():
+    """Command-line entry point that probes the cartridge ID OIDs of one printer."""
+
     ap = argparse.ArgumentParser(description="Cartridge unique-ID probe")
     ap.add_argument("ip")
     ap.add_argument("--brand", default=None, choices=["hp", "canon", "brother", "toshiba"])
@@ -86,6 +103,7 @@ def main():
     web_paths = []
 
     def w(line=""):
+        """Write one line to the output list and to stdout."""
         out.append(line)
         print(line)
 
@@ -93,7 +111,7 @@ def main():
     w(f"- زمان اجرا: {datetime.datetime.now().isoformat(timespec='seconds')}")
     w(f"- برند گفته‌شده: {args.brand or 'auto'} | community={comm!r} | snmp-version={args.snmp_version or 'auto'}")
 
-    # ── ۱) اطلاعات پایه ────────────────────────────────────────────
+    # ── 1) Basic information
     w("\n## ۱) اطلاعات پایه‌ی دستگاه")
     base_info = {
         "sysDescr": f"{MIB}.1.1.0",
@@ -104,7 +122,7 @@ def main():
     for label, oid in base_info.items():
         w(f"- **{label}** (`{oid}`): `{fmt(g(ip, comm, oid, to, args.snmp_version))}`")
 
-    # ── ۲) جدول مصرفی‌های Printer-MIB (متن خام) ───────────────────
+    # ── 2) Printer-MIB consumption table (raw text) ─────────────────────
     w("\n## ۲) ردیف‌های مصرفی Printer-MIB (متن verbatim — سریال گاهی در description است)")
     w("| idx | description (.6) | type (.5) | unit (.7) | max (.8) | level (.9) |")
     w("|-----|------------------|-----------|-----------|----------|------------|")
@@ -120,7 +138,7 @@ def main():
             break
         w(f"| {idx} | {fmt(desc)} | {fmt(styp)} | {fmt(unit)} | {fmt(mx)} | {fmt(lv)} |")
 
-    # ── ۳) OIDهای --oid (کاندیدهای کاربر) ─────────────────────────
+    # ── 3) --oid OIDs (user candidates)
     if args.oid:
         w("\n## ۳) OIDهای کاندید (--oid)")
         for oid in args.oid:
@@ -129,7 +147,7 @@ def main():
             mark = "✅ شبیه شناسه" if nid else "—"
             w(f"- `{oid}` → `{fmt(val)}`  {mark}{' → ' + nid if nid else ''}")
 
-    # ── ۴) خواننده‌ی واقعی runtime (بدون کش) ──────────────────────
+    # ── 4) Real runtime reader (no cache) ─────────────────────────
     w("\n## ۴) نتیجه‌ی خواننده‌ی واقعی سیستم (همان چیزی که poll می‌بیند)")
     cfg = cid.load_id_config(force=True)
     oids_cfg = cid._snmp_oids_for(ip, (args.brand or "").lower(), cfg)
@@ -140,7 +158,7 @@ def main():
         force_refresh=True)
     w(f"- نتیجه (در {time.time()-t0:.1f} ثانیه): ```json\n{json.dumps(result, ensure_ascii=False, indent=2)}\n```")
 
-    # ── ۵) دامپ صفحات وب + استخراج شواهد ──────────────────────────
+    # 5) Dump web pages + evidence extraction
     w("\n## ۵) صفحات وب (دامپ HTML کنار فایل ذخیره می‌شود)")
     for n, url_tpl in enumerate(WEB_URLS.get(args.brand, [])):
         used, html = fetch_first_web_page(ip, [url_tpl.format(ip=ip)], min(to, 4.0))
@@ -162,7 +180,7 @@ def main():
         if loginish and not serials:
             w("  - ⚠️ صفحه شبیه فرم ورود (Login) است؛ اگر EWS رمز دارد، خواندن سریال ممکن نیست.")
 
-    # ── ۶) پیشنهاد config ─────────────────────────────────────────
+    # 6) config suggestion
     w("\n## ۶) پیشنهاد آماده برای config/cartridge_id_map.json")
     suggestion = {"brands": {}, "printers": {ip: {"snmp": {}}}}
     have = False

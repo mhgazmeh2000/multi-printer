@@ -1,6 +1,6 @@
-# سند بازنشستگی عملیات وب import_db در محیط PostgreSQL (Retirement Document)
+# Retirement of the import_db web operation on PostgreSQL (retirement document)
 
-## ۱. پیش‌زمینه و چرایی بازنشستگی
+## 1. Background and reasons for retirement
 
 مسیر وب `web/routes/import_db.py` در اصل برای بارگذاری و ادغام فایل‌های دیتابیس پشتیبان SQLite طراحی شده بود. این ماژول از دستورهای مختص SQLite مانند `INSERT OR REPLACE` برای به‌روزرسانی ردیف‌ها و عملگر غیرمعتبر `col IS ?` برای انطباق مقادیر NULL استفاده می‌کرد که در PostgreSQL با خطاهای نحوی سخت (`syntax error at or near "OR"` - SQLSTATE 42601) مواجه می‌شد.
 
@@ -9,7 +9,7 @@
 ۲. پروتکل وب برای انتقال حجم‌های بالای داده (نظیر جداول چند ده‌هزار سطری `logs` یا `toner_snapshots_v2`) ناکارآمد و غیرایمن است.
 ۳. در نتیجه، گارد یکپارچه `_reject_import_on_postgres()` بر روی endpoint مربوطه فعال شد تا هرگونه تلاش برای اجرای import دیتابیس در محیط PostgreSQL را با پاسخ شفاف ۴۰۰ مسدود کند (در حالی که قابلیت `analyze` و همچنین محیط SQLite بدون تغییر باقی ماندند).
 
-## ۲. جایگزین رسمی: ابزار CLI مهاجرت (`tools/migrate_sqlite_to_pg.py`)
+## 2. Official replacement: migration CLI (`tools/migrate_sqlite_to_pg.py`)
 
 با تکمیل فاز F.1 و F.2، تمامی عملیات انتقال و بارگذاری اطلاعات از SQLite به PostgreSQL به ابزار مستقل CLI یعنی `tools/migrate_sqlite_to_pg.py` واگذار شد. مزایای این جایگزین:
 - **ایمنی منبع:** اتصال دیتابیس مبدأ به صورت `mode=ro&immutable=1` (حفاظت ۱۰۰٪ از فایل مبدأ).
@@ -18,7 +18,7 @@
 - **همگام‌سازی توالی‌های IDENTITY:** اجرای خودکار `setval` بر روی توالی‌های PostgreSQL جهت رفع ریسک بحرانی R-1.
 - **قابلیت اعتبارسنجی و بازگشت (Rollback):** پرچم‌های `--verify`، `--dry-run` و قابلیت بازگشت آنی با `TRUNCATE CASCADE`.
 
-## ۳. دستورالعمل در صورت نیاز آتی به واردسازی تحت وب در PostgreSQL
+## 3. Instructions if web import into PostgreSQL is needed later
 
 اگر روزی کسب‌وکار یا نیازمندی‌های سیستم ایجاب کند که کاربر بتواند فایل دیتابیس را مستقیماً از رابط وب در پایگاه‌داده PostgreSQL بارگذاری کند، گام‌های زیر الزامی خواهد بود:
 ۱. **عدم بازنویسی درون‌پروسه‌ای در وب:** به جای شبیه‌سازی کوئری‌های پیچیده در `import_db.py`، فایل آپلود شده باید در یک پوشه موقت ذخیره شده و به عنوان یک Background Task / Job Queue فراخوانی شود.

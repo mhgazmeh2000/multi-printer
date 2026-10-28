@@ -1,4 +1,4 @@
-# SNMP Exporter — راهنمای setup (فاز G)
+# SNMP Exporter — setup guide (phase G)
 
 > **مبنا:** این سند در طول فاز G رشد کرده است: §۰ تا §۳ از session گام G.2 (کامیت
 > `91acf16`)، §۴ و §۵ از G.3 (`d81d6d7`، `ab979df`)، §۶ تا §۸ از G.4 (`85670ba`)، §۹ از G.5
@@ -9,7 +9,7 @@
 
 ---
 
-## ۰. چه چیزی هست و چه چیزی هنوز نیست
+## 0. What exists and what does not yet
 
 | فایل/قابلیت | وضعیت | توضیح |
 |---|---|---|
@@ -38,7 +38,7 @@
 
 ---
 
-## ۱. `monitoring/generator.yml` چطور کار می‌کند
+## 1. How `monitoring/generator.yml` works
 
 این فایل **spec پروژه** است، نه ورودیِ باینریِ `snmp_exporter/generator` — چون MIBهای
 vendor در مخزن نیست و `snmp.yml` دستی نوشته می‌شود. ساختارش:
@@ -112,7 +112,7 @@ modules:
 
 ---
 
-## ۲. گیت‌ها: چطور بفهمیم هنوز درست است
+## 2. Gates: how to tell that it is still correct
 
 ```bat
 python tools\build_oid_matrix.py --check      :: سند ماتریس با کد می‌خواند؟ (۰/۱)
@@ -135,7 +135,7 @@ python tools\build_snmp_yml.py --check        :: snmp.yml با spec می‌خو�
 
 ---
 
-## ۳. افزودن یک OID تازه (ترتیب اجباری)
+## 3. Adding a new OID (mandatory order)
 
 1. **اول کد:** `core/oid/catalog.py::OID_CATALOG` (یا collector مربوطه). تا کد نخوانده،
    جایی در spec ندارد.
@@ -154,7 +154,7 @@ python tools\build_snmp_yml.py --check        :: snmp.yml با spec می‌خو�
 
 ---
 
-## ۴. `monitoring/snmp.yml` — نگاشتِ spec به configِ runtime (گام G.3)
+## 4. `monitoring/snmp.yml` — mapping the spec to the runtime config (step G.3)
 
 ### ۴.۱ چرا دستی نوشته شد
 
@@ -286,7 +286,7 @@ idempotent بودنِ `--check` به‌عنوان گیتِ CI است
 
 ---
 
-## ۵. تستِ باینری روی سرور مالک (پایان پروژه)
+## 5. Binary test on the owner's server (end of project)
 
 هیچ‌یک از بند‌های زیر در sandbox انجام **نشده** است — عملاً و طبقِ تصمیمِ مالک. ترتیبِ
 اجرا روی سرور مالک، پس از بسته‌شدنِ فاز G:
@@ -326,7 +326,7 @@ idempotent بودنِ `--check` به‌عنوان گیتِ CI است
 
 ---
 
-## ۶. probe-onlyها کجا هستند و چرا
+## 6. Where the probe-only OIDs are and why
 
 ده OID در کد هست که **مسیر polling** نمی‌خواندشان؛ ماتریس آن‌ها را در §۵ «یتیم‌ها»
 می‌آورد و در `generator.yml` فقط **کامنت**‌اند (تفکیک: ۸ برادر، ۱ توشیبا، ۱ استاندارد):
@@ -348,7 +348,7 @@ idempotent بودنِ `--check` به‌عنوان گیتِ CI است
 
 ---
 
-## ۷. چه چیزی اندازه‌گیری شد و چه چیزی اجرا نشد
+## 7. What was measured and what was not run
 
 **اندازه‌گیری‌شده در گام G.2:** شمارش‌های §۱ (از گیت و از `build_oid_matrix.py`)،
 اعتبار YAML با `yaml.safe_load`، یکتابی نام‌ها، انطباق `source:` با ماتریس،
@@ -365,7 +365,7 @@ idempotent بودنِ `--check` به‌عنوان گیتِ CI است
 بسته‌ها». آن‌ها §۵ (سرور مالک، پایان پروژه) و `tools/compare_snmp_sources.py` (گام G.6)
 هستند. تست واقعی ویندوز در فاز L می‌ماند.
 
-## ۸. متغیرهای محیطی v3
+## 8. v3 environment variables
 
 `SNMP_V3_USERNAME` · `SNMP_V3_AUTH_PASSPHRASE` · `SNMP_V3_PRIV_PASSPHRASE`
 
@@ -392,7 +392,7 @@ exporter می‌خواند runtimeی شده‌اند — `password:` جای `aut
 
 ---
 
-## ۹. گام G.5 — خوانندهٔ exporter، adapter و پرچمِ hybrid
+## 9. Step G.5 — exporter reader, adapter and hybrid flag
 
 ### ۹.۱ تصمیمِ تست (سؤال → پاسخ مالک)
 
@@ -597,7 +597,7 @@ c.reset_backoff()              # همه
 `tests/test_exporter_backoff.py::test_ladder_matches_the_plan` قفل شده؛ تغییرش یعنی
 تغییرِ سندِ شما.
 
-## ۱۰. گام G.6 — `tools/compare_snmp_sources.py` (مقایسهٔ دو منبع)
+## 10. Step G.6 — `tools/compare_snmp_sources.py` (comparing the two sources)
 
 ### ۱۰.۱ چرا «ابزار» و نه «عدد»
 

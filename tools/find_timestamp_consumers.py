@@ -1,36 +1,46 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tools/find_timestamp_consumers.py
+# @brief:        Indexes the consumers of timestamp values (E.0 diagnostic).
+# @details:      Responsibilities: Scan the code and write a Markdown index.
+#                Main API: scan(), markdown(), main()
+#                Side effects: file I/O
+# @dependencies: stdlib only
+# @notes:        Can be run directly as a script.
+# =============================================================================
+
 """
-فهرست‌گیرِ مصرف‌کنندگان timestamp — ابزار تشخیصی فاز E.0 (کار E.0.0).
+timestamp consumer indexer — E.0 phase diagnostic tool (E.0.0 job).
 
-چرا؟ پس از کار D.6، ستون `logs.timestamp` و فیلد `details["timestamp"]` **دو نوع
-مقدار** دارند: UTC با پسوند `Z` (مسیر موتور کارتریج) و naive local بدون پسوند
-(سایر نویسنده‌ها). پیش از مهاجرت به PostgreSQL باید بدانیم چه کدی این ستون را
-می‌خواند، مقایسه می‌کند، مرتب می‌کند، گروه‌بندی می‌کند یا نمایش می‌دهد — و هر
-مصرف‌کننده با هر یک از این دو فرمت چه می‌کند.
+why After work D.6, column `logs.timestamp` and field `details["timestamp"]` **two types
+They have ** value: UTC with `Z' extension (cartridge motor path) and naive local without extension
+(other authors). Before migrating to PostgreSQL, we need to know the code of this column
+Reads, compares, sorts, groups or displays — and whatever
+What does the consumer do with each of these two formats?
 
-این ابزار **فقط منبع کد را می‌خواند**؛ به هیچ دیتابیسی وصل نمی‌شود و چیزی
-نمی‌نویسد.
+This tool **only reads source code**; It does not connect to any database or anything
+does not write
 
-دسته‌بندی‌ها
+Categories
 -----------
-  W1  INSERT INTO logs            (نویسنده؛ مستقیم)
-  W2  UPDATE/DELETE FROM logs     (نویسنده؛ اصلاح/حذف)
-  W3  add_event(...)              (نویسنده؛ لایه‌ی پایتون + بررسی کلید timestamp)
-  R1  FROM logs                   (خواننده)
-  R2  timestamp مقایسه‌ای         (WHERE timestamp >= ?, ...)
-  R3  ORDER BY timestamp          (مرتب‌سازی)
-  R4  substr(timestamp, 1, 10)    (گروه‌بندی روزانه)
-  R5  datetime(...) روی مقدار     (تجزیه در پایتون)
-  R6  مصرف در UI (JS/HTML)        (نمایش)
-  R7  json_extract(details, ...)  (خواننده‌ی JSON داخلی)
+  W1 INSERT INTO logs (author; direct)
+  W2 UPDATE/DELETE FROM logs (author; modify/delete)
+  W3 add_event(...) (author; Python layer + timestamp key check)
+  R1 FROM logs (reader)
+  R2 comparative timestamp (WHERE timestamp >=?,...)
+  R3 ORDER BY timestamp
+  R4 substr(timestamp, 1, 10) (grouping by day)
+  R5 datetime(...) on value (parsing in Python)
+  R6 consumption in UI (JS/HTML) (display)
+  R7 json_extract(details,...) (built-in JSON reader)
 
-استفاده
+use
 -------
-    python tools/find_timestamp_consumers.py                 # خلاصه‌ی خوانا
-    python tools/find_timestamp_consumers.py --md out.md     # جدول Markdown
-    python tools/find_timestamp_consumers.py --json out.json # خروجی ماشینی
-    python tools/find_timestamp_consumers.py --only W3,R2    # فیلتر دسته
+    python tools/find_timestamp_consumers.py # Readable summary
+    python tools/find_timestamp_consumers.py --md out.md # Markdown table
+    python tools/find_timestamp_consumers.py --json out.json # Machine output
+    python tools/find_timestamp_consumers.py --only W3,R2 # Batch filter
 """
 from __future__ import annotations
 
@@ -48,7 +58,7 @@ PY_DIRS = ("core", "web", "tools", "tests")
 ASSET_DIRS = ("web/static", "web/templates")
 ROOT_FILES = ("create_admin.py", "run.py", "models.py")
 
-# (کد, شرح, الگوی regex)
+# (code, description, regex pattern)
 PY_PATTERNS: List[Tuple[str, str, str]] = [
     ("W1", "INSERT INTO logs", r"INSERT\s+(?:OR\s+REPLACE\s+)?INTO\s+logs\b"),
     ("W2", "UPDATE/DELETE روی logs", r"(?:UPDATE\s+logs\b|DELETE\s+FROM\s+logs\b)"),
@@ -60,10 +70,6 @@ PY_PATTERNS: List[Tuple[str, str, str]] = [
     ("R7", "خواندن JSON داخلی details", r"json_extract\s*\(\s*details"),
 ]
 
-ASSET_PATTERNS: List[Tuple[str, str, str]] = [
-    ("R6", "نمایش/مرتب‌سازی timestamp در UI", r"timestamp"),
-]
-
 ADD_EVENT_RE = re.compile(r"add_event\s*\(")
 DATETIME_RE = re.compile(r"datetime\.(?:now|utcnow|fromisoformat)\s*\(")
 
@@ -72,6 +78,7 @@ SELF = os.path.abspath(__file__)
 
 
 def _iter_files(root: str, dirs: Iterable[str], exts: Tuple[str, ...]) -> Iterable[str]:
+    """Yield the file paths under the given directories with the given extensions."""
     for d in dirs:
         base = os.path.join(root, d)
         if not os.path.isdir(base):
@@ -89,17 +96,18 @@ def _iter_files(root: str, dirs: Iterable[str], exts: Tuple[str, ...]) -> Iterab
 
 
 def _rel(root: str, path: str) -> str:
+    """Return a path relative to the root, using forward slashes."""
     return os.path.relpath(path, root).replace(os.sep, "/")
 
 
 def _add_event_calls(path: str, src: str) -> List[dict]:
     """
-    فراخوانی‌های add_event با تعیین اینکه «timestamp صریح» دارند یا نه.
+    add_event calls by specifying whether they have an "explicit timestamp" or not.
 
-    سه حالت بررسی می‌شود:
-      • دیکشنری مستقیم در آرگومان‌ها با کلید timestamp؛
-      • دیکشنری در متغیری که timestamp دارد (مثل event_payload در base.py:794)؛
-      • بدون timestamp ⇒ add_event پیش‌فرض naive local می‌نویسد.
+    Three modes are checked:
+      • Direct dictionary in arguments with timestamp key;
+      • Dictionary in the variable that has a timestamp (such as event_payload in base.py:813);
+      • Without timestamp ⇒ add_event writes the default naive local.
     """
     out: List[dict] = []
     try:
@@ -107,7 +115,7 @@ def _add_event_calls(path: str, src: str) -> List[dict]:
     except SyntaxError:
         return out
 
-    # متغیرهایی که در هر دامنه timestamp می‌گیرند
+    # Variables that take timestamps in each domain
     ts_vars = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict):
@@ -136,6 +144,8 @@ def _add_event_calls(path: str, src: str) -> List[dict]:
 
 
 def scan(root: str) -> Dict[str, List[dict]]:
+    """Scan a source tree for code that consumes timestamps."""
+
     findings: Dict[str, List[dict]] = {}
 
     for path in _iter_files(root, PY_DIRS, (".py",)):
@@ -155,7 +165,7 @@ def scan(root: str) -> Dict[str, List[dict]]:
                 findings.setdefault("R5", []).append(
                     {"file": rel, "line": i, "label": "ساخت/خواندن زمان با datetime", "snippet": stripped[:160]})
 
-        # غنی‌سازی W3: صریح بودن timestamp
+        # W3 enrichment: timestamp explicitness
         src = "\n".join(lines)
         calls = _add_event_calls(path, src)
         w3 = [f for f in findings.get("W3", []) if f["file"] == rel]
@@ -199,6 +209,8 @@ TITLES = {
 
 
 def markdown(findings: Dict[str, List[dict]]) -> str:
+    """Render the timestamp-consumer findings as Markdown."""
+
     lines = ["# مصرف‌کنندگان timestamp — خروجی ابزار", ""]
     total = sum(len(v) for v in findings.values())
     lines.append(f"جمع یافته‌ها: **{total}** (تولیدشده با `tools/find_timestamp_consumers.py`)")
@@ -222,6 +234,8 @@ def markdown(findings: Dict[str, List[dict]]) -> str:
 
 
 def main(argv: List[str] = None) -> int:
+    """Command-line entry point of the timestamp-consumer scan."""
+
     ap = argparse.ArgumentParser(description="فهرست مصرف‌کنندگان timestamp (فاز E.0.0)")
     ap.add_argument("--root", default=ROOT_DEFAULT, help="ریشه‌ی مخزن")
     ap.add_argument("--md", help="نوشتن جدول Markdown در این مسیر")

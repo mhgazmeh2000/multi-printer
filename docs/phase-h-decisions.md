@@ -1,4 +1,4 @@
-# تصمیم‌های فاز H — «تکمیل Metrics Collector (باقی‌مانده بعد از G.5)»
+# Phase H decisions — "completing the Metrics Collector (remainder after G.5)"
 
 **مبنا:** شاخهٔ `phase-c`، ادامهٔ `8047526` (پایان G.7)؛ گام H.1 در دو کامیت بسته شد
 (`7bd2959` + `fix(h)`ِ بعدش که دو انحرافِ نخست را طبقِ متنِ برنامه اصلاح کرد — §«بازبینی» پایین).
@@ -10,7 +10,7 @@
 
 ---
 
-## چرا فاز H بعد از G.5 کوچک شد
+## Why phase H became small after G.5
 
 فاز G با یک تصمیم تمام شد: `core/collectors/exporter_adapter.py` خروجیِ `snmp_exporter` را به
 *همان شکلِ* `collect_hp`/`collect_canon` برمی‌گرداند (۱۲ کلید، صفر کلیدِ اضافه) و
@@ -28,7 +28,7 @@ H.3 مسیرِ کامل در برابرِ golden، H.4 اسناد/بدهی.
 
 ---
 
-## H.1 — وب‌اسکرپِ تونر در مسیرِ exporter
+## H.1 — Web scraping of toner in the exporter path
 
 ### دامنه (تصمیمِ مالک: گزینهٔ ۱)
 
@@ -202,7 +202,7 @@ dispatcherِ `_merge_scraped`، سه گاردِ نام‌دار، TD-018/TD-019.
 
 ---
 
-## H.2 — backoff و circuit-breaker در `core/exporter_client.py`
+## H.2 — Backoff and circuit breaker in `core/exporter_client.py`
 
 **تصمیم:** state در *کلاینت*، به‌ازای `(ip, module)`؛ نردبان ۱–۲ فوری / ۳–۵ ۳۰۰s / ۶–۱۰ ۱۸۰۰s /
 >۱۰ ۲۱٬۶۰۰s؛ موفقیت = حذفِ رکورد؛ یک ماژولِ در backoff = ردِ *کلِ برند*؛ `ExporterCircuitOpen`
@@ -251,7 +251,7 @@ exporter، نه خطایِ دستگاه)؛ circuit-breaker عمداً *نیمه�
 
 ---
 
-## H.3 — مسیرِ کاملِ `USE_SNMP_EXPORTER=1` در برابرِ golden
+## H.3 — The full `USE_SNMP_EXPORTER=1` path against the golden set
 
 ### تصمیم (گزینهٔ ۱ مالک: پیمانِ برگ‌های قابل‌استخراج + جدول واگرایی)
 
@@ -298,7 +298,7 @@ exporter، نه خطایِ دستگاه)؛ circuit-breaker عمداً *نیمه�
 
 ---
 
-## H.4 — بستن مستندات، تحلیل بدهی‌های فنی و بررسی نهایی فاز H
+## H.4 — Closing the documentation, technical debt analysis and final review of phase H
 
 ### دستاوردها و وضعیت گام‌های فاز H
 با اتمام گام‌های چهارگانهٔ فاز H، اهداف تکمیل Metrics Collector و تعمیق آزمون‌های مسیر پیوندی محقق شد:

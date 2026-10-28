@@ -1,9 +1,23 @@
-import threading
+# =============================================================================
+# @file:         web/routes/scan.py
+# @brief:        API routes for OID scans and stored OID profiles.
+# @details:      Responsibilities: Trigger scans and return the stored profiles.
+#                Main API: api_scan_oids(), api_get_oid_profile(), api_scan_all(),
+#                api_all_oid_profiles()
+#                Side effects: starts threads, defines HTTP routes
+# @dependencies: internal: core, core.oid.catalog, core.oid.scanner | external: flask
+# @notes:        None.
+# =============================================================================
+
+"""OID scan API routes."""
+
 import logging
+import threading
+
 from flask import Blueprint, jsonify, request
+
 from core.oid.scanner import scan_printer_oids, startup_scan_all, _load_oid_profiles
 from core.oid.catalog import OID_CATALOG
-from core.oid.validator import validate_oid_value
 from core import store
 
 bp = Blueprint("scan", __name__)
@@ -12,6 +26,8 @@ log = logging.getLogger("PrinterMonitor")
 
 @bp.route('/api/scan/oids', methods=['POST'])
 def api_scan_oids():
+    """Start an OID scan of one printer."""
+
     data      = request.json or {}
     ip        = data.get("ip", "").strip()
     community = data.get("community", "public")
@@ -38,6 +54,8 @@ def api_scan_oids():
 
 @bp.route('/api/scan/oids/<ip>', methods=['GET'])
 def api_get_oid_profile(ip):
+    """Return the stored OID profile of one printer."""
+
     profiles = _load_oid_profiles()
     if ip not in profiles:
         return jsonify({"error": f"پروفایل {ip} یافت نشد — ابتدا scan کنید"}), 404
@@ -65,6 +83,8 @@ def api_get_oid_profile(ip):
 
 @bp.route('/api/scan/all', methods=['POST'])
 def api_scan_all():
+    """Start an OID scan of all printers."""
+
     force = (request.json or {}).get("force", False)
     with store.printers_lock:
         printers_copy = list(store.PRINTERS)
@@ -81,6 +101,8 @@ def api_scan_all():
 
 @bp.route('/api/scan/profiles', methods=['GET'])
 def api_all_oid_profiles():
+    """Return the stored OID profiles of all printers."""
+
     profiles = _load_oid_profiles()
     return jsonify({
         ip: {

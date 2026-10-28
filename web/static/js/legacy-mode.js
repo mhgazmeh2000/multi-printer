@@ -1,4 +1,12 @@
-// legacy-mode.js – تغییر به حالت ردیفی (سه ستونه) با Ctrl+Alt+5
+/*
+ * @file:         web/static/js/legacy-mode.js
+ * @brief:        Keyboard shortcut (Ctrl+Alt+5) that toggles the compact three-column row layout.
+ * @details:      Responsibilities: Toggle the legacy row layout and show a toast with the new state.
+ * @dependencies: browser APIs only; loaded by base.html
+ * @notes:        None.
+ */
+
+// legacy-mode.js – Switch to row mode (three columns) with Ctrl+Alt+5
 (function() {
   let legacyActive = false;
   let styleTag = null;
@@ -35,7 +43,7 @@
       height: 4px !important;
       border-radius: 2px !important;
     }
-    /* در صورت وجود عناصر اضافی ستونی، مخفی شوند */
+    /* hide extra column elements when they exist */
     body.legacy-mode .oc-stat-row,
     body.legacy-mode .oc-toner-area,
     body.legacy-mode .oc-toner-group,
@@ -45,6 +53,7 @@
     }
   `;
 
+  /** Add the legacy-mode stylesheet to the page. */
   function addStyle() {
     if (styleTag) return;
     styleTag = document.createElement('style');
@@ -53,6 +62,7 @@
     document.head.appendChild(styleTag);
   }
 
+  /** Remove the legacy-mode stylesheet from the page. */
   function removeStyle() {
     if (styleTag) {
       styleTag.remove();
@@ -60,6 +70,7 @@
     }
   }
 
+  /** Turn legacy mode on and remember the choice. */
   function enableLegacy() {
     if (!legacyActive) {
       addStyle();
@@ -69,6 +80,7 @@
     }
   }
 
+  /** Turn legacy mode off and remember the choice. */
   function disableLegacy() {
     if (legacyActive) {
       document.body.classList.remove('legacy-mode');
@@ -78,10 +90,12 @@
     }
   }
 
+  /** Switch between legacy mode and the normal mode. */
   function toggleLegacy() {
     legacyActive ? disableLegacy() : enableLegacy();
   }
 
+  /** Show a short notification message. */
   function showToast(msg, type) {
     if (typeof toast === 'function') {
       toast(msg, type);

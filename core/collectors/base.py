@@ -1,10 +1,25 @@
+# =============================================================================
+# @file:         core/collectors/base.py
+# @brief:        Shared helpers used by all brand collectors: safe SNMP value conversion, counter
+#                and toner logic.
+# @details:      Responsibilities: Provide si()/ss() conversions, page-counter arithmetic, toner
+#                overrides and paper-size attribution.
+#                Main API: si(), ss(), get_pages_since_last_reset(), apply_toner_override(),
+#                attribute_paper_size(), validate_counter_consistency(), fetch_first_web_page(),
+#                detect_brand()
+#                Side effects: network I/O
+# @dependencies: internal: config.settings, core, core.cartridge_change_engine, core.database,
+#                core.snmp.protocol, core.time_utils | external: requests, urllib3
+# @notes:        None.
+# =============================================================================
+
 """
-توابع مشترک همه collectorها:
-- si, ss: تبدیل ایمن مقادیر SNMP
-- _g: wrapper ساده snmp_get با fallback خودکار
-- _counters_event: ثبت رویدادهای چاپ و هشدار (با جلوگیری از ثبت اولیه و دلتاهای بزرگ غیرمنطقی)
-- validate_counter_consistency: بررسی سازگاری شمارنده‌ها
-- detect_brand: تشخیص خودکار برند
+Common functions of all collectors:
+- si, ss: safe conversion of SNMP values
+- _g: simple snmp_get wrapper with automatic fallback
+- _counters_event: recording of print and warning events (preventing early registration and unreasonable large deltas)
+- validate_counter_consistency: checking the consistency of counters
+- detect_brand: automatic brand detection
 """
 
 import logging
@@ -19,26 +34,24 @@ from core.time_utils import parse_utc, utc_now_iso
 log = logging.getLogger("PrinterMonitor")
 DEFAULT_YIELD_PER_PAGE = 2000
 
-# ─── تنظیمات اعتبارسنجی ─────────────────────────────────────────
-# حداکثر دلتا منطقی: مقدار پایه برای بازهٔ 30s، سپس متناسب با POLL_INTERVAL تنظیم می‌شود
+# Validation settings
+# logical maximum delta: base value for 30s interval, then adjusted according to POLL_INTERVAL
 _BASE_MAX_PER_30S = 200
-MAX_REASONABLE_DELTA = max(100, int(_BASE_MAX_PER_30S * (POLL_INTERVAL / 30.0)))
-MIN_DELTA_FOR_FALLBACK = 1        # حداقل دلتا برای fallback مبتنی بر total
-MIN_VALID_TOTAL_FOR_FIRST_POLL = 50  # اگر total < 50 باشد، شاید پرینتر جدید است
-MAX_TOTAL_AFTER_RESET = 5000      # اگر مقدار جدید کمتر از این باشد و قبلی بزرگ بود، ریست شده
-# تشخیص تعویض کارتریج از روی ریستِ «صفحات چاپ‌شده با این کارتریج» (EWS و…):
-# عدد فقط صعودی است؛ افت معنی‌دار به زیر نسبتِ ریست یعنی کارتریج تازه نصب شده.
-CART_ID_RESET_MIN_PAGES = 100     # حداقل صفحات ثبت‌شده‌ی قبلی تا ریست معنی‌دار باشد
-CART_ID_RESET_RATIO = 0.5         # مقدار جدید < ۵۰٪ مقدار قبلی ⇒ ریست/تعویض
+MIN_DELTA_FOR_FALLBACK = 1        # Minimum delta for fallback based on total
+MAX_TOTAL_AFTER_RESET = 5000      # If the new value is less than this and the previous one was large, it is reset
+# Recognizing the replacement of the cartridge from the "pages printed with this cartridge" reset (EWS and...):
+# The number is only ascending; A significant drop below the reset ratio means a newly installed cartridge.
+CART_ID_RESET_MIN_PAGES = 100     # At least the previous registered pages until the reset is meaningful
+CART_ID_RESET_RATIO = 0.5         # New value < 50% of previous value ⇒ reset/replace
 
 
 def _elapsed_since_prev(prev: dict) -> float:
-    """مدت‌زمان گذشته از آخرین snapshot ذخیره‌شده را برحسب ثانیه برمی‌گرداند."""
+    """Returns the elapsed time in seconds since the last saved snapshot."""
     updated_at = (prev or {}).get("updated_at")
     if not updated_at:
         return float(POLL_INTERVAL)
     try:
-        # فاز E.3: مقایسه‌ی آگاه به UTC با مقدار تجزیه‌شده‌ی ذخیره‌شده (Z).
+        # Phase E.3: UTC-aware comparison with stored parsed value (Z).
         elapsed = (datetime.now(timezone.utc) - parse_utc(updated_at)).total_seconds()
         return max(1.0, elapsed)
     except Exception:
@@ -46,7 +59,7 @@ def _elapsed_since_prev(prev: dict) -> float:
 
 
 def _dynamic_max_reasonable_delta(prev: dict) -> tuple[int, float]:
-    """حد بالای منطقی دلتا را بر اساس فاصله واقعی بین دو poll محاسبه می‌کند."""
+    """Calculates the logical upper limit of delta based on the actual distance between two polls."""
     elapsed_seconds = max(float(POLL_INTERVAL), _elapsed_since_prev(prev))
     dynamic_limit = max(100, int(_BASE_MAX_PER_30S * (elapsed_seconds / 30.0)))
     return dynamic_limit, elapsed_seconds
@@ -54,7 +67,9 @@ def _dynamic_max_reasonable_delta(prev: dict) -> tuple[int, float]:
 
 # ─── helpers ────────────────────────────────────────────────────
 def si(v, d: int = 0) -> int:
-    # ✅ باگ #5: لاگ خطاها به جای مخفی کردن + فقط exception های مرتبط
+    # Bug #5: log errors instead of hiding + only relevant exceptions
+    """Convert an SNMP value to int, returning the default d for missing or invalid values."""
+
     if v is None:
         return d
     try:
@@ -68,18 +83,20 @@ def si(v, d: int = 0) -> int:
 
 
 def ss(v, d: str = "N/A") -> str:
+    """Convert an SNMP value to a stripped string, returning the default d when it is empty."""
+
     return str(v).strip() if v is not None and str(v).strip() else d
 
 
 def _g(ip: str, oid: str, community: str, timeout: float = 2.5):
     """
-    Wrapper برای snmp_get_with_fallback که سعی می‌کند ابتدا v2c و در صورت شکست v1 را امتحان کند.
+    Wrapper for snmp_get_with_fallback that tries v2c first and v1 if it fails.
     """
     return snmp_get_with_fallback(ip, oid, community, timeout=timeout)
 
 
 def _bootstrap_yield_from_history(ip: str, prev: dict):
-    """اگر yield هنوز پیش‌فرض است، از snapshotهای تاریخی برای تخمین اولیه استفاده کن."""
+    """If yield is still default, use historical snapshots for initial estimation."""
     if (prev or {}).get("yield_per_page", DEFAULT_YIELD_PER_PAGE) != DEFAULT_YIELD_PER_PAGE:
         return None
     try:
@@ -104,16 +121,16 @@ def _bootstrap_yield_from_history(ip: str, prev: dict):
 
 
 def _learn_yield_per_page(ip: str, delta_pages: int, prev_toner_level: int, current_toner_level: int, prev: dict):
-    """یادگیری خودکار yield_per_page بر اساس مصرف تونر و صفحات چاپ شده."""
+    """Automatic yield_per_page learning based on toner consumption and printed pages."""
     prev = prev or {}
     if delta_pages <= 0 or prev_toner_level is None or current_toner_level is None:
         return
-    # از داده‌های مشکوک/درحال تایید برای یادگیری yield استفاده نکن.
+    # Don't use questionable/confirming data to learn yield.
     if prev.get("last_counter_error") or prev.get("pending_overflow_total") is not None or prev.get("pending_refill_new_toner") is not None:
         log.debug("  [%s] yield learning skipped due to pending/anomalous counter state", ip)
         return
-    # ✅ فیکس یادگیری دایره‌ای: وقتی override دستی فعال است، سطح تونری که به
-    # این تابع می‌رسد خودش از همان yield ساخته شده؛ یادگیری از آن = تأیید خودش.
+    # ✅ Circular learning fix: When manual override is active, the toner level that
+    # This function is created from the same yield; Learning from it = self validation.
     if prev.get("manual_override"):
         log.debug("  [%s] yield learning skipped while manual override is active", ip)
         return
@@ -127,7 +144,7 @@ def _learn_yield_per_page(ip: str, delta_pages: int, prev_toner_level: int, curr
     toner_drop = prev_toner_level - current_toner_level
     if toner_drop <= 0:
         return
-    # افت‌های خیلی کوچک تونر نویز زیادی دارند؛ حداقل ۵۰ صفحه برای تخمین قابل قبول لازم است.
+    # Very small toner drops have a lot of noise; At least 50 pages are required for an acceptable estimate.
     if toner_drop < 1 or delta_pages < 50:
         return
 
@@ -184,16 +201,16 @@ def _learn_yield_per_page(ip: str, delta_pages: int, prev_toner_level: int, curr
     })
 
 
-# ─── اسلات‌های override دستی تونر (per-color) ──────────────────
-# ✅ فیکس باگ «بازگشت مقدار دستی به پیش‌فرض»: قبلاً فقط یک اسلات تک‌مقداری
-# (override_color/override_start_total/override_start_toner) وجود داشت؛ reset
-# رنگ جدید، override رنگ قبلی را پاک می‌کرد و پس از یک poll مقدار خام SNMP
-# برمی‌گشت. حالا هر رنگ اسلات مستقل خودش را در prev["toner_overrides"] دارد.
+# Manual toner override slots (per-color)
+# ✅ "Manual value reset to default" bug fix: previously only a single value slot
+# (override_color/override_start_total/override_start_toner) existed; reset
+# The new color clears the override of the previous color and after a poll the raw SNMP value
+# would return Now each color has its own independent slot in prev["toner_overrides"].
 def _normalize_overrides(prev: dict) -> dict:
-    """بازگرداندن اسلات‌های override به‌صورت dict per-color با مهاجرت از فرمت قدیمی.
+    """Restore override slots as dict per-color by migrating from the old format.
 
-    فرمت جدید: {"<color>": {"start_total": int, "start_toner": int}, ...}
-    فرمت قدیمی (تک‌اسلات) فقط برای سازگاری با stateهای موجود خوانده می‌شود.
+    New format: {"<color>": {"start_total": int, "start_toner": int},...}
+    The old format (single slot) is read only for compatibility with existing states.
     """
     prev = prev or {}
     raw = prev.get("toner_overrides")
@@ -204,7 +221,7 @@ def _normalize_overrides(prev: dict) -> dict:
                 out[str(color)] = entry
         if out:
             return out
-    # مهاجرت از اسلات قدیمی تک‌مقداری
+    # Migrating from the old single-bit slot
     if prev.get("manual_override") and prev.get("override_color"):
         return {str(prev["override_color"]): {
             "start_total": prev.get("override_start_total"),
@@ -214,7 +231,7 @@ def _normalize_overrides(prev: dict) -> dict:
 
 
 def _overrides_valid_after_total(overrides: dict, total) -> dict:
-    """حذف اسلات‌هایی که شمارنده دستگاه از نقطه‌ی شروعشان عقب رفته (سرویس/ریست)."""
+    """Removing the slots whose device counter has moved back from their starting point (service/reset)."""
     out = {}
     for color, entry in (overrides or {}).items():
         start_total = (entry or {}).get("start_total")
@@ -228,7 +245,7 @@ def _overrides_valid_after_total(overrides: dict, total) -> dict:
 
 
 def _mirror_legacy_override_keys(new_prev: dict, overrides: dict):
-    """همگام نگه‌داشتن کلیدهای قدیمی تک‌اسلاتی با جدیدترین اسلات (سازگاری عقب)."""
+    """Keeping old single-slot keys in sync with the latest slot (backwards compatibility)."""
     if overrides:
         try:
             last_color = next(reversed(overrides))
@@ -247,10 +264,10 @@ def _mirror_legacy_override_keys(new_prev: dict, overrides: dict):
 
 
 def get_pages_since_last_reset(prev: dict, total: int):
-    """محاسبه تعداد صفحات چاپ‌شده از زمان آخرین تنظیم مجدد کارتریج.
+    """Calculate the number of pages printed since the last cartridge reset.
 
-    با اسلات‌های per-color، «آخرین reset» یعنی کمترین فاصله از نقاط شروع
-    (جدیدترین reset فعال).
+    With per-color slots, "last reset" means the shortest distance from the starting points
+    (the latest active reset).
     """
     overrides = _normalize_overrides(prev)
     if not overrides:
@@ -272,9 +289,9 @@ def get_pages_since_last_reset(prev: dict, total: int):
 
 
 def apply_toner_override(ip: str, total: int, snmp_level: int = None, color: str = None):
-    """محاسبه مجدد سطح تونر بر اساس override دستیِ «همان رنگ» و صفحات چاپ‌شده.
+    """Toner level recalculation based on manual override of "same color" and printed pages.
 
-    هر رنگ اسلات مستقل دارد؛ reset رنگ دیگر روی این محاسبه اثر ندارد.
+    Each color has an independent slot; Color reset has no effect on this calculation.
     """
     if color is None:
         return None
@@ -289,8 +306,8 @@ def apply_toner_override(ip: str, total: int, snmp_level: int = None, color: str
     if override_start_total is None or override_start_toner is None:
         return None
 
-    # 🔥 اگر total کمتر از override_start_total باشد، یعنی دستگاه
-    # ریست شده و این override دیگر معتبر نیست → برگرداندن مقدار خام سنسور
+    # 🔥 If total is less than override_start_total, it means the device
+    # reset and this override is no longer valid → return the raw value of the sensor
     try:
         pages_since_override = int(total) - int(override_start_total)
     except (TypeError, ValueError):
@@ -316,7 +333,7 @@ def apply_toner_override(ip: str, total: int, snmp_level: int = None, color: str
     return final_level
 
 
-# ─── رویدادها ─────────────────────────────────────────────────
+# Events
 def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: list,
                     full_color: int = None, black_white: int = None,
                     paper_size: str = None, username: str = None,
@@ -331,11 +348,11 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
                     signal_quality: dict = None,
                     supply_names: dict = None):
     """
-    ثبت رویدادهای چاپ/هشدار با محافظت در برابر داده‌های مشکوک SNMP.
+    Log print/alert events with protection against SNMP suspicious data.
 
-    اصل مهم: اگر counter مشکوک است، آن را به عنوان حقیقت در PrevStore ذخیره نمی‌کنیم؛
-    ابتدا خطای خواندن یا anomaly ثبت می‌شود تا از زنجیره لاگ دروغین
-    COUNTER_RESET → PRINT_OVERFLOW جلوگیری شود.
+    Important principle: if counter is suspicious, we don't store it as truth in PrevStore;
+    First, the reading error or anomaly is registered rather than the false log chain
+    COUNTER_RESET → PRINT_OVERFLOW is prevented.
     """
     prev = prev or {}
     alerts = alerts or []
@@ -350,6 +367,7 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
         evaluate_cartridge_change = None
 
     def _to_int(value, default=None):
+        """Convert a value to int, returning the default when conversion fails."""
         try:
             if value is None:
                 return default
@@ -358,12 +376,13 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
             return default
 
     def _uptime_reset(curr, old) -> bool:
+        """Return True when the device uptime went backwards, meaning the counters were reset."""
         curr_i = _to_int(curr)
         old_i = _to_int(old)
-        # sysUpTime بر حسب صدم ثانیه است؛ 60 ثانیه حاشیه خطا می‌گذاریم.
-        # ✅ فیکس باگ ریست کاذب: اگر خواندن uptime ناموفق بوده (None یا 0) هرگز
-        # آن را «ریبوت» تلقی نکن. شواهد واقعی: ۲۷۶ مورد از ۳۸۵ COUNTER_RESET
-        # با current_uptime=0 (خواندن ناموفق SNMP) ثبت شده بود.
+        # sysUpTime is in hundredths of seconds; We leave a margin of error of 60 seconds.
+        # ✅ False reset bug fix: if reading uptime is unsuccessful (None or 0), never
+        # Don't consider it a "reboot". Actual evidence: 276 out of 385 COUNTER_RESET
+        # It was logged with current_uptime=0 (SNMP read failed).
         if curr_i is None or curr_i <= 0 or old_i is None or old_i <= 0:
             return False
         return curr_i < old_i - 60 * 100
@@ -403,7 +422,7 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
         store._prev.set(ip, snapshot)
         return
 
-    # ─── ثبت رویدادهای هشدار جدید با جلوگیری از تکرار ───────────────
+    # ─── Recording of new alarm events by preventing repetition ────────────────
     suppress_toner_alerts = False
     if prev.get("manual_override") and prev.get("override_start_toner") is not None:
         try:
@@ -421,7 +440,7 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
             msg = next((a.get("message") for a in alerts if a.get("code") == code), f"Error {code}")
             add_event(ip, "ALERT", {"message": msg, "code": code, "severity": "warning"})
 
-    # ─── اولین poll: baseline بگیر، لاگ چاپ نزن ─────────────────────
+    # ─── First poll: get baseline, don't print log ───────────────────────
     if prev_total is None:
         log.warning(f"  [{ip}] جلوگیری از ثبت رویداد PRINT در اولین poll (total={total:,})")
         baseline = {
@@ -473,7 +492,7 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
         store._prev.set(ip, baseline)
         return
 
-    # ─── محافظ اصلی: total=0 یا کاهش counter بدون reboot = خطای SNMP، نه reset ───
+    # ─── Main guard: total=0 or reduce counter without reboot = SNMP error, not reset ───
     suspicious_zero = total == 0 and prev_total >= 1000 and not reboot_detected
     suspicious_drop = total < prev_total and not reboot_detected
     if suspicious_zero or suspicious_drop:
@@ -507,11 +526,11 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
         })
         return
 
-    # ─── reset واقعی فقط با شواهد قوی ───────────────
-    # شرط‌ها: (۱) شمارنده به مقدار خیلی کوچک افتاده (ریبوت معمولاً شمارنده را
-    # در NVRAM حفظ می‌کند؛ ریست واقعی شمارنده فقط با سرویس/فکتوری‌ریست اتفاق می‌افتد)،
-    # (۲) uptime واقعاً کم شده باشد، (۳) شمارنده قبلی معنی‌دار بزرگ بوده باشد.
-    # در غیر این صورت این یک anomaly خواندنی است و فقط هشدار می‌دهیم و snapshot را حفظ می‌کنیم.
+    # ─── real reset only with strong evidence ────────────────
+    # Conditions: (1) the counter is too small (reboot the counter usually
+    # Stores in NVRAM; The actual reset of the counter happens only with service/factory reset),
+    # (2) the uptime is really low, (3) the previous counter is significantly large.
+    # Otherwise, it's a readable anomaly and we just warn and save the snapshot.
     strong_reset_evidence = (
         total < MAX_TOTAL_AFTER_RESET
         and prev_total >= MIN_DELTA_FOR_FALLBACK * 1000
@@ -539,17 +558,17 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
             "a3_total": a3_total,
             "a4_total": a4_total,
             "reset_prev_total": prev_total,
-            # ✅ فیکس: ریست شمارنده دیگر yield یادگرفته‌شده و تنظیم دستی تونر را
-            # نابود نمی‌کند. اسلات‌های per-color فقط وقتی حذف می‌شوند که شمارنده
-            # واقعاً به کمتر از نقطه‌ی شروع آن‌ها رفته باشد.
+            # ✅ Fix: reset the learned yield counter and manually adjust the toner
+            # does not destroy Per-color slots are only removed when the counter
+            # really gone to less than their starting point.
             "yield_per_page": prev.get("yield_per_page", 2000),
             "toner_overrides": _overrides_valid_after_total(_normalize_overrides(prev), total),
         })
         return
 
     if total < prev_total and reboot_detected and not strong_reset_evidence:
-        # کاهش شمارنده همراه با ریبوت ولی بدون شواهد قوی ریست واقعی (منابع SNMP
-        # متفاوت/خواندن ناقص). فقط anomaly ثبت می‌کنیم و snapshot را حفظ می‌کنیم.
+        # Decreasing counter with reboot but no strong evidence of actual reset (SNMP sources
+        # different/imperfect reading). We only record the anomaly and save the snapshot.
         add_event(ip, "COUNTER_ANOMALY", {
             "message": (
                 f"کاهش شمارنده ({prev_total:,} → {total:,}) با ریبوتِ دستگاه ولی "
@@ -581,13 +600,13 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
     actual_delta = total - prev_total
     delta_pages = actual_delta if actual_delta >= 0 else 0
 
-    # ─── بازگشت شمارنده پس از ریبوت — باگ واقعی 172.16.25.36 (e-STUDIO257) ───
-    # این مدل بلافاصله پس از ریبوت چند دقیقه total=0 را گزارش می‌کند و بعد مقدار
-    # دائمی NVRAM بازمی‌گردد (مشاهده‌ی واقعی: 20,575→0→20,576). نسخه‌های قبلی
-    # بازگشت را «چاپ جدید» می‌دانستند و PRINT_GAP عظیم ثبت می‌کردند (۶۱,۸۱۳
-    # صفحه‌ی تخمینی در ۶ روز!). قانون: اگر ریست اخیر ثبت شده (reset_prev_total)
-    # و شمارنده به نزدیکی همان مرجع بازگشت، این بازگشت شمارنده است نه چاپ —
-    # رویداد اطلاعاتی COUNTER_RESTORED ثبت و نرمال با baseline جدید ادامه می‌دهیم.
+    # ─── counter return after reboot — real bug 172.16.25.36 (e-STUDIO257) ───
+    # This model reports total=0 for a few minutes immediately after the reboot, and then the amount
+    # Returns permanent NVRAM (actual view: 20,575→0→20,576). Previous versions
+    # The return was considered a "new print" and recorded a huge PRINT_GAP (61,813
+    # Estimated page in 6 days!). Rule: if the last reset is registered (reset_prev_total)
+    # and the counter returns near the same reference, this is the counter return, not the print —
+    # The information event COUNTER_RESTORED is registered and we continue normally with the new baseline.
     reset_ref = _to_int(prev.get("reset_prev_total")) if prev.get("reset_prev_total") is not None else None
     if reset_ref is not None and total is not None and total > 0:
         restore_tol = max(200, int(reset_ref * 0.005))
@@ -619,16 +638,16 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
             return
         if total > reset_ref + restore_tol:
             if prev_total is not None and prev_total <= reset_ref - 10:
-                # ✅ فیکس double-count پس از ریبوت (مورد واقعی 20575 → 0 → 21000):
-                # زنجیره‌ی snapshot از موقع ریست هرگز به باند مرجع نرسیده و شمارنده
-                # یک‌باره به بالای آن پریده = امضای «بازگشت NVRAM + چاپ واقعی در
-                # فاصله‌ی ریبوت» است، نه چاپ از صفر. بنابراین baseline واقعی قبل
-                # از ریست (reset_ref) دور ریخته نمی‌شود؛ دلتا نسبت به همان مرجع
-                # محاسبه می‌شود (real_delta = total - reset_ref = 425 نه 21000) و
-                # جریان عادی پایین (PRINT/OVERFLOW/یادگیری تونر) با همین مرجع
-                # اصلاح‌شده ادامه می‌یابد — پس نه صفحه‌ی فانتوم داریم نه دو بار شماری.
-                # رشد تدریجی (ریست واقعی که آرام به مرجع نزدیک می‌شود) وارد این
-                # شاخه نمی‌شود و رفتار قبلی را دارد.
+                # ✅ double-count fix after reboot (actual case 20575 → 0 → 21000):
+                # The snapshot chain has never reached the reference band since the reset and the counter
+                # Jumped to the top of it at once = signature "Return NVRAM + actual print in
+                # "Reboot interval", not print from zero. So the actual baseline before
+                # It is not discarded from the reset (reset_ref); Delta relative to the same reference
+                # Calculated (real_delta = total - reset_ref = 425 not 21000) and
+                # LOW NORMAL FLOW (PRINT/OVERFLOW/TONER LEARNING) with the same reference
+                # Modified continues — so we have no phantom pages, no double counting.
+                # Gradual growth (actual reset that slowly approaches the reference) enters this
+                # It does not branch and has the previous behavior.
                 real_delta = total - reset_ref
                 add_event(ip, "COUNTER_RESTORED", {
                     "message": f"شمارنده پس از ریبوت به {total:,} بازگشت ({real_delta:,} صفحه چاپ واقعی در فاصله‌ی ریبوت)",
@@ -643,16 +662,16 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
                 prev_total = reset_ref
                 actual_delta = real_delta
                 delta_pages = real_delta if real_delta > 0 else 0
-            # از باند بازگشت گذشت (چاپ واقعی پس از ریست) — پرچم را بردار و ادامه بده
+            # Return band passed (actual print after reset) — remove flag and continue
             reset_ref = None
 
-    # ─── ضدنویز سطح تونر (پایین‌پرش تک‌پالی) ─────────────────────────
-    # ✅ داده‌ی واقعی: TOSHIBA e-STUDIO306 روی 172.16.0.40 — سطح واقعی سیاه ۱۰۰٪
-    # پایدار بود (ران ۴۴/۱۵/۲۸۰ پالی) ولی هر از چندگاهی *یک* poll عدد ۸٪ می‌خواند
-    # و دوباره ۱۰۰٪؛ هر blip یک کاندیدای ساختگی REFILL می‌ساخت. افت >۲۵ واحد در
-    # یک poll با <۵ صفحه چاپ از نظر فیزیکی غیرممکن است (کارتریج‌های چندهزارصفحه‌ای)
-    # پس چنین خواندنی نویز است: مقدار قبلی نگه داشته می‌شود و وارد منطق
-    # REFILL/یادگیری yield نمی‌شود.
+    # ─── Toner surface anti-noise (bottom of single-layer jump)
+    # ✅ Actual data: TOSHIBA e-STUDIO306 on 172.16.0.40 — true black level 100%
+    # It was stable (Ran 44/15/280 Pali), but every now and then *a* poll reads 8%
+    # and again 100%; Each blip creates a dummy REFILL candidate. Drop >25 units in
+    # A poll with <5 print pages is physically impossible (multi-thousand page cartridges)
+    # So such a reading is noise: the previous value is kept and entered into the logic
+    # REFILL/learning does not yield.
     if (prev_toner_level is not None and current_toner_level is not None
             and 0 <= actual_delta < 5):
         try:
@@ -884,11 +903,11 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
                     prev["pending_refill_total"] = None
                     prev["pending_refill_hits"] = None
 
-    # ─── تشخیص تعویض بر اساس تغییر نام supply (กัน因为你你不电脑) ─────────
-    # وقتی Chip ID در دسترس نیست یا کیفیتش static است، تغییر نام کارتریج
-    # (مثلاً HP 87A → CC388A) سیگنال قوی تعویض است.
-    # فقط برای رنگ‌هایی که قبلاً chip_id_changed نشده‌اند بررسی می‌شود
-    # تا رویداد تکراری ساخته نشود.
+    # ─── Change detection based on changing the name of supply (가도 你你不电视) ─────────
+    # Rename cartridge when Chip ID is not available or its quality is static
+    # (eg HP 87A → CC388A) is a strong switching signal.
+    # Only checks for colors that have not already been chip_id_changed
+    # So that the event is not repeated.
     prev_supply_names = prev.get("supply_names") or {}
     prev_name_pending = prev.get("supply_name_pending") or {}
     if supply_names and not prev.get("manual_override"):
@@ -902,24 +921,24 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
             if not prev_name:
                 continue
             norm_prev = prev_name.strip().lower()
-            # فقط وقتی نام واقعاً تغییر کرده
+            # Only when the name has really changed
             if norm_cur == norm_prev:
-                # نام یکسان → pending را پاک کن
+                # Clear the same name → pending
                 if prev_name_pending.get(ck):
                     prev_name_pending.pop(ck, None)
                 continue
-            # اگر قبلاً رویداد chip_id برای این رنگ ثبت شده، نادیده بگیر
+            # Ignore if chip_id event already registered for this color
             if ck in cart_id_changed_colors:
                 continue
-            # اگر chip_id واقعی (genuine) فعال است، تغییر نام مهم نیست
+            # If the genuine chip_id is enabled, the name change is not important
             cid = (cartridge_ids or {}).get(ck, "")
             sq = (signal_quality or {}).get(ck)
             if cid and sq == "genuine":
                 continue
-            # دروازه ثبات: نام جدید باید ۲ poll متوالی یکسان باشد
+            # Consistency Gateway: The new name must be the same for 2 consecutive polls
             pending_info = prev_name_pending.get(ck)
             if pending_info and pending_info.get("name") == norm_cur:
-                # تایید شد — رویداد ثبت کن
+                # Confirmed — Log event
                 prev_name_pending.pop(ck, None)
                 cart_id_changed_colors.add(ck)
                 add_event(ip, "CARTRIDGE_CHANGED", {
@@ -932,10 +951,10 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
                     "prev_supply_name": prev_name, "supply_name": cur_name,
                 })
             else:
-                # اولین مشاهده تغییر — ثبت pending
+                # First view change — record pending
                 prev_name_pending[ck] = {"name": norm_cur, "prev_name": prev_name}
 
-    # ─── REFILL خودکار دو مرحله‌ای: با یک poll قطعی ثبت نکن ─────────
+    # ─── TWO-STEP AUTO REFILL: Don't register with a definite poll ─────────
     refill_confirmed = False
     pending_refill_new = prev.get("pending_refill_new_toner")
     pending_refill_prev = prev.get("pending_refill_prev_toner")
@@ -946,11 +965,11 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
             pages_since_candidate = total - int(pending_refill_total or prev_total)
             if int(current_toner_level) >= int(pending_refill_new) - 1 and pages_since_candidate < 50:
                 pending_refill_hits += 1
-                # ✅ فیکس FLAP (داده‌ی واقعی: TOSHIBA e-STUDIO306 روی 172.16.0.40/41
-                # با پرش متناوب 8↔100 در pollهای پشت‌سر → ۴۸ REFILL جعلی در ۶ روز):
-                # یک تأییدِ پشت‌سرهم کافی نیست چون نویز گاهی دو poll متوالی بالا
-                # می‌ایستد. سطح جدید باید در ۲ poll متوالی پایدار بماند تا شارژ
-                # تایید شود (تاخیر ≈ چند دقیقه — برای شارژ واقعی هزینه‌ای ندارد).
+                # ✅ FLAP fix (real data: TOSHIBA e-STUDIO306 on 172.16.0.40/41
+                # With intermittent jumps of 8↔100 in back polls → 48 fake REFILL in 6 days):
+                # One back-to-back verification is not enough because the noise is sometimes high
+                # stands The new level must be stable for 2 consecutive polls before charging
+                # Confirm (delay ≈ few minutes — no charge for actual charge).
                 if pending_refill_hits >= 2:
                     refill_confirmed = True
                     add_event(ip, "REFILL", {
@@ -983,17 +1002,17 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
             "auto_detected": True,
         })
 
-    # ─── تشخیص خودکار تعویض/شارژ کارتریج برای بقیه‌ی رنگ‌ها (CMY و …) ────
-    # مسیر REFILL بالا فقط «یک» تونر (تونری که به current_toner_level داده شده،
-    # معمولاً مشکی) را پوشش می‌دهد. این بلوک همان معنای دوپالیِ ضد-فلپ
-    # (کاندید در جهش >۲۰٪ → پایداری سطح در ۲ poll متوالی → رویداد) را برای
-    # بقیه‌ی رنگ‌ها اجرا می‌کند تا تعویض کارتریج سیان/سرخابی/زرد هم در رویدادها
-    # ثبت شود. فقط روی داده‌ی واقعی (raw_level) کار می‌کند؛ برآوردهای نمایشی
-    # (canon_status_code و …) اصلاً به این بلوک داده نمی‌شوند. رنگِ لگاسی هم
-    # کنار گذاشته می‌شود تا یک تعویض فیزیکی، دو رویداد ثبت نکند (REFILL +
-    # CARTRIDGE_CHANGED). کلیدهای وضعیت مثل pending_refill فقط در حافظه
-    # (PrevStore کش) نگه‌داری می‌شوند و بعد از ری‌استارت یک پنجره‌ی جدید شروع
-    # می‌شود — همان سیاست موجود.
+    # ─── Automatic detection of cartridge replacement/charging for other colors (CMY and...) ────
+    # REFILL path above only "one" toner (the toner given to current_toner_level,
+    # usually black). This block means anti-flap dipole
+    # (candidate in mutation >20% → level stability in 2 consecutive polls → event) for
+    # The rest of the colors run until the replacement of the cyan/magenta/yellow cartridge in the events
+    # be registered It only works on real data (raw_level); Demonstration estimates
+    # (canon_status_code and...) are not given to this block at all. Legacy color too
+    # It is left out so that a physical replacement does not register two events (REFILL +
+    # CARTRIDGE_CHANGED). Status keys like pending_refill in memory only
+    # (PrevStore cache) are kept and after restart a new window starts
+    # It becomes — the same existing policy.
     cart_merged_levels = None
     cart_pending_next = None
     if toner_levels is not None:
@@ -1008,8 +1027,8 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
             if color_key not in fa_colors or color_key == legacy_toner_color:
                 continue
             if color_key in cart_id_changed_colors:
-                # تعویض همین رنگ همین poll با شواهد قطعی (تراشه/ریست) ثبت شد؛
-                # کاندیدِ جهشِ سطح برایش ساخته نشود تا رویداد دوم نیاید.
+                # The replacement of the same color of the same poll was recorded with definitive evidence (chip/reset);
+                # A level jump candidate should not be made for him so that the second event does not come.
                 continue
             try:
                 cur = int(cur_val)
@@ -1018,7 +1037,7 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
             cart_merged_levels[color_key] = cur
             pend = pendings_prev.get(color_key)
             if pend and not prev.get("manual_override") and total is not None:
-                # پنجره‌ی پایداری: باید سطح بالای کاندید بماند و صفحات از کاندید کم باشد
+                # Stability window: the level of the candidate should remain high and the pages should be less than the candidate
                 try:
                     pend_new = int(pend.get("new"))
                     pend_total = int(pend.get("total", prev_total))
@@ -1041,16 +1060,16 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
                             "new_toner": cur,
                             "pages": max(0, pages_since),
                         })
-                        continue  # تأیید شد؛ pending بسته می‌شود (رویداد یک‌شوت است)
+                        continue  # confirmed; pending is closed (the event is a shot)
                     cart_pending_next[color_key] = {**pend, "hits": hits}
                     continue
                 if pages_since is None or cur < pend_new - 1:
-                    # سطح به زیر کاندید برگشته (فلپ/بليب) یا داده‌ی شمارنده ناهماهنگ → کاندید باطل
+                    # Level returned below candidate (flap/bleep) or inconsistent counter data → invalid candidate
                     continue
-                # صفحات از کاندید زیاد شده ولی سطح بالا مانده: pending حفظ می‌شود (رفتار لگاسی)
+                # The pages from the candidate are increased but the level remains high: pending is maintained (legacy behavior)
                 cart_pending_next[color_key] = pend
                 continue
-            # کاندید تازه: جهش سطح نسبت به آخرین سطحِ شناخته‌شده‌ی همان رنگ
+            # New Candidate: level jump compared to the last known level of the same color
             try:
                 prev_lvl = int(prev_levels[color_key]) if prev_levels.get(color_key) is not None else None
             except (TypeError, ValueError):
@@ -1060,7 +1079,7 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
                 log.info(f"  [{ip}] cartridge-change candidate ({color_key}): toner {prev_lvl}% → {cur}%")
                 cart_pending_next[color_key] = {"prev": prev_lvl, "new": cur, "total": total, "hits": 0}
 
-    # ─── محاسبه و اعتبارسنجی دلتاهای رنگی/سیاه‌وسفید ───────────────
+    # ─── Calculation and validation of color/black and white deltas ────────────────
     delta_fc = (full_color - prev_fc) if (full_color is not None and prev_fc is not None) else 0
     delta_bw = (black_white - prev_bw) if (black_white is not None and prev_bw is not None) else 0
     split_delta = delta_fc + delta_bw
@@ -1092,7 +1111,7 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
     log.debug(f"  [{ip}] PRINT: prev_total={prev_total:,} curr_total={total:,} "
               f"delta_fc={delta_fc}, delta_bw={delta_bw}, total_delta={total_delta}, actual_delta={actual_delta}")
 
-    # ─── Overflow: بار اول فقط pending، بار دوم تایید و ثبت تخمینی ───
+    # ─── Overflow: first time only pending, second time confirmation and estimated registration ───
     estimated = False
     if total_delta > dynamic_max_delta:
         pending_total = prev.get("pending_overflow_total")
@@ -1101,9 +1120,9 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
             estimated = True
             color_unknown = True
             log.warning("  [%s] overflow confirmed on second poll; recording estimated PRINT delta=%s", ip, total_delta)
-            # ✅ فیکس: رویداد برآوردی overflow (معمولاً به‌خاطر قطعی مانیتور یا
-            # نوسان منبع شمارنده) نباید در آمار مصرف روزانه به‌عنوان چاپ معمولی
-            # جمع خورد؛ نوع جداگانه PRINT_GAP ثبت می‌شود و snapshot جلو می‌رود.
+            # Fix: Estimated overflow event (usually due to monitor failure or
+            # Fluctuation source counter) should not be included in the daily consumption statistics as a normal print
+            # gathered; A separate PRINT_GAP type is registered and the snapshot is advanced.
             gap_paper = paper_size
             add_event(ip, "PRINT_GAP", {
                 "message": (
@@ -1167,7 +1186,7 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
             })
             return
 
-    # ─── ثبت PRINT ────────────────────────────────────────────────
+    # Register PRINT
     if total_delta > 0:
         # ✅ Invariant: pages must equal current_total - prev_total.
         # If total_delta drifted from actual_delta (e.g. split_delta != actual),
@@ -1205,23 +1224,23 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
             "color": color,
             "paper_size": paper_size,
             "severity": "warning" if estimated or counter_mismatch else "info",
-            # ✅ انتساب حسابرسی: مقادیر شمارنده‌ی دو سر دلتا در ذات رویداد ذخیره
-            # می‌شود (مانند GAP/RESET) تا ممیزی پنجره‌ای بعد از شکاف پایش هم
-            # دقیق بماند و tooltip «منبع عدد» اعداد واقعی را نشان دهد.
+            # Audit Assignment: Delta double-headed counter values in the essence of the save event
+            # It is possible (like GAP/RESET) to audit a window after the leg gap
+            # Be accurate and show the "number source" tooltip of real numbers.
             "prev_total": prev_total,
             "current_total": total,
         }
-        # ✅ تفکیک دقیق دسته‌ی کاغذ: در حالت Mixed (و PRINT_GAP) فقط برچسب کلی
-        # کافی نیست؛ تعداد دقیق هر دسته در details ذخیره می‌شود تا لاگ قابل حسابرسی باشد.
-        # ✅ Fix: paper_split هرگز نباید مقدار منفی داشته باشد (Toshiba split نامطمئن).
+        # ✅ Accurate separation of the paper category: in Mixed mode (and PRINT_GAP) only the general label
+        # not enough; The exact number of each batch is stored in details so that the log can be audited.
+        # ✅ Fix: paper_split should never have a negative value (uncertain Toshiba split).
         if paper_split and (paper_split.get("large") or paper_split.get("small")):
             _ps_large = max(0, paper_split.get("large", 0))
             _ps_small = max(0, paper_split.get("small", 0))
             event_data["paper_split"] = {"large": _ps_large, "small": _ps_small}
-        # ✅ حسابرسی کامل‌تر (گزارش کاربر از فلت واقعی): تفکیک خانواده‌ی سایز
-        # به‌همراه زیرگروه «پرینت رایانه‌ای» و تفکیک عملکرد (ضبط در details و
-        # مرج خودکار در API از طریق _row_to_dict) — مخصوصاً برای پاسخ به سؤال
-        # «چند صفحه A3 چاپ شد / چه کسی کپی گرفت» بدون حدس.
+        # ✅ More complete audit (user report from real flat): Separation of size family
+        # along with the subgroup "computer print" and the separation of functions (recording in details and
+        # auto-merge in API via _row_to_dict) — especially for answering questions
+        # "How many A3 pages were printed / Who got copies" No guesswork.
         if paper_detail:
             event_data["paper_detail"] = paper_detail
         if func_split:
@@ -1241,7 +1260,7 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
         add_event(ip, "PRINT", event_data)
         log.info(f"  [{ip}] ✓ ثبت چاپ: {total_delta} صفحه ({color})")
 
-    # ─── ذخیره snapshot جدید؛ counterهای جزئی عقب‌گرد نکنند ─────────
+    # ─── save new snapshot; partial counters do not roll back ─────────
     safe_fc = full_color if (full_color is not None and (prev_fc is None or full_color >= prev_fc)) else prev_fc
     safe_bw = black_white if (black_white is not None and (prev_bw is None or black_white >= prev_bw)) else prev_bw
 
@@ -1257,15 +1276,15 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
         "pending_overflow_delta": None,
         "reset_prev_total": reset_ref,
         "last_counter_error": None,
-        # ✅ حفظ اسلات‌های override دستی per-color: هر رنگ که reset نشده و
-        # شمارنده از نقطه‌ی شروعش عقب نرفته، باید زنده بماند (فیکس بازگشت به
-        # مقدار پیش‌فرض پس از چند ثانیه).
+        # ✅ Maintaining per-color manual override slots: any color that has not been reset
+        # The counter hasn't moved back from its starting point, it should stay alive (fix return to
+        # default value after a few seconds).
         "toner_overrides": _overrides_valid_after_total(
             _normalize_overrides(prev), total),
     }
     if current_toner_level is not None and prev_toner_level is not None:
         try:
-            # تعویضِ شناسه‌محورِ رنگ لگاسی همین poll ثبت شده → کاندید REFILL نه
+            # Replacement of the legacy color axis identifier of the same registered poll → No REFILL candidate
             skip_legacy_refill = legacy_toner_color in cart_id_changed_colors
             if (int(current_toner_level) - int(prev_toner_level) > 20 and delta_pages < 50
                     and not refill_confirmed and not skip_legacy_refill):
@@ -1275,8 +1294,8 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
                 new_prev["pending_refill_hits"] = 0
             elif (not refill_confirmed and pending_refill_new is not None
                   and int(current_toner_level) >= int(pending_refill_new) - 1):
-                # پنجره‌ی پایداری: کاندید و شمارنده‌ی hits نگه داشته می‌شوند تا
-                # تأیید دو‌پالی کامل شود (فیکس FLAP — نباید این‌جا pending پاک شود)
+                # Persistence Window: Candidate and hits counter are kept until
+                # Double check complete (FLAP fix - Pending should not be cleared here)
                 new_prev["pending_refill_prev_toner"] = pending_refill_prev
                 new_prev["pending_refill_new_toner"] = pending_refill_new
                 new_prev["pending_refill_total"] = pending_refill_total
@@ -1289,14 +1308,14 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
         except (TypeError, ValueError):
             pass
     if toner_levels is not None:
-        # وضعیت تشخیص تعویض کارتریج (کش in-memory مثل pending_refill)
+        # Cartridge replacement detection status (in-memory cache such as pending_refill)
         new_prev["toner_levels"] = cart_merged_levels
         new_prev["cart_change_pending"] = cart_pending_next if cart_pending_next else None
         new_prev["legacy_toner_color"] = legacy_toner_color
     if cartridge_ids is not None or cartridge_supply_pages is not None:
-        # شناسه‌های کارتریج — این‌ها در دیتابیس هم persist می‌شوند (ستون
-        # cartridge_id_state) تا تعویضِ در زمان خاموش/ری‌استارت سرور هم با
-        # مقایسه‌ی آخرین شناسه‌ی ذخیره‌شده در اولین poll برخورد شود.
+        # Cartridge identifiers — these are also persisted in the database (column
+        # cartridge_id_state) to change during server shutdown/restart
+        # Compare the last ID stored in the first poll.
         new_prev["cartridge_ids"] = cart_id_merged
         new_prev["cart_supply_pages"] = cart_pages_merged
     if "cartridge_state" in prev or "cartridge_state" in locals():
@@ -1307,16 +1326,16 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
             persisted_cartridge_state = locals().get("current_cartridge_state") or {}
         if persisted_cartridge_state:
             new_prev["cartridge_state"] = persisted_cartridge_state
-    # ذخیره نام supply برای مقایسه در poll بعدی (تشخیص تعویض از روی نام)
-    # ⚠️ نام رنگ‌هایی که تغییرشان در انتظار تأیید (pending) است باقی می‌ماند
-    # تا در poll بعدی همان نام قبلی با نام جدید مقایسه شود.
+    # Save the name of the supply for comparison in the next poll (recognition of replacement from the name)
+    # ⚠️ The names of the colors whose change is pending confirmation remain
+    # to compare the same old name with the new name in the next poll.
     if supply_names:
         merged_names = dict(prev.get("supply_names") or {})
         for ck, v in supply_names.items():
             if v and ck not in prev_name_pending:
                 merged_names[ck] = v
         new_prev["supply_names"] = merged_names
-    # ذخیره pending تغییر نام supply (دروازه ثبات ۲ poll)
+    # save pending change of supply name (consistency gate 2 poll)
     if prev_name_pending:
         new_prev["supply_name_pending"] = prev_name_pending
     elif "supply_name_pending" in prev:
@@ -1325,16 +1344,16 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
         new_prev["a3_total"] = a3_total
     if a4_total is not None:
         new_prev["a4_total"] = a4_total
-    # ✅ پرچم «عقب‌افتادگی» شمارنده‌های کاغذ: اگر این poll یکی از آن‌ها خوانده
-    # نشده، دلتای poll بعدی چندبازه‌ای است و attribute_paper_size باید مازاد را
-    # از همین مؤلفه کم کند (نه از مؤلفه‌ی درست).
+    # ✅ Flag "Legacy" of paper counters: If this poll reads one of them
+    # If not, the delta of the next poll is multi-interval and the attribute_paper_size must be redundant
+    # Subtract from this component (not from the correct component).
     new_prev["a3_lagged"] = a3_total is None
     new_prev["a4_lagged"] = a4_total is None
     store._prev.set(ip, new_prev)
 
-# ─── نسبت‌دادن سایز کاغذ به رویداد چاپ ──────────────────────────
-# برچسب‌های دسته‌بندی سایز. شاخه‌های Toshiba ماهیتاً دسته‌اند نه سایز دقیق:
-#   شاخه‌ی ۲۰۷ = کل کاغذ «بزرگ» (A3+B4+...)، شاخه‌ی ۲۰۸ = کل کاغذ «کوچک» (A4+A5+...)
+# ─── assigning the paper size to the printing event
+# Size classification labels. Toshiba plugs are by nature a bunch, not an exact size:
+# Branch 207 = all "large" paper (A3+B4+...), branch 208 = all "small" paper (A4+A5+...)
 PAPER_SIZE_LARGE_LABEL = "Large (A3/B4)"
 PAPER_SIZE_SMALL_LABEL = "Small (A4/A5)"
 PAPER_SIZE_MIXED_LABEL = "Mixed"
@@ -1343,19 +1362,19 @@ PAPER_SIZE_MIXED_LABEL = "Mixed"
 def attribute_paper_size(total, prev_total, a3_total, prev_a3, a4_total, prev_a4, ip: str = "",
                          a3_lagged: bool = False, a4_lagged: bool = False):
     """
-    برچسب سایز کاغذ را از دلتای شمارنده‌های کاغذ بزرگ/کوچک استخراج می‌کند.
+    Extracts the paper size label from the delta of the large/small paper counters.
 
-    ✅ فیکس باگ «سایز اشتباه در لاگ»: روی Toshiba هویتِ
-    a3_total + a4_total == print_total اثبات شده است؛ پس جمع دلتای دو شاخه
-    باید با دلتای شمارنده کل برابر باشد. قبلاً بدون این اعتبارسنجی برچسب
-    گذاشته می‌شد و در دو سناریو «مطمئن اما اشتباه» بود:
-      ۱) خواندن ناموفق یکی از شمارنده‌ها در poll قبل (snapshot کهنه → دلتای
-         چندبازه‌ای)،
-      ۲) مسمومیت baseline با مقدار ۰ در مسیر legacy وقتی خواندن SNMP fail
-         می‌شد (si(...)=0 در PrevStore ذخیره می‌شد و دلتای بعدی = کل شمارنده!).
-    در این موارد حالا هشدار می‌دهیم و None برمی‌گردانیم (سایز نامشخص) به‌جای
-    برچسب اشتباه. در حالت «Mixed» تعداد دقیق هر دسته در paper_split برگردانده
-    می‌شود تا در جزئیات رویداد ثبت شود.
+    ✅ Fix "wrong size in log" bug: on Toshiba identity
+    a3_total + a4_total == print_total is proved; So the delta sum of the two branches
+    It must be equal to the delta of the total counter. Previously without this label validation
+    was placed and was "sure but wrong" in two scenarios:
+      1) Unsuccessful reading of one of the counters in the previous poll (old snapshot → Delta
+         multi-range),
+      2) Poisoning the baseline with a value of 0 in the legacy path when reading SNMP fail
+         (si(...)=0 would be stored in PrevStore and the next delta = total counter!).
+    In these cases we now warn and return None (unspecified size) instead
+    Wrong label. In "Mixed" mode, the exact number of each batch is returned in paper_split
+    can be recorded in the details of the event.
 
     Returns:
         (paper_size: str|None, paper_split: {"large": int, "small": int}, reliable: bool)
@@ -1363,6 +1382,7 @@ def attribute_paper_size(total, prev_total, a3_total, prev_a3, a4_total, prev_a4
     zero_split = {"large": 0, "small": 0}
 
     def _as_int(v):
+        """Convert a value to int, returning None on failure."""
         try:
             return int(v)
         except (TypeError, ValueError):
@@ -1373,7 +1393,7 @@ def attribute_paper_size(total, prev_total, a3_total, prev_a3, a4_total, prev_a4
     pa3 = _as_int(prev_a3)
     pa4 = _as_int(prev_a4)
     if a3 is None or a4 is None or pa3 is None or pa4 is None:
-        # داده ناقص (اولین poll یا خواندن ناموفق) — بدون حدس برمی‌گردانیم.
+        # Incomplete data (first poll or read failed) — return no guess.
         return None, zero_split, False
 
     delta_a3 = a3 - pa3
@@ -1395,7 +1415,7 @@ def attribute_paper_size(total, prev_total, a3_total, prev_a3, a4_total, prev_a4
         expected = total_i - prev_total_i
 
     if expected is not None:
-        # شکاف بین snapshot شمارنده کل و snapshot کاغذ = نسبت‌دهی نامعتبر
+        # Gap between total counter snapshot and paper snapshot = invalid ratio
         tol = max(2, int(0.05 * max(expected, 1)))
         if abs((delta_a3 + delta_a4) - expected) > tol:
             log.warning(
@@ -1405,12 +1425,12 @@ def attribute_paper_size(total, prev_total, a3_total, prev_a3, a4_total, prev_a4
             )
             return None, zero_split, False
 
-        # ✅ جذب خطای گردش/تأخیر شمارنده در داخل تلورانس: اگر جمع تفکیک کمی
-        # بیشتر از دلتای واقعی است (مثلاً یک صفحه‌ی بازه‌ی قبلی که آن موقع
-        # شمارنده‌اش خوانده نشده بود)، مازاد از مؤلفه‌ی «عقب‌مانده» کم می‌شود
-        # (پرچم lagged) تا paper_split هرگز از pages رویداد بیشتر نشود.
-        # بدون پرچم، heuristic: مازاد معمولاً در مؤلفه‌ی کوچک‌ترِ دیررس است.
-        # حالت کمبود (شمارنده‌ای که عقب‌مانده) را پر نمی‌کنیم — جعل نسبت‌دهی نمی‌کنیم.
+        # ✅ Absorption of counter rounding/delay error within tolerance: if the sum of the difference is small
+        # is greater than the actual delta (eg, a page from a previous interval that then
+        # its counter was not read), the surplus is subtracted from the "retarded" component
+        # (lagged flag) so that paper_split never exceeds event pages.
+        # No flag, heuristic: excess is usually in the smaller late component.
+        # We don't fill in the deficiency state (a counter that is behind) — we don't falsify attribution.
         if expected >= 0:
             overflow = (delta_a3 + delta_a4) - expected
             if overflow > 0:
@@ -1434,8 +1454,10 @@ def attribute_paper_size(total, prev_total, a3_total, prev_a3, a4_total, prev_a4
     return PAPER_SIZE_MIXED_LABEL, split, True
 
 
-# ─── سازگاری شمارنده‌ها ─────────────────────────────────────────
+# Compatibility of counters
 def validate_counter_consistency(counters: dict, brand: str) -> list:
+    """Check counter values against each other and return a list of warning strings."""
+
     warnings = []
     total   = counters.get("total",       0) or 0
     color   = counters.get("full_color",  0) or 0
@@ -1468,15 +1490,15 @@ def validate_counter_consistency(counters: dict, brand: str) -> list:
     return warnings
 
 
-# ─── تشخیص برند ─────────────────────────────────────────────────
+# Brand recognition
 def fetch_first_web_page(ip: str, urls, timeout: float = 4.0):
-    """اولین صفحه‌ی وبِ قابل‌خواندن از پنل دستگاه را برمی‌گرداند.
+    """Returns the first web page readable from the device panel.
 
-    برای fallbackهای اسکریپ تونر (Canon/Brother/HP) وقتی SNMP عدد نمی‌دهد.
-    - ابتدا requests (اگر نصب باشد) و در غیر این صورت urllib
-    - HTTPS هم پشتیبانی می‌شود؛ گواهی‌های خودامضای چاپگرها پذیرفته می‌شوند
-      (بسیاری HPها پورت ۸۰ را می‌بندند و فقط روی ۴۴۳ پاسخ می‌دهند).
-    خروجی: (url, html) یا (None, None)
+    For script toner fallbacks (Canon/Brother/HP) when SNMP does not give a number.
+    - first requests (if installed) and otherwise urllib
+    - HTTPS is also supported; Self-signed certificates from printers are accepted
+      (Many HPs close port 80 and only respond on 443).
+    Output: (url, html) or (None, None)
     """
     try:
         import requests as _req
@@ -1517,13 +1539,15 @@ def fetch_first_web_page(ip: str, urls, timeout: float = 4.0):
 
 
 def detect_brand(ip: str, community: str) -> str:
+    """Identify the printer brand (hp, canon, brother, toshiba, ...) from its sysObjectID and sysDescr."""
+
     sys_oid  = snmp_get_with_fallback(ip, "1.3.6.1.2.1.1.2.0", community, timeout=2.0)
     sys_desc = str(snmp_get_with_fallback(ip, "1.3.6.1.2.1.1.1.0", community, timeout=2.0) or "").lower()
     oid_str  = str(sys_oid) if sys_oid else ""
 
     if "ecs100g" in sys_desc or "1.3.6.1.4.1.47206" in oid_str:
         return "sensor"
-    # برخی ECS100Gها sysDescr استاندارد نمی‌دهند؛ با OIDهای اختصاصی هم probe می‌کنیم.
+    # Some ECS100Gs do not provide a standard sysDescr; We also probe with dedicated OIDs.
     for sensor_oid in (
         "1.3.6.1.4.1.47206.1.0",
         "1.3.6.1.4.1.47206.110.1.2.0",

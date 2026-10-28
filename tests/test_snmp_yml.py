@@ -1,17 +1,27 @@
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tests/test_snmp_yml.py
+# @brief:        Tests for monitoring/snmp.yml (step G.3).
+# @details:      Responsibilities: Check YAML validity, loader-accepted keys and the 136-OID matrix.
+#                Main API: 15 test functions
+#                Side effects: none at import time
+# @dependencies: external: yaml
+# @notes:        None.
+# =============================================================================
+
 """
-تست‌های `monitoring/snmp.yml` (گام G.3).
+``monitoring/snmp.yml'' tests (step G.3).
 
-این فایل را باینری رسمی *نخوانده است* (تصمیم مالک: تست واقعی روی سرور خودش، پایان
-پروژه). پس این تست‌ها هر آنچه در sandbox می‌شد سنجید را می‌سنجند:
+This file is *not* read by the official binary (owner's decision: real test on own server, end
+project). So these tests measure everything that could be measured in the sandbox:
 
-  ۱) کلیدها فقط همان‌هایی باشند که `config/config.go` نسخهٔ 0.26.0 می‌شناسد —
-     چون loader آن `yaml.UnmarshalStrict` است، یک کلیدِ اضافه روی سرور مالک
-     خطای *load* می‌دهد، نه هشدار؛
-  ۲) پوشش ۱۳۶/۱۳۶ با ماتریس و 1:1 با `generator.yml` (هیچ OIDی اختراع/جا نماند)؛
-  ۳) هر ۱۳۶ متریک `type` معتبر داشته باشد و نام/OID یکتا و 1:1 باشند؛
-  ۴) `ignore_values` (۳۱) به‌صورت کامنتِ ردیابی‌شدنی باشد و هیچ‌جا کلیدِ زنده نشود؛
-  ۵) manifest همان اعدادی را بگوید که در فایل هست.
+  1) The keys should be only those that `config/config.go` version 0.26.0 knows —
+     Because its loader is `yaml.UnmarshalStrict', an extra key on the owner server
+     gives a *load* error, not a warning;
+  2) covering 136/136 with matrix and 1:1 with `generator.yml' (no OID invented/left);
+  3) Every 136 metric has a valid `type' and the name/OID are unique and 1:1;
+  4) ``ignore_values'' (31) should be traceable as a comment and not live anywhere;
+  5) The manifest should say the same numbers that are in the file.
 """
 
 from __future__ import annotations
@@ -32,14 +42,14 @@ MATRIX_TOOL = ROOT / "tools" / "build_oid_matrix.py"
 
 EXPECTED_MODULES = {"printer_std": 24, "printer_hp": 14, "printer_canon": 16,
                     "printer_brother": 9, "printer_toshiba": 63, "sensor_ecs100g": 10}
-TOTAL_OIDS = sum(EXPECTED_MODULES.values())          # 136 — مبنای فاز G: «کد مرجع است»
+TOTAL_OIDS = sum(EXPECTED_MODULES.values())          # 136 - Basis of phase G: "The reference code"
 WALK_TABLES = 7
 IGNORE_MARKERS = 31
 INFERRED_TYPES = 60
 SENTINELS = ["-2", "-3"]
 AUTH_NAMES = {"public_v1", "public_v2", "secure_v3"}
 
-# کلیدهای مجاز، از config/config.go در تگ v0.26.0 (ساختارِ runtime، نه spec)
+# Allowed keys, from config/config.go in the v0.26.0 tag (runtime build, not spec)
 RUNTIME_KEYS = {
     "root": {"auths", "modules", "version"},
     "auth": {"community", "security_level", "username", "password", "auth_protocol",
@@ -49,9 +59,9 @@ RUNTIME_KEYS = {
     "metric": {"name", "oid", "type", "help", "indexes", "lookups", "regex_extracts",
                "enum_values", "offset", "scale"},
 }
-# نوع‌هایی که collector واقعاً می‌شناسد (collector.go: pduToSamples + pduValueAsString).
-# هر رشته‌ای بیرون از counter/gauge به مسیر «رشته» می‌رود (value=1 + لیبل)؛ هر عددی
-# باید gauge/counter باشد وگرنه مقدار عددی‌اش دور ریخته می‌شود.
+# Types that the collector actually recognizes (collector.go: pduToSamples + pduValueAsString).
+# Any string outside the counter/gauge goes to the "string" path (value=1 + label); any number
+# It must be gauge/counter, otherwise its numerical value will be thrown away.
 VALID_TYPES = {"counter", "gauge", "DisplayString", "OctetString", "Integer32",
                "Float", "Double", "Bits", "EnumAsInfo", "EnumAsStateSet"}
 NUMERIC_TYPES = {"counter", "gauge", "Float", "Double"}
@@ -61,19 +71,22 @@ BLOCK_RE = re.compile(r"^(\s*)- name: (\S+)\s*$", re.M)
 
 
 def _text() -> str:
+    """Helper: text."""
     return SNMP_YML.read_text(encoding="utf-8")
 
 
 def _doc() -> dict:
+    """Helper: doc."""
     return yaml.safe_load(_text())
 
 
 def _spec() -> dict:
+    """Helper: spec."""
     return yaml.safe_load(GENERATOR.read_text(encoding="utf-8"))
 
 
 def _spec_entries() -> dict:
-    """{module: [rows]} — ردیف‌های spec، به همان ترتیبی که snmp.yml باید بازتابشان باشد.\""""
+    """{module: [rows]} — spec rows, in the same order that snmp.yml should reflect them.\""""
     out = {}
     for mod, cfg in _spec()["modules"].items():
         rows = [r for r in (cfg.get("get") or []) if isinstance(r, dict)]
@@ -84,6 +97,7 @@ def _spec_entries() -> dict:
 
 
 def _metrics(doc: dict | None = None):
+    """Helper: metrics."""
     doc = doc if doc is not None else _doc()
     for mod, cfg in (doc.get("modules") or {}).items():
         for m in cfg.get("metrics") or []:
@@ -91,7 +105,7 @@ def _metrics(doc: dict | None = None):
 
 
 def _blocks() -> dict:
-    """کامنت‌هایِ هر بلوکِ متریک: {«module/name» → [خطوط کامنت]} — stdlib این‌ها را دور می‌ریزد."""
+    """Comments for each metric block: {"module/name" → [comment lines]} — stdlib discards these."""
     out: dict[str, list[str]] = {}
     cur_mod = cur_name = None
     for line in _text().splitlines():
@@ -110,6 +124,7 @@ def _blocks() -> dict:
 
 
 def _matrix_modules() -> tuple[dict, dict]:
+    """Helper: matrix modules."""
     spec = importlib.util.spec_from_file_location("build_oid_matrix", MATRIX_TOOL)
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
@@ -117,8 +132,9 @@ def _matrix_modules() -> tuple[dict, dict]:
     return mod.build()
 
 
-# ── ۱) ساختار ───────────────────────────────────────────────────────────────
+# ── 1) The structure
 def test_snmp_yml_is_valid_yaml_with_exactly_six_modules():
+    """Verifies snmp yml is valid yaml with exactly six modules."""
     doc = _doc()
     assert isinstance(doc, dict), "snmp.yml mapping نیست"
     assert doc.get("version") == 1, "version باید 1 باشد"
@@ -130,7 +146,7 @@ def test_snmp_yml_is_valid_yaml_with_exactly_six_modules():
 
 
 def test_only_keys_the_official_loader_accepts():
-    """`UnmarshalStrict` ⇒ هر کلیدِ ناشناخته = خطای load. این تست جانشینِ اجرای باینری است."""
+    """`UnmarshalStrict` ⇒ any unknown key = load error. This test is a substitute for binary execution."""
     doc = _doc()
     assert set(doc) <= RUNTIME_KEYS["root"], f"کلید ریشهٔ ناشناخته: {set(doc) - RUNTIME_KEYS['root']}"
     for auth_name, adef in (doc.get("auths") or {}).items():
@@ -142,12 +158,13 @@ def test_only_keys_the_official_loader_accepts():
         for m in cfg.get("metrics") or []:
             bad = set(m) - RUNTIME_KEYS["metric"]
             assert not bad, f"{mod}/{m.get('name')}: {sorted(bad)}"
-    # این سه، کلیدهای spec‌اند و در schema بیگانه‌اند
+    # These three are spec keys and are foreign in the schema
     for key in ("ignore_values", "source", "subtree", "lookups", "row_index", "label_oid"):
         assert f"\n    {key}:" not in _text() and f"      {key}:" not in _text(), f"کلیدِ spec زنده شد: {key}"
 
 
 def test_auths_use_the_runtime_field_names():
+    """Verifies auths use the runtime field names."""
     doc = _doc()
     auths = doc.get("auths") or {}
     assert set(auths) == AUTH_NAMES, f"authها: {sorted(auths)}"
@@ -156,19 +173,20 @@ def test_auths_use_the_runtime_field_names():
     v3 = auths["secure_v3"]
     assert v3["version"] == 3 and v3["security_level"] == "authPriv"
     assert v3["auth_protocol"] == "SHA" and v3["priv_protocol"] == "AES", "نام‌های v3 باید runtimeی باشند"
-    # در spec این‌ها auth_passphrase/priv_passphrase + AES128 بودند؛ اینجا نه
+    # In the spec, these were auth_passphrase/priv_passphrase + AES128; not here
     for gone in ("auth_passphrase", "priv_passphrase"):
         assert gone not in v3, f"کلیدِ spec در snmp.yml مجاز نیست: {gone}"
     assert not re.search(r"^\s+priv_protocol: +AES128$", _text(), re.M), "AES128 را runtime نمی‌شناسد (AES)"
     for key in ("username", "password", "priv_password"):
         assert re.match(r"^\$\{[A-Z0-9_]+\}$", str(v3[key])), f"secure_v3.{key} placeholder نیست"
-    # «همهٔ moduleها در auths»: هر نامِ module با همان سه auth صدا زده می‌شود
+    # "all modules in auths": each module name is called with the same three auths
     for mod in (doc.get("modules") or {}):
         assert AUTH_NAMES, f"{mod} بدون auth قابل استفاده نیست"
 
 
-# ── ۲) پوشش و 1:1 با spec ───────────────────────────────────────────────────
+# ── 2) Coverage and 1:1 with spec
 def test_all_136_matrix_oids_are_declared_and_none_is_invented():
+    """Verifies all 136 matrix oids are declared and none is invented."""
     modules, stats = _matrix_modules()
     matrix_oids = {r["oid"] for rows in modules.values() for r in rows}
     file_oids = {str(m["oid"]) for _mod, m in _metrics()}
@@ -178,13 +196,14 @@ def test_all_136_matrix_oids_are_declared_and_none_is_invented():
 
 
 def test_metrics_are_one_to_one_with_generator_yml_rows():
+    """Verifies metrics are one to one with generator yml rows."""
     spec = _spec_entries()
     for mod, rows in spec.items():
         want = {(r["name"], str(r["oid"])) for r in rows}
         got = {(m["name"], str(m["oid"])) for m in (_doc()["modules"][mod].get("metrics") or [])}
         assert len(got) == len(rows) == len(want), f"{mod}: تعداد متریک‌ها با spec نمی‌خواند"
         assert want == got, f"{mod}: نام↔OID از spec جدا شده — {sorted(want ^ got)}"
-        # ردیابی: sourceِ هر ردیف باید داخل help باشد
+        # Tracking: the source of each line must be inside help
         by_name = {m["name"]: m for m in (_doc()["modules"][mod].get("metrics") or [])}
         for r in rows:
             src = str(r.get("source", ""))
@@ -192,6 +211,7 @@ def test_metrics_are_one_to_one_with_generator_yml_rows():
 
 
 def test_metric_names_are_unique_valid_prometheus_names():
+    """Verifies metric names are unique valid prometheus names."""
     names = [m["name"] for _mod, m in _metrics()]
     assert len(names) == TOTAL_OIDS == len(set(names)), "نامِ متریک تکراری است"
     for n in names:
@@ -199,8 +219,9 @@ def test_metric_names_are_unique_valid_prometheus_names():
         assert n == n.lower(), f"نام باید lowercase باشد: {n}"
 
 
-# ── ۳) type و help ───────────────────────────────────────────────────────────
+# 3) type and help
 def test_every_metric_has_a_type_the_runtime_understands():
+    """Verifies every metric has a type the runtime understands."""
     spec_types = {(mod, r["name"]): r.get("type") for mod, rows in _spec_entries().items() for r in rows}
     for mod, m in _metrics():
         typ = m.get("type")
@@ -212,12 +233,13 @@ def test_every_metric_has_a_type_the_runtime_understands():
 
 
 def test_sixty_types_are_marked_as_inferred_and_match_the_untyped_spec_rows():
+    """Verifies sixty types are marked as inferred and match the untyped spec rows."""
     untyped = {f"{mod}/{r['name']}" for mod, rows in _spec_entries().items() for r in rows if "type" not in r}
     assert len(untyped) == INFERRED_TYPES, f"ردیفِ بی‌type در spec: {len(untyped)}، انتظار {INFERRED_TYPES}"
     marked = {k for k, notes in _blocks().items() if any(n.startswith("# type inferred") for n in notes)}
     assert marked == untyped, (f"فقط‌mark شده: {sorted(marked - untyped)} / بی‌mark: "
                               f"{sorted(untyped - marked)}")
-    # استنتاج باید در خانوادهٔ درست بماند: ردیفِ عددِ انباشته counter، بقیه gauge/رشته
+    # The inference must remain in the correct family: the stack number row is counter, the rest is gauge/string
     for mod, m in _metrics():
         key = f"{mod}/{m['name']}"
         if key not in untyped:
@@ -233,14 +255,16 @@ def test_sixty_types_are_marked_as_inferred_and_match_the_untyped_spec_rows():
 
 
 def test_help_text_exists_and_is_module_scoped():
+    """Verifies help text exists and is module scoped."""
     for mod, m in _metrics():
         help_text = m.get("help")
         assert isinstance(help_text, str) and help_text, f"{mod}/{m['name']}: help خالی است"
         assert help_text.startswith(f"PrintGuard {mod}: "), f"{mod}/{m['name']}: prefix ماژول ندارد"
 
 
-# ── ۴) walk / get ───────────────────────────────────────────────────────────
+# ── 4) walk / get
 def test_seven_walk_tables_and_no_overlap_with_get():
+    """Verifies seven walk tables and no overlap with get."""
     doc = _doc()
     tables = [(mod, str(sub)) for mod, cfg in doc["modules"].items() for sub in (cfg.get("walk") or [])]
     assert len(tables) == WALK_TABLES, f"جدول walk: {len(tables)}، انتظار {WALK_TABLES} (std2·hp2·tsh2·bro1)"
@@ -259,6 +283,7 @@ def test_seven_walk_tables_and_no_overlap_with_get():
 
 
 def test_every_metric_is_reachable_by_exactly_one_of_walk_or_get():
+    """Verifies every metric is reachable by exactly one of walk or get."""
     for mod, cfg in _doc()["modules"].items():
         subs = [str(s) for s in cfg.get("walk") or []]
         gets = {str(o) for o in cfg.get("get") or []}
@@ -269,8 +294,9 @@ def test_every_metric_is_reachable_by_exactly_one_of_walk_or_get():
             assert OID_RE.match(o), f"{mod}/{m['name']}: OID نامعتبر «{o}»"
 
 
-# ── ۵) ignore_values ────────────────────────────────────────────────────────
+# 5) ignore_values
 def test_ignore_values_are_comment_markers_on_the_same_thirty_one_metrics():
+    """Verifies ignore values are comment markers on the same thirty one metrics."""
     want = {f"{mod}/{r['name']}": list(r["ignore_values"])
             for mod, rows in _spec_entries().items() for r in rows if r.get("ignore_values")}
     assert len(want) == IGNORE_MARKERS, f"spec: {len(want)} ردیفِ ignore_values، انتظار {IGNORE_MARKERS}"
@@ -283,23 +309,25 @@ def test_ignore_values_are_comment_markers_on_the_same_thirty_one_metrics():
     assert set(got) == set(want), (f"کم/زیاد: {sorted(set(want) ^ set(got))}")
     for key, vals in want.items():
         assert got[key] == vals == SENTINELS, f"{key}: مقدار sentinel جابه‌جا شده"
-    # و هیچ‌جا کلیدِ زنده نشود (runtime این کلید را ندارد)
+    # And there is no live key anywhere (runtime does not have this key)
     assert not re.search(r"^\s+ignore_values:", _text(), re.M), "ignore_values کلیدِ زنده شد"
 
 
 def test_probe_only_orphans_stay_out_of_snmp_yml():
+    """Verifies probe only orphans stay out of snmp yml."""
     _modules, stats = _matrix_modules()
     orphans = set(stats["orphans"])
     assert orphans, "ماتریس یتیم ندارد؟!"
     live = {str(m["oid"]) for _mod, m in _metrics()}
     assert not (orphans & live), f"یتیم به متریک تبدیل شده: {sorted(orphans & live)}"
-    # در spec کامنت‌اند؛ همان ۱۰ کامنت را expectationsِ گیت §۲ می‌سنجد
+    # There are comments in the spec; The same 10 comments are measured by the expectations of GATE §2
     commented = set(re.findall(r"^\s*#\s*(\d+(?:\.\d+){6,})\s+\u2190", GENERATOR.read_text(encoding="utf-8"), re.M))
     assert orphans <= commented and len(commented) == 10
 
 
-# ── ۶) manifest ────────────────────────────────────────────────────────────
+# ── 6) manifest
 def test_manifest_reports_what_the_file_actually_contains():
+    """Verifies manifest reports what the file actually contains."""
     man = json.loads(MANIFEST.read_text(encoding="utf-8"))
     for key in ("generated_by", "modules", "total_oids", "walk_tables", "ignore_values_count",
                 "generated_at_utc", "load_test_sandbox", "load_test_planned"):
@@ -316,13 +344,14 @@ def test_manifest_reports_what_the_file_actually_contains():
 
 
 def test_file_is_os_independent_plain_text():
+    """Verifies file is os independent plain text."""
     raw = SNMP_YML.read_bytes()
     assert b"\r" not in raw, "CRLF: فایل باید در Windows و لینوکس یک بایت بماند"
-    text = raw.decode("utf-8")                      # latin-1/cp1252 نه، حتماً utf-8
+    text = raw.decode("utf-8")                      # latin-1/cp1252 No, definitely utf-8
     assert text.endswith("\n") and "\t" not in text
     for leak in ("/home/user", "C:\\", "/tmp/"):
         assert leak not in text, f"مسیرِ sandbox به فایل راه یافته: {leak}"
-    # کامنت‌های فارسی فقط کامنت‌اند: ساختارِ parsed بدونِ آنها هم دقیقاً همان است
+    # Farsi comments are just comments: the parsed structure is exactly the same without them
     doc = _doc()
     stripped = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
     assert yaml.safe_load(stripped) == doc, "ساختار به کامنت‌ها وابسته شده است"

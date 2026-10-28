@@ -1,19 +1,33 @@
+# =============================================================================
+# @file:         tests/test_integration_cartridge_pipeline.py
+# @brief:        Integration tests for the cartridge pipeline.
+# @details:      Responsibilities: Run identity detection through the poller end to end.
+#                Main API: CartridgePipelineIntegrationTests
+#                Side effects: none at import time
+# @dependencies: internal: core, core.cartridge_change_engine, core.collectors.base, core.database
+# @notes:        Can be run directly as a script.
+# =============================================================================
+
+"""Integration tests for the cartridge pipeline: identity detection through the poller, end to end."""
+
 import json
 import os
 import tempfile
 import unittest
 
 from core import store
-from core.database import init_db, db_connection, get_log
+from core.database import init_db, get_log
 import core.collectors.base as base_mod
 from core.cartridge_change_engine import evaluate_cartridge_change
 
 
 class CartridgePipelineIntegrationTests(unittest.TestCase):
+    """Tests for cartridge pipeline integration."""
     IP = "10.10.10.10"
     UP = 600_000_000
 
     def setUp(self):
+        """Prepare the fixtures that each test in this class uses."""
         self.tmp = tempfile.TemporaryDirectory()
         self.old_cwd = os.getcwd()
         os.chdir(self.tmp.name)
@@ -21,11 +35,13 @@ class CartridgePipelineIntegrationTests(unittest.TestCase):
         store._prev._cache.clear()
 
     def tearDown(self):
+        """Release the resources that each test in this class created."""
         store._prev._cache.clear()
         os.chdir(self.old_cwd)
         self.tmp.cleanup()
 
     def _logs(self, etype=None):
+        """Helper: logs."""
         rows = get_log(self.IP, limit=200)
         if etype is None:
             return rows
@@ -34,6 +50,7 @@ class CartridgePipelineIntegrationTests(unittest.TestCase):
     def _poll(self, total, *, current_toner_level=None, prev_toner_level=None,
               toner_levels=None, cartridge_ids=None, cartridge_supply_pages=None,
               signal_quality=None, supply_names=None, uptime=None, legacy_toner_color="black"):
+        """Helper: poll."""
         prev = store._prev.get(self.IP) or {}
         base_mod._counters_event(
             self.IP,
@@ -55,6 +72,7 @@ class CartridgePipelineIntegrationTests(unittest.TestCase):
         )
 
     def test_poll_baseline_and_no_event(self):
+        """Verifies poll baseline and no event."""
         self._poll(1000, current_toner_level=55)
         self.assertEqual(self._logs("CARTRIDGE_CHANGED"), [])
         self.assertEqual(len(self._logs()), 0)
@@ -64,6 +82,7 @@ class CartridgePipelineIntegrationTests(unittest.TestCase):
         self.assertEqual(len(self._logs()), 0)
 
     def test_chip_id_change_emits_exactly_one_event_and_duplicate_is_blocked(self):
+        """Verifies chip id change emits exactly one event and duplicate is blocked."""
         self._poll(1000, current_toner_level=60, cartridge_ids={"black": "HP-AAA-111"})
         self._poll(1001, current_toner_level=60, cartridge_ids={"black": "HP-BBB-222"})
 
@@ -81,6 +100,7 @@ class CartridgePipelineIntegrationTests(unittest.TestCase):
         self.assertEqual(len(self._logs("CARTRIDGE_CHANGED")), 1)
 
     def test_four_poll_identity_sequence_is_zero_zero_one_zero(self):
+        """Verifies four poll identity sequence is zero zero one zero."""
         self._poll(1000, current_toner_level=60, cartridge_ids={"black": "ABC"})
         self.assertEqual(len(self._logs("CARTRIDGE_CHANGED")), 0)
         self._poll(1001, current_toner_level=60, cartridge_ids={"black": "ABC"})
@@ -91,6 +111,7 @@ class CartridgePipelineIntegrationTests(unittest.TestCase):
         self.assertEqual(len(self._logs("CARTRIDGE_CHANGED")), 1)
 
     def test_without_chip_id_multiple_reset_signals_use_engine_confidence(self):
+        """Verifies without chip id multiple reset signals use engine confidence."""
         self._poll(1000, current_toner_level=15, toner_levels={"black": 15},
                    cartridge_supply_pages={"black": 12000})
         self._poll(1001, current_toner_level=95, toner_levels={"black": 95},
@@ -104,11 +125,13 @@ class CartridgePipelineIntegrationTests(unittest.TestCase):
         self.assertIn("supply_life", details["detection_methods"])
 
     def test_level_only_change_is_not_event(self):
+        """Verifies level only change is not event."""
         self._poll(1000, current_toner_level=30, cartridge_ids={"black": "HP-AAA-111"})
         self._poll(1001, current_toner_level=92, cartridge_ids={"black": "HP-AAA-111"})
         self.assertEqual(self._logs("CARTRIDGE_CHANGED"), [])
 
     def test_counter_reset_without_sufficient_evidence_is_not_confirmed(self):
+        """Verifies counter reset without sufficient evidence is not confirmed."""
         prev = {
             "print_total": 15000,
             "full_color": 0,
@@ -124,6 +147,7 @@ class CartridgePipelineIntegrationTests(unittest.TestCase):
         self.assertIn("COUNTER_ANOMALY", types)
 
     def test_counter_level_and_life_reset_becomes_probable(self):
+        """Verifies counter level and life reset becomes probable."""
         prev = {
             "chip_id": "HP-AAA-111",
             "serial": "SER-100",
@@ -147,6 +171,7 @@ class CartridgePipelineIntegrationTests(unittest.TestCase):
         self.assertEqual(result["confidence"], "PROBABLE")
 
     def test_reboot_and_missing_poll_do_not_create_cart_change_event(self):
+        """Verifies reboot and missing poll do not create cart change event."""
         prev = {
             "chip_id": "HP-AAA-111",
             "serial": "SER-100",
@@ -166,6 +191,7 @@ class CartridgePipelineIntegrationTests(unittest.TestCase):
         self.assertEqual(gap_result["confidence"], "UNKNOWN")
 
     def test_restart_after_db_snapshot_keeps_identity_without_false_positive(self):
+        """Verifies restart after db snapshot keeps identity without false positive."""
         self._poll(1000, current_toner_level=40, cartridge_ids={"black": "HP-AAA-111"})
         store._prev._cache.clear()
         restored = store._prev.get(self.IP) or {}
@@ -175,6 +201,7 @@ class CartridgePipelineIntegrationTests(unittest.TestCase):
         self.assertEqual(self._logs("CARTRIDGE_CHANGED"), [])
 
     def test_multicartridge_isolation_black_does_not_touch_cyan(self):
+        """Verifies multicartridge isolation black does not touch cyan."""
         base_prev = {
             "print_total": 1000,
             "full_color": 0,
@@ -192,6 +219,7 @@ class CartridgePipelineIntegrationTests(unittest.TestCase):
         self.assertIn("HP-BBB-222", json.dumps(events[0]["details"]))
 
     def test_database_contains_event_metadata_and_single_event(self):
+        """Verifies database contains event metadata and single event."""
         self._poll(1000, current_toner_level=60, cartridge_ids={"black": "HP-AAA-111"})
         self._poll(1001, current_toner_level=60, cartridge_ids={"black": "HP-BBB-222"})
         self._poll(1002, current_toner_level=60, cartridge_ids={"black": "HP-BBB-222"})

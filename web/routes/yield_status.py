@@ -1,3 +1,15 @@
+# =============================================================================
+# @file:         web/routes/yield_status.py
+# @brief:        API routes for cartridge yield status and reports.
+# @details:      Responsibilities: Return yield status and reports.
+#                Main API: api_yield_status(), api_yield_report()
+#                Side effects: defines HTTP routes
+# @dependencies: internal: core.yield_engine, web.auth | external: flask
+# @notes:        None.
+# =============================================================================
+
+"""Cartridge yield status API routes."""
+
 from flask import Blueprint, jsonify, request
 
 from core.yield_engine import get_yield_status, write_yield_status_report
@@ -9,7 +21,7 @@ bp = Blueprint("yield_status", __name__)
 @bp.route("/api/yield/status")
 @admin_required
 def api_yield_status():
-    """گزارش وضعیت Yield Engine به‌صورت per-cartridge/per-color."""
+    """Yield Engine status report per-cartridge/per-color."""
     ip = (request.args.get("ip") or "").strip() or None
     rows = get_yield_status(ip=ip)
     summary = {
@@ -27,6 +39,6 @@ def api_yield_status():
 @bp.route("/api/yield/report", methods=["POST"])
 @admin_required
 def api_yield_report():
-    """بازسازی فایل runtime `yield_status_report.txt`."""
+    """Reconstruction of runtime file `yield_status_report.txt`."""
     write_yield_status_report()
     return jsonify({"status": "ok", "file": "yield_status_report.txt"})

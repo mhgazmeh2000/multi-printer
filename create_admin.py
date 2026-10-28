@@ -1,44 +1,57 @@
 #!/usr/bin/env python3
+# =============================================================================
+# @file:         create_admin.py
+# @brief:        Command-line script that creates the initial admin user.
+# @details:      Responsibilities: Prompt for credentials and insert the admin account in the
+#                configured database.
+#                Main API: main()
+#                Side effects: database access
+# @dependencies: internal: config, core.database, core.db, models
+# @notes:        Can be run directly as a script.
+# =============================================================================
+
 """
-اسکریپت ساخت ادمین اولیه
-اجرا: python create_admin.py
+Initial admin creation script
+Run: python create_admin.py
 """
 
-import sys
 import os
+import sys
 
-# اطمینان از مسیر پروژه
+# Ensuring the project path
 ROOT = os.path.dirname(os.path.abspath(__file__))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from config import settings  # noqa: trigger SECRET_KEY check
+from config import settings  # noqa: F401  (import has a side effect: runs the SECRET_KEY check)
 from core.database import init_db
 from core.db import DatabaseConnectionError, DatabaseOperationalError
 from models import User
 
 
 def main():
+    """Interactively create the first administrator account."""
+
     print()
     print("=" * 50)
     print("  PrintGuard - Create Admin User")
     print("=" * 50)
     print()
 
-    # راه‌اندازی دیتابیس
+    # Database setup
     try:
         init_db()
-    # فاز E.4.4: خطاها با نوع مشترک از adapter می‌آیند — DatabaseOperationalError
-    # (قفل/دیسک/اتصال) و DatabaseConnectionError (ساخت اتصال). هیچ except
-    # مختص-backend در این فایل نمی‌ماند.
+    # Phase E.4.4: Errors with common type come from adapter — DatabaseOperationalError
+    # (lock/disk/connection) and DatabaseConnectionError (establishing connection). no except
+    # Specific-backend does not stay in this file.
     except (DatabaseOperationalError, DatabaseConnectionError) as e:
-        # راهنمای کاربردی به‌جای Traceback خام (مورد واقعی: اجرا روی ویندوز با
-        # درایو C:/‎%TEMP% پر → sqlite3.OperationalError: database or disk is full)
+        # Application guide instead of raw Traceback (real case: Run on Windows with
+        # Drive C:/%TEMP% is full → sqlite3.OperationalError: database or disk is full)
         print()
         print(f"  ❌ خطا در آماده‌سازی دیتابیس: {e}")
         print()
-        # فاز E.4.4: اول SQLSTATE (روی PG: 53100 = disk_full)، بعد متن درایور
-        # (روی SQLite: «database or disk is full»). ترتیب: دقیق ⇒ تقریبی.
+        # Phase E.4.4: first SQLSTATE (on PG: 53100 = disk_full), then driver text
+        # (on SQLite: "database or disk is full"). Order: exact ⇒ approximate.
         if getattr(e, "sqlstate", None) == "53100" or "full" in str(e).lower():
             print("  علت: دیسک یا پوشه TEMP پر است. گزینه‌ها:")
             print("   ۱) در درایو C:\\ جا باز کنید (Recycle Bin / %%TEMP%% / دانلودهای قدیمی)")
@@ -60,7 +73,7 @@ def main():
     print("  [OK] Database initialized")
     print()
 
-    # بررسی ادمین موجود
+    # Checking the existing admin
     existing_admins = [u for u in User.all() if u.role == "admin"]
     if existing_admins:
         print("  Admin users already exist:")
@@ -72,21 +85,21 @@ def main():
             print("  Cancelled.")
             return
 
-    # دریافت اطلاعات
+    # Get information
     print("  Enter admin details:")
     print()
-    
+
     username = input("  Username: ").strip()
     if not username:
         print("  [ERROR] Username is required")
         return
 
-    # بررسی تکراری
+    # Repeated review
     existing_user = User.find_by_identifier(username)
     if existing_user:
         print(f"  [ERROR] Username '{username}' already exists")
 
-        # پیشنهاد: تغییر نقش کاربر موجود
+        # Suggestion: Change existing user role
         if existing_user.role != "admin":
             choice = input(f"  Promote '{username}' to admin? (y/N): ").strip().lower()
             if choice == "y":
@@ -116,7 +129,7 @@ def main():
         print("  [ERROR] Passwords do not match")
         return
 
-    # ساخت کاربر
+    # User creation
     user = User.create(
         username=username,
         email=email,
@@ -131,8 +144,8 @@ def main():
         print("  ✓ Admin user created successfully!")
         print(f"  Username: {username}")
         print(f"  Email:    {email}")
-        print(f"  Role:     admin")
-        print(f"  Verified: Yes")
+        print("  Role:     admin")
+        print("  Verified: Yes")
         print("  " + "=" * 40)
         print()
         print("  You can now login at http://localhost:5050/login")

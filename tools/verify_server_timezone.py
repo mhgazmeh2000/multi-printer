@@ -1,28 +1,39 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""تأیید منطقهٔ زمانی سرور — گام E.0.1 (فقط خواندن، بدون هیچ تغییر).
+# =============================================================================
+# @file:         tools/verify_server_timezone.py
+# @brief:        Read-only check of the server time zone (step E.0.1).
+# @details:      Responsibilities: Compare OS and tzdata time zone rules and report offsets and DST.
+#                Main API: detect_windows_tz(), detect_posix_tz(), check_offset_and_dst(),
+#                check_tzdata(), inspect_db(), main()
+#                Side effects: database access, runs external processes, file I/O
+# @dependencies: stdlib only
+# @notes:        Can be run directly as a script.
+# =============================================================================
 
-چرا این ابزار؟ کل داده‌های تاریخی برنامه (به‌جز مسیر موتور کارتریج که پس از D.6
-UTC+Z می‌نویسد) با ``datetime.now().isoformat()`` یعنی **naive local** ذخیره
-شده‌اند. معنی این رشته‌ها فقط با دانستن TZ همان سرور روشن می‌شود؛ اگر سرور TZ
-دیگری داشته باشد (یا کسی بعداً عوضش کند)، تفسیر داده‌های تاریخی ۳:۳۰ جابه‌جا
-می‌شود. این ابزار همان‌جایی که برنامه اجرا می‌شود اجرا می‌شود و شواهد را جمع
-می‌کند تا تفسیر migration (سند ``docs/timezone-contract.md``) بر پایهٔ واقعیت
-باشد، نه حدس.
+"""Verify server time zone — step E.0.1 (read only, no changes).
 
-طرز اجرا (روی خود سرور، همان کاربری که سرویس/برنامه با آن اجرا می‌شود):
+Why this tool? All program historical data (except for the cartridge motor path that follows D.6
+writes UTC+Z) with ``datetime.now().isoformat()'' ie **naive local** save
+have been The meaning of these strings can be clarified only by knowing the TZ of the same server; If the TZ server
+If someone else has it (or someone changes it later), interpretation of historical data 3:30 is moved
+will be This tool runs where the program runs and gathers evidence
+to interpret the migration (document ``docs/timezone-contract.md'') based on reality
+Be, not guess.
+
+How to run (on the server itself, the same user with which the service/program is run):
 
     python tools/verify_server_timezone.py
     python tools/verify_server_timezone.py --db C:\\printguard\\logs.db
     python tools/verify_server_timezone.py --json report.json
 
-فقط خواندن: به هیچ جدولی INSERT/UPDATE/DELETE نمی‌زند. اتصال DB با URI
-``mode=ro`` باز می‌شود.
+Read only: does not INSERT/UPDATE/DELETE any tables. DB connection with URI
+``mode=ro'' opens.
 
-کدهای خروج:
-    0 = همه‌چیز روشن و سازگار با قرارداد Asia/Tehran
-    2 = نیاز به تأیید/تصمیم دستی (TZ غیرایران، tzdata نصب نیست، ...)
-    1 = خطای اجرایی (مثلاً DB خوانده نشد)
+Exit codes:
+    0 = all clear and compatible with Asia/Tehran agreement
+    2 = need for manual confirmation/decision (non-Iranian TZ, tzdata not installed,...)
+    1 = execution error (e.g. DB failed to read)
 """
 
 from __future__ import annotations
@@ -37,14 +48,14 @@ import sys
 import time
 from datetime import datetime, timezone
 
-# ---------------------------------------------------------------- ابزار پایه
+# -------------------------------------------------------------- Basic tools
 
 OK, WARN, INFO, FAIL = "[OK]", "[WARN]", "[INFO]", "[FAIL]"
 _results: list[dict] = []
 
 
 def _emit(level: str, key: str, value: str, hint: str = "") -> None:
-    """ثبت یک یافته (هم در کنسول هم در گزارش)."""
+    """Record a finding (both in the console and in the report)."""
     _results.append({"level": level, "key": key, "value": value, "hint": hint})
     line = f"{level} {key}: {value}"
     if hint:
@@ -53,20 +64,20 @@ def _emit(level: str, key: str, value: str, hint: str = "") -> None:
 
 
 def _run(cmd: list[str], timeout: int = 10) -> str:
-    """اجرای یک دستور سیستمی؛ هر خطایی ⇒ رشتهٔ خالی (ابزار نباید بترکد)."""
+    """execute a system command; Any error ⇒ empty string (the tool must not explode)."""
     try:
         out = subprocess.run(
             cmd, capture_output=True, text=True, timeout=timeout,
             shell=False, errors="replace",
         )
         return (out.stdout or out.stderr or "").strip()
-    except Exception:  # noqa: BLE001 - ابزار تشخیصی باید شکست‌ناپذیر باشد
+    except Exception:  # noqa: BLE001 - Diagnostic tool must be indestructible
         return ""
 
 
-# --------------------------------------------------- تشخیص TZ در ویندوز/لینوکس
+# --------------------------------------------------- TZ detection in Windows/Linux
 
-# نگاشت نام‌های ویندوزی متداول به IANA (فقط نام‌های مرتبط با این پروژه).
+# Mapping common Windows names to IANA (only names related to this project).
 _WIN_TO_IANA = {
     "iran standard time": "Asia/Tehran",
     "utc": "UTC",
@@ -79,7 +90,7 @@ _WIN_TO_IANA = {
 
 
 def detect_windows_tz() -> dict:
-    """خواندن TZ موثر ویندوز با tzutil و PowerShell (هر دو شکست‌پذیر)."""
+    """Effective Windows TZ reading with tzutil and PowerShell (both breakable)."""
     info = {"raw": "", "source": "", "iana": "", "dst_supported": None,
             "base_offset": "", "ntp": ""}
 
@@ -120,7 +131,7 @@ def detect_windows_tz() -> dict:
 
 
 def detect_posix_tz() -> dict:
-    """خواندن TZ روی لینوکس/مک (برای تست ابزار و سرورهای غیرهدف)."""
+    """Read TZ on Linux/Mac (for testing tools and non-target servers)."""
     info = {"raw": "", "source": "", "iana": ""}
     for path in ("/etc/timezone",):
         try:
@@ -144,7 +155,7 @@ def detect_posix_tz() -> dict:
 
 
 def check_offset_and_dst() -> dict:
-    """آفست واقعی «همین حالا» از اختلاف ساعت محلی و UTC."""
+    """The actual "right now" offset from the difference between local time and UTC."""
     now_local = datetime.now()
     now_utc = datetime.now(timezone.utc)
     delta = now_local - now_utc.replace(tzinfo=None)
@@ -163,11 +174,11 @@ def check_offset_and_dst() -> dict:
 
 
 def check_tzdata() -> dict:
-    """آیا ``zoneinfo.ZoneInfo("Asia/Tehran")`` روی همین ماشین کار می‌کند؟"""
+    """Does ``zoneinfo.ZoneInfo("Asia/Tehran")`` work on this machine?"""
     res = {"python": sys.version.split()[0], "zoneinfo_ok": False,
            "tzdata_pkg": False, "tehran_offset": ""}
     try:
-        from zoneinfo import ZoneInfo  # noqa: PLC0415 - اختیاری بودن را می‌سنجیم
+        from zoneinfo import ZoneInfo  # noqa: PLC0415 - measure optionality
         tz = ZoneInfo("Asia/Tehran")
         now = datetime.now(tz)
         res["zoneinfo_ok"] = True
@@ -182,10 +193,10 @@ def check_tzdata() -> dict:
     return res
 
 
-# ------------------------------------------------------------- بررسی داده‌ها
+# --------------------------------------------------------------- Data check
 
 def inspect_db(path: str, limit: int = 15) -> dict:
-    """نمونه‌خوانی فقط‌خواندنی از ``logs`` برای سنجش ادعای naive-local."""
+    """A read-only sampling of ``logs'' to test the naive-local assertion."""
     res = {"path": os.path.abspath(path), "exists": os.path.exists(path),
            "rows": [], "fresh": 0, "local_like": 0, "utc_like": 0, "z_rows": 0,
            "error": ""}
@@ -241,9 +252,10 @@ def inspect_db(path: str, limit: int = 15) -> dict:
     return res
 
 
-# ------------------------------------------------------------------- حکم‌ها
+# --------------------------------------------------------------------------- Rulings
 
 def _verdict_iran(off_min: int, dst: bool, tzname: str) -> None:
+    """Print the verdict of the Iran time zone check."""
     if off_min == 210 and not dst:
         _emit(OK, "حکم نهایی",
               "TZ سرور = ایران (UTC+03:30، بدون DST) ⇒ داده‌های naive local "
@@ -265,6 +277,8 @@ def _verdict_iran(off_min: int, dst: bool, tzname: str) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Command-line entry point of the server time-zone check."""
+
     ap = argparse.ArgumentParser(
         description="تأیید منطقهٔ زمانی سرور (فقط خواندن) — گام E.0.1"
     )
@@ -276,7 +290,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="تعداد ردیف نمونه از logs (پیش‌فرض ۱۵)")
     args = ap.parse_args(argv)
 
-    try:  # کنسول ویندوز ممکن است cp1256 باشد؛ خروجی فارسی باید سالم بماند
+    try:  # Windows console may be cp1256; Farsi output must remain intact
         sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
     except Exception:  # noqa: BLE001
         pass
@@ -285,12 +299,12 @@ def main(argv: list[str] | None = None) -> int:
     print("تأیید منطقهٔ زمانی سرور — فاز E.0.1 (فقط خواندن، بدون تغییر)")
     print("=" * 72)
 
-    # ۱) پلتفرم
+    # 1) Platform
     osname = f"{platform.system()} {platform.release()} ({platform.machine()})"
     _emit(INFO, "پلتفرم", osname, f"Python {sys.version.split()[0]}")
     is_win = platform.system().lower().startswith("win")
 
-    # ۲) TZ موثر سیستم
+    # 2) Effective system TZ
     sysinfo = detect_windows_tz() if is_win else detect_posix_tz()
     if sysinfo["raw"]:
         _emit(INFO, "TZ سیستم", sysinfo["raw"],
@@ -307,7 +321,7 @@ def main(argv: list[str] | None = None) -> int:
         _emit(INFO, "هم‌گام‌سازی ساعت (NTP)", sysinfo["ntp"][:160],
               "برای داده‌های naive local، ساعت درست به‌اندازهٔ خود TZ مهم است.")
 
-    # ۳) آفست واقعی و DST
+    # 3) Actual offset and DST
     off = check_offset_and_dst()
     _emit(INFO, "آفست پروسهٔ فعلی", off["offset"],
           f"tzname={off['tzname']} | tm_isdst={off['tm_isdst']} | "
@@ -328,7 +342,7 @@ def main(argv: list[str] | None = None) -> int:
         _emit(OK, "متغیر محیطی TZ", "ست نشده",
               "پس پایتون از TZ سیستم ویندوز پیروی می‌کند.")
 
-    # ۴) قابلیت zoneinfo
+    # 4) zoneinfo feature
     tzd = check_tzdata()
     if tzd["zoneinfo_ok"]:
         _emit(OK, "ZoneInfo(\"Asia/Tehran\")", f"کار می‌کند ({tzd['tehran_offset']})",
@@ -341,7 +355,7 @@ def main(argv: list[str] | None = None) -> int:
               f"{tzd.get('error', '')} ⇒ افزودن «tzdata» به requirements.txt "
               "(بند ۳ بخش ۶ سند قرارداد) ضروری می‌شود.")
 
-    # ۵) داده‌ها
+    # 5) Data
     db = inspect_db(args.db, limit=args.limit) if args.db else {"exists": False}
     if db.get("exists"):
         _emit(INFO, "DB نمونه", f"{db['path']}",
@@ -367,7 +381,7 @@ def main(argv: list[str] | None = None) -> int:
         _emit(WARN, "DB نمونه", f"خوانده نشد ({db.get('error', '')})",
               "با --db مسیر درست را بدهید؛ این بخش اختیاری است.")
 
-    # ۶) حکم
+    # 6) Judgment
     _verdict_iran(off["offset_minutes"], bool(off["tm_isdst"]), off["tzname"][0])
 
     print("-" * 72)

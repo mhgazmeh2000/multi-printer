@@ -1,30 +1,44 @@
+# =============================================================================
+# @file:         core/poller.py
+# @brief:        Background polling loop that collects data from every configured printer.
+# @details:      Responsibilities: Route each printer to the right collector, enforce per-IP
+#                locking and grace windows, and record events.
+#                Main API: collect(), poll_one(), poll_all(), polling_loop()
+#                Side effects: network I/O, starts threads
+# @dependencies: internal: config.settings, core, core.collectors.base,
+#                core.collectors.base_enhanced, core.collectors.brother, core.collectors.canon,
+#                core.collectors.exporter_adapter, core.collectors.hp, core.collectors.sensor,
+#                core.collectors.toshiba, core.database, core.exporter_client, core.snmp.oid_map,
+#                core.snmp.protocol, core.time_utils
+# @notes:        Per-IP locks prevent concurrent polls of one printer. The SNMP exporter path is
+#                off unless USE_SNMP_EXPORTER is enabled.
+# =============================================================================
+
 # core/poller.py (PATCHED - All Critical Bugs Fixed)
 
 """
-چرخه polling:
-- collect: جمع‌آوری داده از یک پرینتر با routing به collector مناسب
-- poll_all: polling موازی همه پرینترها
-- polling_loop: حلقه بی‌نهایت با POLL_INTERVAL
+Polling cycle:
+- collect: collecting data from a printer with routing to the appropriate collector
+- poll_all: parallel polling of all printers
+- polling_loop: infinite loop with POLL_INTERVAL
 """
 
-import time
-import threading
-from threading import Lock
 import logging
+import threading
+import time
+from threading import Lock
 
 from config.settings import POLL_INTERVAL
 from core import store
 from core.database import add_event
-from core.snmp.protocol import snmp_get_with_fallback, snmp_get_first, snmp_debug_get
+from core.snmp.protocol import snmp_get_first, snmp_debug_get
 from core.snmp.oid_map import OIDS
-from core.collectors.base import si, detect_brand
-
-# 🔥 تغییر: استفاده از enhanced_collector به جای کالکتورهای جداگانه
+from core.collectors.base import detect_brand
+# 🔥 Change: Use enhanced_collector instead of separate collectors
 from core.collectors.base_enhanced import collect_enhanced
-
-# fallback به collectorهای برند-محور برای حفظ ثبت رویدادها در صورت خطای enhanced
+# Enhanced fallback to brand-oriented collectors to preserve event logging in case of error
 from core.collectors.sensor import collect_sensor
-# فاز G · گام G.5 — مسیرِ آزمایشیِ exporter (پیش‌فرض خاموش؛ exporter_enabled() را ببینید)
+# Phase G · Step G.5 — exporter test path (default off; see exporter_enabled())
 from core.exporter_client import client_from_env, exporter_enabled
 from core.collectors.exporter_adapter import collect_via_exporter
 from core.collectors.toshiba import collect_toshiba
@@ -35,21 +49,22 @@ from core.time_utils import utc_now_iso
 
 log = logging.getLogger("PrinterMonitor")
 
-# قفل برای جلوگیری از اجرای هم‌زمان poll_all
+# Lock to prevent concurrent execution of poll_all
 _polling_lock = threading.Lock()
 
-#: تنها وقتی ساخته می‌شود که پرچم روشن باشد (lazy) — با پرچمِ خاموش هیچ شیئی
-#: نساخته می‌شود و هیچ سوکتی باز نمی‌شود.
+#: only created when the flag is on (lazy) — with the flag off no object
+#: It is not created and no socket is opened.
 _exporter_client_cache = None
 
 
 def _exporter_client():
+    """Return the shared exporter client, creating it on first use."""
     global _exporter_client_cache
     if _exporter_client_cache is None:
         _exporter_client_cache = client_from_env()
     return _exporter_client_cache
 
-# ✅ باگ #1: قفل جداگانه برای processed_ips (جلوگیری از Race Condition)
+# Bug #1: separate lock for processed_ips (avoid race condition)
 _processed_ips_lock = Lock()
 _ip_locks_guard = Lock()
 _ip_poll_locks = {}
@@ -63,15 +78,16 @@ _SNMP_REACHABLE_STATUSES = {
     "request_id_mismatch",
 }
 
-# ✅ پنجرهی ارفاق قبل از اعلام آفلاین: یک چرخه‌ی گمشده‌ی UDP (شایع در شبکه‌های
-# شلوغ و SNMP stack کند Toshibaها) نباید دستگاه را آفلاین کند. دستگاه فقط بعد از
-# دو شکست health متوالی آفلاین اعلام می‌شود و رویداد STATUS ثبت می‌گردد.
+# Arafaq window before offline announcement: a lost UDP cycle (common in
+# Busy and slow SNMP stack (Toshibas) should not take the device offline. Device only after
+# Two consecutive health failures are declared offline and the STATUS event is recorded.
 _OFFLINE_GRACE_CYCLES = 2
 _health_fail_lock = threading.Lock()
 _health_fail_counts: dict[str, int] = {}
 
 
 def _note_health_failure(ip: str) -> int:
+    """Increment and return the consecutive health-check failure count of a printer."""
     with _health_fail_lock:
         n = _health_fail_counts.get(ip, 0) + 1
         _health_fail_counts[ip] = n
@@ -79,12 +95,13 @@ def _note_health_failure(ip: str) -> int:
 
 
 def _reset_health_failure(ip: str) -> None:
+    """Clear the consecutive health-check failure count of a printer."""
     with _health_fail_lock:
         _health_fail_counts.pop(ip, None)
 
 
 def _get_ip_lock(ip: str) -> Lock:
-    """برای جلوگیری از poll هم‌زمان یک IP، حتی اگر thread قبلی دیر تمام شود."""
+    """To avoid simultaneous polling of an IP, even if the previous thread finishes late."""
     with _ip_locks_guard:
         lock = _ip_poll_locks.get(ip)
         if lock is None:
@@ -94,7 +111,7 @@ def _get_ip_lock(ip: str) -> Lock:
 
 
 def _probe_snmp_agent_reachable(ip: str, community: str, health_oids: list[str], timeout: float = 1.5):
-    """بررسی می‌کند آیا SNMP agent پاسخ می‌دهد، حتی اگر هیچ OID قابل‌خواندنی نداشته باشد."""
+    """Checks if the SNMP agent is responding, even if it has no readable OID."""
     seen = set()
     for idx, oid in enumerate(health_oids, 1):
         if not oid or oid in seen:
@@ -109,13 +126,13 @@ def _probe_snmp_agent_reachable(ip: str, community: str, health_oids: list[str],
 
 def collect(printer: dict) -> dict:
     """
-    جمع‌آوری داده از یک پرینتر.
-    🔥 تغییر: استفاده از enhanced_collector برای همه دستگاه‌ها (به جز سنسور)
+    Collect data from a printer.
+    🔥 Change: use enhanced_collector for all devices (except sensor)
 
-    ✅ فیکس duplicate: قفل per-IP اینجا گرفته می‌شود (نه فقط در poll_all) تا
-    هیچ دو poll هم‌زمانی روی یک دستگاه اتفاق نیفتد — قبلاً مسیرهای api_add /
-    bulk-add / auto-add بدون قفل collect را صدا می‌زدند و امکان دو PRINT
-    هم‌زمان از یک snapshot وجود داشت.
+    ✅ Duplicate fix: per-IP lock is taken here (not only in poll_all) until
+    No two polls ever occur on the same device — previously the paths api_add /
+    bulk-add / auto-add called collect without locking and the possibility of two PRINT
+    At the same time there was a snapshot.
     """
     ip = printer["ip"]
     ip_lock = _get_ip_lock(ip)
@@ -123,7 +140,7 @@ def collect(printer: dict) -> dict:
         log.warning("Skipping %s because another poll for this IP is still running", ip)
         with store.data_lock:
             previous = store.printer_data.get(ip) or {}
-        # خروجی قدیمی را برگردان تا UI با داده‌ی ناقص جایگزین نشود
+        # Return the old output so that the UI is not replaced with incomplete data
         result = dict(previous) if previous else {
             "ip": ip,
             "name": printer.get("name", ip),
@@ -144,7 +161,7 @@ def collect(printer: dict) -> dict:
 
 
 def _collect_inner(printer: dict) -> dict:
-    """بدنه‌ی اصلی collect — فقط از طریق collect() (دارای قفل) صدا زده می‌شود."""
+    """The main body of collect — only called via collect() (with a lock)."""
     ip = printer["ip"]
     name = printer["name"]
     nickname = printer.get("nickname", "")
@@ -155,10 +172,10 @@ def _collect_inner(printer: dict) -> dict:
     log.info(f"Pulling {name} ({ip}) [{brand or 'auto'}] - using enhanced collector")
     start = time.time()
 
-    # تست اولیه برای آنلاین بودن
-    # بعضی دستگاه‌ها (مثل برخی Toshibaها) به sysDescr پاسخ نمی‌دهند اما به sysUpTime
-    # یا OIDهای vendor-specific پاسخ معتبر می‌دهند. برای backward compatibility،
-    # چند health OID را به ترتیب امتحان می‌کنیم.
+    # Initial test to be online
+    # Some devices (like some Toshibas) do not respond to sysDescr but to sysUpTime
+    # or vendor-specific OIDs give a valid response. For backward compatibility,
+    # We try several health OIDs in order.
     health_oids = [
         "1.3.6.1.2.1.1.1.0",           # sysDescr
         "1.3.6.1.2.1.1.3.0",           # standard sysUpTime
@@ -167,15 +184,15 @@ def _collect_inner(printer: dict) -> dict:
         "1.3.6.1.2.1.43.5.1.1.16.1",   # Printer-MIB model/name
         OIDS.get("model"),             # vendor model (e.g. Toshiba)
     ]
-    # ✅ Toshiba: برخی مدل‌ها به OIDهای استاندارد در view محدود پاسخ نمی‌دهند؛
-    # شمارنده‌ی vendor را به ابتدای لیست بیاور تا health probe سریع‌تر موفق شود.
+    # ✅ Toshiba: some models do not respond to standard OIDs in limited view;
+    # Bring the vendor counter to the beginning of the list so that the health probe succeeds faster.
     if brand == "toshiba":
         health_oids = [
             OIDS.get("print_total"),   # Toshiba vendor total counter
             OIDS.get("model"),         # Toshiba vendor model
             OIDS.get("uptime", "1.3.6.1.2.1.1.3.0"),
         ] + [o for o in health_oids if o not in (OIDS.get("model"),)]
-    # حذف تکراری‌ها با حفظ ترتیب
+    # Removing duplicates while maintaining order
     if brand == "sensor":
         health_oids = [
             "1.3.6.1.4.1.47206.1.0",
@@ -199,7 +216,7 @@ def _collect_inner(printer: dict) -> dict:
         _reset_health_failure(ip)
 
     if not online:
-        # ✅ ارفاق: اولین شکست health، دستگاهِ قبلاً آنلاین را فوری آفلاین نمی‌کند
+        # ✅ Arafaq: The first failure of health does not immediately take the already online device offline
         fail_count = _note_health_failure(ip)
         if was_online and fail_count < _OFFLINE_GRACE_CYCLES:
             with store.data_lock:
@@ -216,8 +233,8 @@ def _collect_inner(printer: dict) -> dict:
 
         elapsed = int((time.time() - start) * 1000)
 
-        # اگر agent پاسخ SNMP داده ولی OIDها قابل‌خواندن نیستند، دستگاه را به‌عنوان
-        # reachable نمایش می‌دهیم اما با هشدار واضح، تا با حالت offline واقعی اشتباه نشود.
+        # If the agent gives an SNMP response but the OIDs cannot be read, the device as
+        # We display reachable, but with a clear warning, so as not to be confused with the real offline mode.
         if snmp_reachable_diag:
             msg = (
                 f"SNMP agent reachable but required OIDs are not readable "
@@ -269,14 +286,14 @@ def _collect_inner(printer: dict) -> dict:
     if was_online is False:
         add_event(ip, "STATUS", {"message": "دستگاه آنلاین شد", "severity": "success"})
 
-    # تشخیص برند (اگر قبلاً مشخص نبود)
+    # Brand recognition (if not already known)
     if brand == "sensor":
-        # سنسورها با کالکتور مخصوص خود
+        # Sensors with their own collector
         result = collect_sensor(ip, name, community, start)
         result["nickname"] = nickname
         result["device_type"] = "sensor"
         return result
-    
+
     if not brand or brand == "unknown":
         brand = detect_brand(ip, community)
         log.info(f"  → برند شناسایی شد: {brand}")
@@ -287,13 +304,13 @@ def _collect_inner(printer: dict) -> dict:
                     store.save_printers(store.PRINTERS)
                     break
 
-    # ── فاز G · گام G.5: مسیرِ exporter، فقط با USE_SNMP_EXPORTER=1 ──────────
-    # ترتیبِ شرط مهم است: exporter_enabled() اول ارزیابی می‌شود، پس با پرچمِ خاموش
-    # (پیش‌فرضِ فاز) هیچ is_available() و هیچ سوکتی رخ نمی‌دهد و رفتارِ امروز
-    # کلمه‌به‌کلمه همان مسیرِ collect_enhanced است.
-    # این مسیر عمداً رویدادِ شمارنده ثبت نمی‌کند (_counters_event در collectorهاست و
-    # collectors/ در این فاز دست‌نخورده می‌ماند)؛ به همین دلیل آزمایشی است و تا
-    # گام G.6 روشن نمی‌شود (docs/snmp-exporter-setup.md §۹).
+    # ── Phase G · Step G.5: exporter path, only with USE_SNMP_EXPORTER=1 ──────────
+    # The order of the condition is important: exporter_enabled() is evaluated first, then with the off flag
+    # (Phase default) No is_available() and no socket occur, and today's behavior
+    # Word for word it is the same path as collect_enhanced.
+    # This path intentionally does not register the counter event (_counters_event is in collectors and
+    # collectors/ remains intact in this phase); That is why it is experimental and until
+    # Step G.6 does not turn on (docs/snmp-exporter-setup.md §9).
     if exporter_enabled() and _exporter_client().is_available():
         exporter_result = collect_via_exporter(_exporter_client(), ip, name, brand, start)
         if exporter_result is not None:
@@ -301,7 +318,7 @@ def _collect_inner(printer: dict) -> dict:
             exporter_result["device_type"] = exporter_result.get("device_type", device_type)
             return exporter_result
 
-    # 🔥 استفاده از enhanced_collector برای همه پرینترها
+    # 🔥 Use enhanced_collector for all printers
     try:
         result = collect_enhanced(printer)
         result["nickname"] = nickname
@@ -327,7 +344,7 @@ def _collect_inner(printer: dict) -> dict:
             except Exception as legacy_error:
                 log.exception("Legacy collector also failed for %s: %s", ip, legacy_error)
 
-        # آخرین fallback: حفظ snapshot قبلی به جای صفر کردن شمارنده‌ها
+        # Last fallback: keeping the previous snapshot instead of zeroing the counters
         prev = store._prev.get(ip) or {}
         prev_total = prev.get("print_total", 0) or 0
         elapsed = int((time.time() - start) * 1000)
@@ -348,17 +365,17 @@ def _collect_inner(printer: dict) -> dict:
 
 
 def poll_one(p: dict):
-    """Poll یک پرینتر واحد"""
+    """Poll a single printer"""
     data = collect(p)
     with store.data_lock:
         store.printer_data[p["ip"]] = data
 
 
 def poll_all():
-    """اجرای poll برای همه پرینترها با جلوگیری از اجرای هم‌زمان"""
+    """Run poll for all printers by preventing them from running at the same time"""
     with _polling_lock:
-        # ✅ فلگ وضعیت برای UI: وقتی چرخه در حال اجراست، دکمه Pull دستی
-        # حالت «در حال اجرا» نشان می‌دهد به‌جای خطای ۴۰۹ گیج‌کننده.
+        # ✅ Status flag for UI: Manual Pull button when cycle is running
+        # It shows "Running" status instead of the confusing 409 error.
         store.poll_stats["is_polling"] = True
         try:
             with store.printers_lock:
@@ -369,8 +386,9 @@ def poll_all():
             processed_ips = set()
 
             def _poll(p):
+                """Poll one printer and store its results."""
                 ip = p["ip"]
-                # ✅ باگ #1: Race Condition - استفاده از قفل برای جلوگیری از polling مضاعف
+                # Bug #1: Race Condition - Use of lock to prevent double polling
                 with _processed_ips_lock:
                     if ip in processed_ips:
                         log.warning(f"Skipping duplicate poll for {ip}")
@@ -385,7 +403,7 @@ def poll_all():
             for t in threads:
                 t.start()
             for t in threads:
-                t.join(timeout=60)  # ✅ افزایش timeout به 60 ثانیه
+                t.join(timeout=60)  # ✅ Increased timeout to 60 seconds
 
             with store.data_lock:
                 store.printer_data.update(results)
@@ -401,9 +419,9 @@ def poll_all():
 
 
 def polling_loop():
-    """حلقه بی‌نهایت polling"""
-    # poll_all در startup یک چرخه فوری اجرا می‌کند؛ این sleep مانع اجرای
-    # بلافاصلهٔ چرخهٔ دوم و ثبت PRINTهای تکراری در چند ثانیهٔ اول می‌شود.
+    """Infinite polling loop"""
+    # poll_all executes an immediate cycle at startup; This sleep prevents execution
+    # Immediately, the second cycle and registration of repeated PRINTs will be done in the first few seconds.
     time.sleep(POLL_INTERVAL)
     while True:
         try:

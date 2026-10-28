@@ -1,40 +1,50 @@
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tests/conftest.py
+# @brief:        Pytest fixtures and PostgreSQL isolation for the test suite.
+# @details:      Responsibilities: Create per-test isolated schemas and summarise results.
+#                Main API: none (no public functions or classes)
+#                Side effects: database access, runs external processes
+# @dependencies: internal: core.db, core.db.connection | external: dotenv, psycopg, pytest
+# @notes:        None.
+# =============================================================================
+
 """
-tests/conftest.py — ایزولاسیون PostgreSQL برای سوئیت تست (فاز E.5).
+tests/conftest.py — PostgreSQL isolation for the test suite (Phase E.5).
 
-چرا این فایل هست
+Why is this file?
 ----------------
-پیش از این، هر تستی که با ``PG_DSN`` به پستگرس وصل می‌شد روی **یک اسکیمای مشترک**
-(``public``) کار می‌کرد. سه پیامد عملی داشت (سنجش آغازین E.5، ``DB_BACKEND=postgresql``):
+Previously, any test that connected to Postgres with ``PG_DSN'' was on **a shared schema**
+(``public'') worked. It had three practical consequences (E.5 initialization, ``DB_BACKEND=postgresql''):
 
-  1. ``relation "t" already exists`` — چند تست جدول موقت هم‌نام در ``public``
-     می‌ساختند؛ اجرای دوم به اجرای اول برخورد می‌کرد.
-  2. دادهٔ باقیمانده از اجراهای قبیـل نتیجه‌ها را عوض می‌کرد (باید دستی
-     ``TRUNCATE`` می‌شد تا وضعیت تمیز شود).
-  3. دو اجرای موازی (مثلاً ``pytest -n`` یا دو چک‌اوت در یک ماشین) یکدیگر را
-     خراب می‌کردند.
+  1. ``relation "t" already exists'' — some tests for temporary tables of the same name in ``public''
+     were making; The second performance collided with the first performance.
+  2. The remaining data from such executions would change the results (must be manual
+     ``TRUNCATE'' to clean up the situation).
+  3. Two parallel executions (for example, ``pytest -n'' or two checkouts on the same machine)
+     They were ruining it.
 
-راه‌حل: یک **اسکیمای اختصاصی برای هر اجرای pytest**. با ``CREATE SCHEMA`` (نه
-``CREATE DATABASE`` — ساخت دیتابیس به حق ``CREATEDB`` نیاز دارد و آهسته‌تر است)
-و قفل ``search_path`` روی همان اسکیمای خالی، سه مشکل بالا توأمان رفع می‌شوند.
+Solution: A dedicated **schema for each pytest run**. with ``CREATE SCHEMA'' (no
+``CREATE DATABASE'' — creating a database requires the ``CREATEDB'' right and is slower)
+and lock ``search_path'' on the same empty schema, the above three problems are solved together.
 
-قاعدهٔ این فایل: «هیچ تستی نباید ``public`` را hardcode کند.» چون همه‌چیز از راه
-``PG_DSN`` (که در ادامهٔ همین فایل بازنویسی می‌شود) وصل می‌شوند، کدهای موجود بدون
-تغییر به اسکیمای ایزوله می‌روند. تست‌های ماژول‌سطحی که ``PG_DSN`` را در زمان import
-می‌خوانند هم درست کار می‌کنند، چون این بازنویسی **در سطح ماژول conftest** انجام
-می‌شود و conftest پیش از هر ماژول تستی import می‌گردد.
+The rule of this file: "No test should hardcode ``public''." Because everything is out of the way
+``PG_DSN'' (which will be rewritten later in this file) are connected, the existing codes without
+Change to isolated schema. Surface module tests that ``PG_DSN'' during import
+They read that they work correctly, because this rewriting is done **at the level of the conftest module**
+and conftest is imported before each test module.
 
-منطق skip (بی‌صدا، طبق تصمیم مالک)
+skip logic (silent, according to the owner's decision)
 ----------------------------------
-  • ``PG_DSN`` ست نشده ⇒ هیچ کاری؛ تست‌های SQLite دست‌نخورده اجرا می‌شوند.
-  • سرور پستگرس در دسترس نیست ⇒ هیچ کاری (تست‌های PG خودشان skip می‌کنند؛ ما
-    خطای ساختگی نمی‌سازیم).
-  • نقش، حق ``CREATE`` روی دیتابیس ندارد (نقش read-only) ⇒ skip با هشدار.
-  • ``PG_DSN`` هست و اسکیم ساخته شد ولی ``alembic upgrade head`` شکست ⇒
-    **خطای صریح**؛ هیچ بازگشت بی‌صدایی به ``public`` انجام نمی‌شود (قاعدهٔ
-    «fallback بی‌صدا وجود ندارد» در ``alembic/env.py``).
+  • ``PG_DSN'' is not set ⇒ nothing; SQLite tests run intact.
+  • Postgres server is not available ⇒ nothing (PG tests skip themselves; we
+    We do not make a fake error).
+  • The role does not have ``CREATE'' rights on the database (read-only role) ⇒ skip with warning.
+  • There is ``PG_DSN'' and the scheme was created, but ``alembic upgrade head'' failed ⇒
+    **explicit error**; There is no silent fallback to ``public'' (rule
+    ``no silent fallback'' in ``alembic/env.py'').
 
-خاموش‌کردن موقت (برای عیب‌یابی): ``PRINTGUARD_PG_ISOLATE=0``.
+Temporary shutdown (for troubleshooting): ``PRINTGUARD_PG_ISOLATE=0''.
 """
 
 from __future__ import annotations
@@ -51,22 +61,22 @@ import pytest
 ENV_PG_DSN = "PG_DSN"
 ENV_DB_BACKEND = "DB_BACKEND"
 ENV_SWITCH = "PRINTGUARD_PG_ISOLATE"
-#: پیشوند نام اسکیم — برای اینکه با چشم در ``pg_stat_activity`` پیدا باشد.
+#: scheme name prefix — to be visible by eye in ``pg_stat_activity''.
 SCHEMA_PREFIX = "printguard_test"
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-#: وضعیت این اجرا (dsn اصلی + اسکیم ساخته‌شده).
+#: Status of this implementation (main dsn + created scheme).
 _state = {"dsn": None, "schema": None}
 
-#: اگر بازنشانی داده یک‌بار بشکند، پیامش اینجا می‌ماند و از آن پس خاموش می‌شود.
+#: If a data reset breaks once, its message will remain here and will be turned off after that.
 _reset_broken = None
 
 
 def _dsn_with_search_path(dsn: str, schema: str) -> str:
     """
-    ``options=-csearch_path=<schema>`` به DSN اضافه می‌کند (بدون فاصله).
-    پشتیبانی کامل از هر دو ساختار: URI (`postgresql://...`) و conninfo (`host=...`).
+    Adds ``options=-csearch_path=<schema>'' to the DSN (no spaces).
+    Full support for both structures: URI (`postgresql://...`) and conninfo (`host=...`).
     """
     try:
         from psycopg.conninfo import conninfo_to_dict, make_conninfo
@@ -90,14 +100,14 @@ def _dsn_with_search_path(dsn: str, schema: str) -> str:
 
 
 def _maintenance_connect(dsn: str):
-    """اتصال autocommit برای کارهای مدیریتی (CREATE/DROP SCHEMA)."""
+    """Autocommit connection for administrative tasks (CREATE/DROP SCHEMA)."""
     import psycopg
 
     return psycopg.connect(dsn, autocommit=True, connect_timeout=5)
 
 
 def _isolate() -> None:
-    """اسکیمای ایزوله می‌سازد، DSN را بازنویسی می‌کند و migration را رویش می‌زند."""
+    """It isolates the schema, overwrites the DSN, and performs the migration."""
     env_file = PROJECT_ROOT / ".env"
     if env_file.is_file():
         try:
@@ -108,22 +118,22 @@ def _isolate() -> None:
 
     dsn = (os.environ.get(ENV_PG_DSN, "") or "").strip()
     if not dsn or os.environ.get(ENV_SWITCH, "1").strip() == "0":
-        return                                   # حالت عادی: فقط SQLite
+        return                                   # Normal mode: SQLite only
     from importlib.util import find_spec
     if find_spec("psycopg") is None:
-        return                                   # بدون درایور ⇒ تست‌های PG خودشان skip می‌کنند
+        return                                   # Without driver ⇒ PG tests skip by themselves
 
     schema = f"{SCHEMA_PREFIX}_{uuid.uuid4().hex[:12]}"
     _state["dsn"] = dsn
     try:
         with _maintenance_connect(dsn) as conn:
             conn.execute(f"CREATE SCHEMA {schema}")
-    except Exception as exc:                       # noqa: BLE001 — هر دلیلی (از جمله حق ناکافی)
+    except Exception as exc:                       # noqa: BLE001 — any reason (including insufficient right)
         sqlstate = getattr(getattr(exc, "sqlstate", None), "value", None) or getattr(
             exc, "sqlstate", None)
         _state["dsn"] = None
         if sqlstate in ("3D000", "08001", "08006", "28P01"):
-            return                                 # سرور/احراز هویت ⇒ تست‌ها خودشان skip می‌کنند
+            return                                 # Server/Authentication ⇒ Tests skip themselves
         warnings.warn(
             f"ایزولاسیون PG خاموش ماند: CREATE SCHEMA مجاز نبود "
             f"({type(exc).__name__}: {str(exc).strip().splitlines()[0][:160]}). "
@@ -138,22 +148,22 @@ def _isolate() -> None:
 
 def _run_alembic_upgrade(dsn: str, schema: str) -> None:
     """
-    ``alembic upgrade head`` را **روی اسکیمای ایزوله** اجرا می‌کند.
+    Runs ``alembic upgrade head'' **on an isolated schema**.
 
-    چرا subprocess: alembic در سطح ماژول logging و sys.path دست می‌برد و اجرای
-    in-process آن در میانهٔ یک جلسهٔ pytest می‌تواند state جهانی را عوض کند.
-    هزینه ~۱ ثانیه است و یک‌بار در هر اجرا پرداخت می‌شود.
+    Why subprocess: alembic at the module level logging and sys.path hands and execution
+    Its in-process can change the global state in the middle of a pytest session.
+    The cost is ~1 second and is paid once per run.
     """
     env = os.environ.copy()
     env[ENV_DB_BACKEND] = "postgresql"
     env[ENV_PG_DSN] = _dsn_with_search_path(dsn, schema)
-    env.pop("ALEMBIC_DB_URL", None)                # override نخوانده‌گرفته نگذاریم
+    env.pop("ALEMBIC_DB_URL", None)                # Do not leave the override unread
     proc = subprocess.run(
         [sys.executable, "-m", "alembic", "upgrade", "head"],
         cwd=str(PROJECT_ROOT), env=env, capture_output=True, text=True, timeout=180)
     if proc.returncode != 0:
-        # بی‌صدا نمی‌بلعیم: نیمی از اسکیم ساخته‌شده خالی بماند یعنی صدها شکست
-        # بی‌ربط در تست‌ها.
+        # We don't swallow silently: if half of the constructed scheme remains empty, it means hundreds of failures
+        # Irrelevant in tests.
         raise RuntimeError(
             "ایزولاسیون PG: alembic upgrade head روی اسکیمای تازه شکست.\n"
             f"schema = {schema}\n"
@@ -162,13 +172,14 @@ def _run_alembic_upgrade(dsn: str, schema: str) -> None:
 
 
 def _cleanup() -> None:
+    """Helper: cleanup."""
     schema, dsn = _state.get("schema"), _state.get("dsn")
     if not schema or not dsn:
         return
     try:
         with _maintenance_connect(dsn) as conn:
             conn.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
-    except Exception as exc:                       # noqa: BLE001 — teardown نباید تست را بشکند
+    except Exception as exc:                       # noqa: BLE001 — teardown should not break the test
         warnings.warn(f"پاک‌سازی اسکیمای تست نشد ({schema}): {type(exc).__name__}: {exc}",
                       stacklevel=2)
     finally:
@@ -178,7 +189,7 @@ def _cleanup() -> None:
 _isolate()
 
 
-#: جدول‌های برنامه که پیش از هر تست خالی می‌شوند (``core.db.schema.APP_TABLES``).
+#: application tables that are emptied before each test (``core.db.schema.APP_TABLES'').
 _APP_TABLES = ("logs", "printer_counters", "toner_history", "sensor_readings", "users",
                "security_events", "yield_samples", "toner_snapshots_v2", "cartridge_state",
                "cartridge_yield_profiles", "meta")
@@ -186,36 +197,37 @@ _APP_TABLES = ("logs", "printer_counters", "toner_history", "sensor_readings", "
 
 def _app_backend_is_postgres() -> bool:
     """
-    آیا خودِ برنامه روی PG اجرا می‌شود؟
+    Does the program itself run on PG?
 
-    بازنشانی داده فقط در آن حالت لازم است؛ اگر ``DB_BACKEND`` خالی/sqlite باشد،
-    تست‌ها فایل‌های موقت خودشان را دارند و دست‌زدن به PGِ مشترک هم بی‌فایده‌ست و
-    هم اجرای SQLite را کند می‌کند (یک TRUNCATE به‌ازای هر تست).
+    A data reset is only required in that case; If ``DB_BACKEND'' is empty/sqlite,
+    Tests have their own temporary files and touching the common PG is useless
+    It also slows down SQLite execution (one TRUNCATE per test).
     """
     from core.db import BACKEND_POSTGRESQL, resolve_backend
 
     try:
         return resolve_backend() == BACKEND_POSTGRESQL
-    except Exception:                            # noqa: BLE001 - تنظیمات ناشناخته ⇒ دست نزن
+    except Exception:                            # noqa: BLE001 - Unknown settings ⇒ Do not touch
         return False
 
 
 def _quote(name: str) -> str:
+    """Helper: quote."""
     return '"' + str(name).replace('"', '""') + '"'
 
 
 def _reset_state() -> None:
     """
-    اسکیمای ایزوله را به حالت «تازه» برمی‌گرداند: جدول‌های برنامه خالی،
-    sequenceها ریست، و جدول‌های دست‌سازِ تست‌ها حذف.
+    Returns the isolated schema to a "fresh" state: empty application tables,
+    Sequences are reset, and manual tables of tests are deleted.
 
-    چرا لازم است: «هر تست یک فایل SQLite موقت» فرضِ پیش‌فرضِ صدها تست است. روی PG که
-    همهٔ تست‌ها یک اسکیمای مشترکِ جلسه‌ای را می‌بینند، این فرض می‌شکند؛ نمونهٔ
-    سنجیده‌شده: ``duplicate key value violates unique constraint
-    "users_username_key"`` (admin1 که فایل قبلی ساخته) ⇒ ``'viewer' != 'admin'``،
-    و ``'t' already exists`` (جدول موقت هم‌نام). بازنشانی داده در **پیش از هر تست**
-    همان «فایل موقت تازه» را بازتولید می‌کند، بدون آنکه یک خط در فایل‌های تست
-    عوض شود و بدون آنکه migration دوباره اجرا شود.
+    Why it's needed: "Every test is a temporary SQLite file" is the default assumption for hundreds of tests. On the PG that
+    All tests see a common session schema, breaking this assumption; example
+    Measured: ``duplicate key value violates unique constraint
+    "users_username_key"`` (admin1 who created the previous file) ⇒ ``'viewer'!= 'admin'``,
+    and ``'t' already exists'' (temporary table of the same name). Data reset **before each test**
+    It reproduces the same "fresh temporary file", without a single line in the test files
+    be changed and without running the migration again.
     """
     from core.db import connect_postgres
 
@@ -223,7 +235,7 @@ def _reset_state() -> None:
     try:
         try:
             conn.execute("SET LOCAL lock_timeout = '5s'")
-        except Exception:                       # noqa: BLE001 — بیرون از تراکنش بی‌معناست
+        except Exception:                       # noqa: BLE001 — Out of transaction is meaningless
             pass
         found = {row[0] for row in conn.execute(
             "SELECT tablename FROM pg_tables WHERE schemaname = current_schema()").fetchall()}
@@ -232,7 +244,7 @@ def _reset_state() -> None:
         if present_app:
             conn.execute("TRUNCATE TABLE " + ", ".join(_quote(t) for t in present_app)
                          + " RESTART IDENTITY CASCADE")
-        for name in foreign:                     # میز (temp table) یک تست نباید به تست بعد برسد
+        for name in foreign:                     # The temp table of one test should not reach the next test
             conn.execute(f"DROP TABLE IF EXISTS {_quote(name)} CASCADE")
         conn.commit()
     except Exception:
@@ -245,10 +257,10 @@ def _reset_state() -> None:
 @pytest.fixture(scope="session", autouse=True)
 def pg_isolated_schema():
     """
-    fixture سراسریِ جلسه‌ای: فقط teardown را وصل می‌کند.
+    Session global fixture: Connects teardown only.
 
-    ساخت اسکیم در سطح ماژول انجام شد (پیش از import ماژول‌های تست) تا تست‌هایی که
-    ``PG_DSN`` را در زمان collection می‌خوانند هم از ایزولاسیون بهره‌مند شوند.
+    Scheme construction was done at the module level (before importing the test modules) until the tests that
+    ``PG_DSN'' is read during collection to benefit from isolation.
     """
     yield {"schema": _state.get("schema"), "dsn": _state.get("dsn")}
     _cleanup()
@@ -257,11 +269,11 @@ def pg_isolated_schema():
 @pytest.fixture(autouse=True)
 def pg_clean_db_per_test(pg_isolated_schema):
     """
-    ایزولاسیون **داده** در مقیاس تک‌تک تست (صرفِ هزینهٔ migration یک‌بار در جلسه).
+    Isolation of **data** at the scale of each test (spending the cost of migration once per session).
 
-    اگر ایزولاسیون PG فعال نباشد (``PG_DSN`` خالی / نقش read-only) بی‌عمل است.
-    خطای بازنشانی یک‌بار هشدار می‌دهد و از آن پس خاموش می‌شود، تا صدها خطای
-    تکراری منشأ اصلی را نپوشاند.
+    It is inactive if PG isolation is not enabled (empty PG_DSN / read-only role).
+    A reset error will alert once and then shut down, up to hundreds of errors
+    Do not duplicate the original source.
     """
     global _reset_broken
     if _app_backend_is_postgres() and pg_isolated_schema.get("schema") and not _reset_broken:
@@ -274,7 +286,7 @@ def pg_clean_db_per_test(pg_isolated_schema):
     yield
 
 
-#: شمارش skipهای sqlite_only برای گزارش پایانی.
+#: count sqlite_only skips for the final report.
 _sqlite_only_skipped = 0
 
 SKIP_SQLITE_ONLY_REASON = (
@@ -285,12 +297,12 @@ SKIP_SQLITE_ONLY_REASON = (
 
 def pytest_collection_modifyitems(config, items):
     """
-    auto-skip تست‌های `sqlite_only` — **فقط** وقتی برنامه روی PG است.
+    auto-skip `sqlite_only` tests — **only** when the app is on PG.
 
-    چرا hook و نه `-m "not sqlite_only"`: خواسته این بود که اجرای `pytest tests/`
-    بدون آرگومان خاص، روی هر دو backend سبز باشد. skip «صراحی‌شده» است: هم در
-    `-rs` دیده می‌شود، هم در خلاصهٔ پایانی شمارش می‌شود، و روی مسیر SQLite هیچ
-    اثری ندارد (پس قاعدهٔ «۰ skipped» آن مسیر پابرجاست).
+    Why hook and not `-m "not sqlite_only"`: The request was to run `pytest tests/`
+    Green on both backends without special arguments. skip is "explicit": both in
+    `-rs' is seen, also counted in the final summary, and none on the SQLite path
+    It has no effect (so the "0 skipped" rule of that route is valid).
     """
     global _sqlite_only_skipped
     if not _app_backend_is_postgres():
@@ -303,7 +315,7 @@ def pytest_collection_modifyitems(config, items):
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
-    """یک خط شفاف‌سازی: چند تست sqlite_only رد شد (تا skip بی‌صدا نماند)."""
+    """One line of clarification: some sqlite_only tests were skipped (so that skip is not silent)."""
     if _sqlite_only_skipped:
         terminalreporter.write_line(
             f"printguard: {_sqlite_only_skipped} تست با marker sqlite_only رد شد "
@@ -311,7 +323,7 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
 
 
 def pytest_report_header(config):
-    """یک خط شفاف‌سازی: تست‌ها روی کدام اسکیم می‌دوند."""
+    """One line of clarification: which schema do the tests run on?"""
     schema = _state.get("schema")
     if schema:
         return f"printguard: PG ایزوله روی اسکیمای {schema} (هر اجرا یکی، teardown با CASCADE)"

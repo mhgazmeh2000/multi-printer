@@ -11,11 +11,11 @@ venv/
 env/
 ENV/
 
-# ===== Runtime / داده‌های محلی — هرگز commit نشوند! =====
+# ===== Runtime / local data — never commit! =====
 logs.db
 logs.db-*
 printguard-pg-*.dump
-# فاز E.3.5: بکاپِ دستیِ پیش از مهاجرت زمان + manifest ابزار مهاجرت
+# Phase E.3.5: pre-migration manual backup time + migration tool manifest
 logs.db.bak-*
 logs.db.*-manifest.json
 *.diagnosis.json
@@ -44,12 +44,12 @@ diagnose_*.md
 *.key
 secrets.json
 cookies.txt
-# نقشه‌ی واقعی ساب‌نت‌ها — نسخه‌ی نمونه: office_subnets.example.json
+# Real Subnets Map - Example version: office_subnets.example.json
 config/office_subnets.json
-# نقشه‌ی OIDهای شناسه کارتریج (تأییدشده روی ناوگان) — نمونه: cartridge_id_map.example.json
+# Cartridge ID OIDs map (validated on fleet) — example: cartridge_id_map.example.json
 config/cartridge_id_map.json
 
-# ===== فایل‌های سیستم‌عامل =====
+# ===== OS files =====
 Thumbs.db
 Desktop.ini
 .DS_Store

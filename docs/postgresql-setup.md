@@ -1,4 +1,4 @@
-# راه‌اندازی PostgreSQL — وضعیت سرور (فاز E.1)
+# PostgreSQL setup — server status (phase E.1)
 
 **وضعیت:** سند وضعیت + دستور کار. PostgreSQL 16 **از قبل روی سرور برنامه نصب است**؛
 در این فاز هیچ نصبی انجام نمی‌شود (قید فاز E.1). فاز E.2 (dual backend) هنوز آغاز نشده
@@ -6,7 +6,7 @@
 
 ---
 
-## ۱. سرور برنامه (مالک)
+## 1. Application server (owner)
 
 ### نسخه‌ی نصب‌شده
 | مورد | مقدار |
@@ -91,7 +91,7 @@ python tools\test_pg_connection.py
 
 ---
 
-## ۲. اندازه‌گیری واقعی در محیط سندباکس (محیط تأییدِ فاز E.1)
+## 2. Real measurement in the sandbox environment (phase E.1 verification environment)
 
 چون سرور مالک در دسترس این محیط نیست، برای **تأیید واقعی** migration پایه یک
 PostgreSQL 16 محلی در سندباکس نصب و با **همان مشخصات سرور** ساخته شد:
@@ -121,7 +121,7 @@ host    all   all        ::1/128            scram-sha-256
 
 ---
 
-## ۳. اجزای پروژه که به این سرور وصل می‌شوند
+## 3. Project components that connect to this server
 
 | جزء | کار | جایگاه |
 |---|---|---|
@@ -133,7 +133,7 @@ host    all   all        ::1/128            scram-sha-256
 
 ---
 
-## ۵. راهنمای راه‌اندازی و مهاجرت خودکار با `start.bat` (فاز F)
+## 5. Setup guide and automatic migration with `start.bat` (phase F)
 
 ### الف) تفکیک محیط تست و محیط پروداکشن
 * **ماشین تست (Test Machine):**

@@ -1,25 +1,36 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-tools/auto_migrate.py — ابزار اجرای خودکار، ایمن و Idempotent مهاجرت داده به PostgreSQL در زمان راه‌اندازی (فاز F).
+# =============================================================================
+# @file:         tools/auto_migrate.py
+# @brief:        Safe, idempotent automatic migration of data to PostgreSQL at startup.
+# @details:      Responsibilities: Resolve the backend, scan seed tables and migrate them once.
+#                Main API: resolve_backend(), resolve_dsn(), scan_seed_tables(),
+#                get_user_tables(), check_users_count(), main()
+#                Side effects: database access, runs external processes
+# @dependencies: external: dotenv, psycopg
+# @notes:        Reads environment variables: DB_BACKEND, PG_DSN. Can be run directly as a script.
+# =============================================================================
 
-منطق ایمنی:
-  ۱. خواندن DB_BACKEND از محیط یا فایل .env. اگر مقداری غیر از postgresql (یا معادل‌های آن) بود،
-     اسکریپت بدون تغییر و با کد خروج ۰ خارج می‌شود.
-  ۲. بررسی وجود و تعداد سطرهای جدول users در PostgreSQL.
-  ۳. اگر تعداد سطرها > ۰ باشد: دیتابیس از قبل مقداردهی شده است؛ نیازی به اجرای مجدد مهاجرت نیست
-     و اسکریپت با کد خروج ۰ خارج می‌شود (خاصیت Idempotent).
-  ۴. اگر تعداد سطرها == ۰ باشد:
-     الف) بررسی امنیتی پیش از هرگونه TRUNCATE:
-         - اسکن تمام فایل‌های migration در alembic/versions/ جهت استخراج جدول‌های دارای دستور INSERT INTO (جداول seed).
-         - در صورت عدم کشف یا بروز خطا در اسکن، به‌صورت کاملاً محافظه‌کارانه تنها جدول «sensor_readings»
-           به‌عنوان جدول مجاز seed در نظر گرفته می‌شود و بقیه جدول‌ها غیرمجاز خواهند بود.
-         - بررسی تمام جدول‌های موجود در PostgreSQL؛ اگر جدولی خارج از فهرست مجاز seed دارای سطر باشد:
-           عملیات بلافاصله متوقف شده و با پیام صریح خطای امنیتی («داده‌ی واقعی در جدول X وجود دارد؛ migration لغو شد.»)
-           خارج می‌شود (کد خروج ۱).
-     ب) اگر فقط جدول‌های seed دارای سطر باشند:
-         - تنها همان جدول‌های seed به‌صورت اختصاصی تخلیه (TRUNCATE) می‌شوند.
-     ج) اجرای ابزار مهاجرت اصلی:
+"""
+tools/auto_migrate.py — Tool to perform automatic, safe and Idempotent migration of data to PostgreSQL at startup (phase F).
+
+Safety logic:
+  1. Reading DB_BACKEND from environment or.env file. If it was something other than postgresql (or its equivalents),
+     The script exits unchanged with an exit code of 0.
+  2. Checking the existence and number of rows of users table in PostgreSQL.
+  3. If the number of rows is > 0: the database is already initialized; No need to run the migration again
+     And the script exits with exit code 0 (Idempotent property).
+  4. If the number of rows == 0:
+     A) Security check before any TRUNCATE:
+         - Scan all migration files in alembic/versions/ to extract tables with INSERT INTO command (seed tables).
+         - In case of no detection or an error in the scan, quite conservatively, only the "sensor_readings" table
+           It is considered as an authorized seed table and the rest of the tables will be unauthorized.
+         - checking all the tables in PostgreSQL; If a table outside the seed list has a row:
+           The operation is immediately stopped with an explicit security error message ("Real data exists in table X; migration aborted.")
+           exits (exit code 1).
+     b) If only seed tables have rows:
+         - Only those seed tables are specifically emptied (TRUNCATE).
+     c) Implementation of the main migration tool:
          tools/migrate_sqlite_to_pg.py --verify
 """
 
@@ -46,7 +57,7 @@ DEFAULT_SEED_TABLES = {"sensor_readings"}
 
 
 def _load_env_if_present() -> None:
-    """بارگذاری متغیرها از فایل .env در صورت وجود بدون رونویسی متغیرهای محیطی فعلی."""
+    """Load variables from.env file if present without overwriting current environment variables."""
     env_file = PROJECT_ROOT / ".env"
     if env_file.is_file():
         try:
@@ -54,7 +65,7 @@ def _load_env_if_present() -> None:
 
             load_dotenv(dotenv_path=env_file, override=False)
         except ImportError:
-            # پارس دستی ساده برای مواردی که dotenv هنوز نصب نیست
+            # Simple manual parsing for cases where dotenv is not installed yet
             for line in env_file.read_text(encoding="utf-8", errors="replace").splitlines():
                 line = line.strip()
                 if not line or line.startswith("#") or "=" not in line:
@@ -66,14 +77,14 @@ def _load_env_if_present() -> None:
 
 
 def resolve_backend() -> str:
-    """تشخیص backend دیتابیس با اولویت محیط و سپس .env (پیش‌فرض: sqlite)."""
+    """Identifying the database backend with priority environment and then.env (default: sqlite)."""
     _load_env_if_present()
     raw = os.getenv("DB_BACKEND", "").strip().lower()
     return BACKEND_ALIASES.get(raw, raw) or "sqlite"
 
 
 def resolve_dsn(target_arg: Optional[str] = None) -> Optional[str]:
-    """دریافت DSN اتصال به PostgreSQL."""
+    """Get DSN connection to PostgreSQL."""
     if target_arg and target_arg.strip():
         return target_arg.strip()
     _load_env_if_present()
@@ -83,8 +94,8 @@ def resolve_dsn(target_arg: Optional[str] = None) -> Optional[str]:
 
 def scan_seed_tables(versions_dir: Path) -> Set[str]:
     """
-    اسکن فایل‌های migration در alembic/versions/ برای پیدا کردن جداولی که دارای INSERT INTO هستند.
-    در صورت نبود هیچ مورد یا بروز خطا، fallback محافظه‌کارانه {'sensor_readings'} بازگردانده می‌شود.
+    Scan migration files in alembic/versions/ to find tables that have INSERT INTO.
+    A conservative fallback of {'sensor_readings'} is returned if there are none or an error occurs.
     """
     pattern = re.compile(r"INSERT\s+INTO\s+[\"`']?([a-zA-Z0-9_]+)[\"`']?", re.IGNORECASE)
     discovered: Set[str] = set()
@@ -109,7 +120,7 @@ def scan_seed_tables(versions_dir: Path) -> Set[str]:
 
 
 def get_user_tables(conn) -> List[str]:
-    """فهرست جدول‌های موجود در اسکیمای جاری PostgreSQL (بدون alembic_version)."""
+    """List of tables in the current PostgreSQL schema (without alembic_version)."""
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -124,8 +135,8 @@ def get_user_tables(conn) -> List[str]:
 
 def check_users_count(conn) -> Optional[int]:
     """
-    بررسی وجود جدول users و بازگرداندن تعداد ردیف‌های آن.
-    اگر جدول وجود نداشته باشد، None برمی‌گرداند.
+    Checking the existence of the users table and returning the number of its rows.
+    Returns None if the table does not exist.
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -142,6 +153,8 @@ def check_users_count(conn) -> Optional[int]:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    """Command-line entry point of the automatic migration."""
+
     parser = argparse.ArgumentParser(
         description="ابزار اجرای خودکار و ایمن مهاجرت به PostgreSQL در زمان استارت پروژه PrintGuard."
     )
@@ -162,7 +175,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    # ۱. بررسی نوع Backend
+    # 1. Backend type check
     backend = resolve_backend()
     if backend != BACKEND_POSTGRESQL:
         print(
@@ -171,7 +184,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         return 0
 
-    # ۲. بررسی اتصال به PostgreSQL
+    # 2. Checking the connection to PostgreSQL
     target_dsn = resolve_dsn(args.target)
     if not target_dsn:
         print(
@@ -199,7 +212,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
 
     try:
-        # ۳. بررسی وجود جدول users و شمارش سطرها
+        # 3. Checking the existence of the users table and counting the rows
         users_count = check_users_count(conn)
         if users_count is None:
             print(
@@ -218,7 +231,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         print("[auto_migrate] جدول users خالی است (count = 0). بررسی ایمنی پیش از آغاز مهاجرت...")
 
-        # ۴. بررسی امنیتی پیش از هرگونه TRUNCATE
+        # 4. Security check before any TRUNCATE
         seed_tables = scan_seed_tables(VERSIONS_DIR)
         user_tables = get_user_tables(conn)
 
@@ -230,7 +243,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 if cnt > 0:
                     table_counts[tbl] = cnt
 
-        # آیا جدولی خارج از لیست seed ردیف دارد؟
+        # Does a table have rows outside the seed list?
         non_seed_occupied = {
             t: c for t, c in table_counts.items() if t not in seed_tables
         }
@@ -246,7 +259,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             )
             return 1
 
-        # اگر تا اینجا آمدیم، فقط جداول seed ممکن است داده داشته باشند
+        # If we come this far, only the seed tables may have data
         seed_occupied = [t for t in table_counts if t in seed_tables]
         if seed_occupied:
             print(
@@ -262,7 +275,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             print("[auto_migrate] بررسی ایمنی با موفقیت انجام شد (--check-only فعال بود).")
             return 0
 
-        # ۵. اجرای ابزار مهاجرت اصلی
+        # 5. Run the main migration tool
         if not MIGRATE_SCRIPT.is_file():
             print(
                 f"[auto_migrate] ❌ اسکریپت مهاجرت در مسیر {MIGRATE_SCRIPT} پیدا نشد.",
@@ -276,7 +289,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         if target_dsn:
             cmd.extend(["--target", str(target_dsn)])
 
-        print(f"[auto_migrate] در حال اجرای فرآیند مهاجرت داده...")
+        print("[auto_migrate] در حال اجرای فرآیند مهاجرت داده...")
         proc = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
         if proc.returncode == 0:
             print("[auto_migrate] ✔ مهاجرت خودکار با موفقیت کامل انجام شد.")

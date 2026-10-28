@@ -1,17 +1,27 @@
+# =============================================================================
+# @file:         core/store.py
+# @brief:        Process-wide in-memory store for printers, current data and polling statistics.
+# @details:      Responsibilities: Hold shared state under locks and load or save the
+#                printers.json file.
+#                Main API: PrevStore, load_printers(), save_printers()
+#                Side effects: starts threads, file I/O
+# @dependencies: internal: config.settings, core.database, core.time_utils
+# @notes:        Shared in-memory state: always take the matching lock before reading or writing.
+# =============================================================================
+
 """
-حالت سراسری برنامه:
-- لیست پرینترها (PRINTERS) و قفل آن
-- داده‌های لحظه‌ای (printer_data) و قفل آن
-- آمار polling
-- مدیریت فایل printers.json
-- ذخیره مقادیر قبلی شمارنده‌ها در دیتابیس (کلاس PrevStore)
+Program global mode:
+- List of printers (PRINTERS) and its lock
+- Current data (printer_data) and its lock
+- Polling statistics
+- Printers.json file management
+- Saving the previous values of the counters in the database (PrevStore class)
 """
 
 import json
+import logging
 import os
 import threading
-import logging
-
 from datetime import datetime, timezone
 
 from config.settings import PRINTERS_FILE, DEFAULT_PRINTERS
@@ -26,53 +36,54 @@ from core.time_utils import parse_utc, utc_now_iso
 
 log = logging.getLogger("PrinterMonitor")
 
-# ─── قفل‌ها ──────────────────────────────────────────────────────
+# - Locks - Locks
 printers_lock = threading.Lock()
 data_lock = threading.Lock()
-_prev_lock = threading.Lock()   # قفل برای PrevStore
+_prev_lock = threading.Lock()   # Lock for PrevStore
 
-# ─── داده سراسری ────────────────────────────────────────────────
-printer_data = {}          # ip → dict داده کامل پرینتر
+# Global data
+printer_data = {}          # ip → dict complete printer data
 poll_stats = {"count": 0, "last": None, "errors": 0, "is_polling": False}
 
 
-# ─── کلاس ذخیره مقادیر قبلی با پشتیبان دیتابیس ────────────────────
+# ─── Class store previous values with database backup ──────────────────────
 class PrevStore:
     """
-    ذخیره‌سازی مقادیر قبلی شمارنده‌ها در حافظه (کش) و دیتابیس.
+    Storing previous values of counters in memory (cache) and database.
     
-    🔥 تغییر مهم: اگر در دیتابیس رکوردی وجود نداشته باشد، get() مقدار None برمی‌گرداند
-    (نه دیکشنری خالی) تا بتوان اولین poll را تشخیص داد.
+    🔥 Important change: get() returns None if there is no record in the database
+    (not an empty dictionary) so that the first poll can be recognized.
     """
 
     def __init__(self):
+        """Create an empty cache with its lock."""
         self._cache = {}
         self._lock = threading.Lock()
 
     def get(self, ip: str):
         """
-        دریافت مقادیر قبلی برای یک پرینتر.
-        🔥 اگر هیچ داده قبلی در دیتابیس یا کش وجود نداشته باشد، None برمی‌گرداند.
+        Get previous values ​​for a printer.
+        🔥 Returns None if there is no previous data in the database or cache.
         """
         with self._lock:
-            # اگر در کش هست، برگردان
+            # If it is in the cache, return it
             if ip in self._cache:
                 return self._cache[ip].copy() if self._cache[ip] else None
-            
-            # از دیتابیس بخوان
+
+            # Read from the database
             db_data = load_printer_counters(ip)
-            
+
             if db_data is None:
-                # هیچ داده‌ای در دیتابیس وجود ندارد
+                # There is no data in the database
                 self._cache[ip] = None
                 return None
-            
-            # داده در دیتابیس وجود دارد
+
+            # The data is in the database
             self._cache[ip] = db_data
             return db_data.copy()
 
     def set(self, ip: str, data: dict):
-        """ذخیره مقادیر جدید برای یک پرینتر (در کش و دیتابیس) با محافظت از baseline."""
+        """Save new values ​​for a printer (in cache and database) with baseline protection."""
         with self._lock:
             try:
                 existing = self._cache.get(ip) or load_printer_counters(ip) or {}
@@ -94,7 +105,7 @@ class PrevStore:
                     "updated_at": updated_at,
                 }
 
-                # محافظ دوم: حتی اگر caller اشتباه کند، total=0 مشکوک نباید baseline را خراب کند.
+                # Second guard: even if the caller makes a mistake, the suspicious total=0 should not break the baseline.
                 try:
                     old_total = existing.get("print_total")
                     new_total = normalized.get("print_total")
@@ -115,13 +126,13 @@ class PrevStore:
                         normalized["a3_total"] = existing.get("a3_total")
                         normalized["a4_total"] = existing.get("a4_total")
                 except Exception:
-                    # اگر guard خودش خطا داد، ذخیره اصلی را متوقف نمی‌کنیم.
+                    # If the guard itself throws an error, we don't stop the main save.
                     pass
 
                 self._cache[ip] = normalized.copy()
                 save_printer_counters(ip, normalized)
 
-                # جلوگیری از رشد بی‌رویه toner_history: فقط هنگام تغییر معنی‌دار یا هر ۳۰ دقیقه.
+                # Prevent uncontrolled growth of toner_history: only when there is a significant change or every 30 minutes.
                 should_snapshot = True
                 try:
                     old_total = existing.get("print_total")
@@ -132,8 +143,8 @@ class PrevStore:
                     old_updated = existing.get("updated_at")
                     elapsed = 999999
                     if old_updated:
-                        # فاز E.3: «الآن» آگاه به UTC و مقدار ذخیره‌شده (Z) تجزیه‌شده؛
-                        # مقدار مهاجرت‌نشده/خراب استثنا می‌دهد ⇒ همان fallback قبلی.
+                        # Phase E.3: UTC-aware "now" and parsed stored value (Z);
+                        # Unmigrated/broken value throws exception ⇒ same fallback as before.
                         elapsed = (datetime.now(timezone.utc) - parse_utc(old_updated)).total_seconds()
                     should_snapshot = changed or elapsed >= 1800
                 except Exception:
@@ -157,29 +168,21 @@ class PrevStore:
                 log.error(f"PrevStore.set error for {ip}: {e}")
 
     def delete(self, ip: str):
-        """حذف مقادیر یک پرینتر و baseline آن از دیتابیس."""
+        """Removing the values ​​of a printer and its baseline from the database."""
         with self._lock:
             self._cache.pop(ip, None)
             update_missing_yield_list(ip, -1)
             delete_printer_counters(ip)
 
-    def is_initialized(self, ip: str) -> bool:
-        """بررسی می‌کند آیا قبلاً این پرینتر مقداردهی شده است."""
-        with self._lock:
-            if ip in self._cache:
-                return self._cache[ip] is not None
-            db_data = load_printer_counters(ip)
-            return db_data is not None
-
-
-# ─── نمونه سراسری PrevStore ──────────────────────────────────────
+# PrevStore global example
 _prev = PrevStore()
 
-# ─── فیلدهای مجاز در printers.json ─────────────────────────────
+# Allowed fields in printers.json
 _PRINTER_ALLOWED_FIELDS = {"ip", "name", "community", "brand", "nickname", "device_type", "group"}
 
 
 def _normalize_printer(p: dict) -> dict:
+    """Normalize a printer record: strip text fields and fill in defaults."""
     return {
         "ip": str(p.get("ip", "")).strip(),
         "name": str(p.get("name", "")).strip() or str(p.get("ip", "")),
@@ -193,6 +196,7 @@ def _normalize_printer(p: dict) -> dict:
 
 
 def _deduplicate_printers(printers: list) -> list:
+    """Remove duplicate printer records, keeping the first occurrence of each IP."""
     seen = set()
     result = []
     for p in printers:
@@ -204,6 +208,8 @@ def _deduplicate_printers(printers: list) -> list:
 
 
 def load_printers() -> list:
+    """Load the printer list from printers.json."""
+
     if os.path.exists(PRINTERS_FILE):
         try:
             with open(PRINTERS_FILE, encoding="utf-8") as f:
@@ -217,11 +223,13 @@ def load_printers() -> list:
 
 
 def save_printers(printers: list) -> list:
+    """Write the printer list to printers.json after normalising and de-duplicating it."""
+
     clean = _deduplicate_printers([_normalize_printer(p) for p in printers])
     with open(PRINTERS_FILE, "w", encoding="utf-8") as f:
         json.dump(clean, f, ensure_ascii=False, indent=2)
     return clean
 
 
-# ─── لیست اولیه ──────────────────────────────────────────────────
+# ─── initial list
 PRINTERS: list = load_printers()

@@ -1,36 +1,47 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tools/set_cutover_marker.py
+# @brief:        Writes the cutover time marker to the database.
+# @details:      Responsibilities: Store the cutover timestamp in the meta table.
+#                Main API: parse_iso_utc(), commit_time(), default_db_path(), ensure_meta_table(),
+#                read_marker(), write_marker(), count_rows(), main()
+#                Side effects: database access, runs external processes
+# @dependencies: stdlib only
+# @notes:        Can be run directly as a script.
+# =============================================================================
+
 """
-tools/set_cutover_marker.py — نشانه‌ی cutover زمانی را در دیتابیس می‌نویسد.
+tools/set_cutover_marker.py — writes the time cutover marker to the database.
 
-چرا؟
+why
 ----
-قرارداد زمانی پروژه (`docs/timezone-contract.md`) روی یک لحظه‌ی مرجع بنا شده:
-کامیت `b548e99` (پایان فاز C). طبق `docs/cutover-plan.md` §۷، این لحظه باید **در خودِ
-دیتابیس** ثبت شود تا:
+The time contract of the project (`docs/timezone-contract.md`) is based on a reference moment:
+commit `b548e99` (end of phase C). According to `docs/cutover-plan.md` §7, this moment should **in itself
+The database** should be registered to:
 
-  • مهاجرت فاز F بتواند timestampهای قدیمی را نسبت به همان مرجع تفسیر کند؛
-  • ابزارهای بعدی بدون خواندن تاریخچه‌ی git، «مرز» را بدانند؛
-  • در فاز E همان ردیف به PostgreSQL منتقل شود.
+  • Phase F migration can interpret old timestamps relative to the same reference;
+  • Later tools know the "boundary" without reading the git history;
+  • In phase E, the same row should be transferred to PostgreSQL.
 
-چه چیزی می‌سازد؟
+What does it make?
 ----------------
-جدول `meta(key, value, updated_at)` — **تنها افزوده‌ی schema در فاز E.0** و
-idempotent: اجرای دوباره، سطر تکراری نمی‌سازد بلکه مقدار را به‌روزرسانی می‌کند
-(`INSERT ... ON CONFLICT(key) DO UPDATE` — خودِ این عبارت در PostgreSQL هم معتبر است
-و از همان ابتدا فرم فاز E را دارد).
+``meta(key, value, updated_at)'' table — **the only schema addition in phase E.0** and
+idempotent: re-execution does not create a duplicate row but updates the value
+(`INSERT... ON CONFLICT(key) DO UPDATE' — this expression itself is also valid in PostgreSQL
+and has the form of phase E from the beginning).
 
-کلید نوشته‌شده: `timezone_cutover_at` با مقدار ISO-8601 **آگاه به UTC**
-(مثل `2026-09-16T09:31:00+00:00`).
+Typed key: `timezone_cutover_at` with value ISO-8601 **UTC aware**
+(like `2026-09-16T09:31:00+00:00`).
 
-تاریخ پیش‌فرض: زمان کامیت `b548e99` از git (`git show -s --format=%cI b548e99`).
+Default date: `b548e99` commit time from git (`git show -s --format=%cI b548e99`).
 
-کد خروج:
-    0 = نوشته شد (یا --show/--verify موفق)
-    1 = خطا (اعتبارسنجی تاریخ، دیتابیس، نوشتن)
-    2 = نیازمند اقدام انسانی (فایل دیتابیس نیست؛ تاریخ پیش‌فرض از git در دسترس نیست)
+Exit code:
+    0 = written (or --show/--verify successful)
+    1 = error (validate date, database, write)
+    2 = requires human action (no database file; default date not available from git)
 
-نمونه:
+Example:
     python tools/set_cutover_marker.py --show
     python tools/set_cutover_marker.py
     python tools/set_cutover_marker.py --date 2026-10-05T00:00:00Z
@@ -52,7 +63,7 @@ EXIT_ERROR = 1
 EXIT_NEEDS_ACTION = 2
 
 MARKER_KEY = "timezone_cutover_at"
-#: لحظه‌ی مرجع قرارداد زمانی: کامیت پایان فاز C (`docs/timezone-contract.md`).
+#: time contract reference moment: commit end of phase C (`docs/timezone-contract.md`).
 DEFAULT_COMMIT = "b548e99"
 
 DDL_META = """
@@ -63,7 +74,7 @@ CREATE TABLE IF NOT EXISTS meta (
 )
 """
 
-#: فرم آپسرت — عمداً همان چیزی که در PostgreSQL هم معتبر است (بدون INSERT OR REPLACE).
+#:upset form — intentionally the same as valid in PostgreSQL (no INSERT OR REPLACE).
 UPSERT_META = """
 INSERT INTO meta (key, value, updated_at) VALUES (?, ?, ?)
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
@@ -71,15 +82,15 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
 
 
 # ─────────────────────────────────────────────────────────────
-# توابع خالص
+# Pure functions
 # ─────────────────────────────────────────────────────────────
 
 def parse_iso_utc(text: str):
-    """رشته‌ی ISO را می‌پذیرد **فقط اگر آگاه و در UTC** باشد.
+    """Accepts ISO string **only if it is aware and in UTC**.
 
-    خروجی: (datetime, None) در موفقیت، یا (None, پیام_روشن) در شکست.
-    چرا سخت‌گیر است: نشانه‌ی cutover مرجعِ تفسیر همه‌ی timestampهای قدیمی است؛ اگر
-    محلی ذخیره شود، همه‌ی مهاجرت فاز F با ۳:۳۰ خطا شروع می‌شود.
+    Output: (datetime, None) on success, or (None, clear_message) on failure.
+    Why it's strict: The cutover token is the reference for interpreting all old timestamps; If
+    saved locally, all phase F migrations start with the 3:30 error.
     """
     t = (text or "").strip()
     if not t:
@@ -101,7 +112,7 @@ def parse_iso_utc(text: str):
 
 
 def commit_time(commit: str = DEFAULT_COMMIT, repo: Path = None):
-    """زمان کامیت از git (`%cI` = ISO آگاه). خروجی: (رشته, None) یا (None, پیام)."""
+    """Commit time from git (`%cI` = ISO aware). Output: (string, None) or (None, message)."""
     cmd = ["git", "show", "-s", "--format=%cI", commit]
     try:
         out = subprocess.run(cmd, cwd=str(repo) if repo else None,
@@ -118,7 +129,7 @@ def commit_time(commit: str = DEFAULT_COMMIT, repo: Path = None):
 
 
 def default_db_path() -> str:
-    """مسیر دیتابیس پیش‌فرض از `config/settings.py` — با AST، بدون import (بی‌اثر جانبی)."""
+    """Default database path from `config/settings.py` — with AST, no import (no side effects)."""
     import ast  # noqa: PLC0415
     settings = Path(__file__).resolve().parent.parent / "config" / "settings.py"
     try:
@@ -133,14 +144,18 @@ def default_db_path() -> str:
 
 
 # ─────────────────────────────────────────────────────────────
-# کار با دیتابیس
+# Working with databases
 # ─────────────────────────────────────────────────────────────
 
 def ensure_meta_table(conn) -> None:
+    """Create the meta table if it does not exist."""
+
     conn.execute(DDL_META)
 
 
 def read_marker(conn, key: str = MARKER_KEY):
+    """Return the stored cutover marker, or None."""
+
     try:
         row = conn.execute("SELECT key, value, updated_at FROM meta WHERE key = ?", (key,)).fetchone()
     except sqlite3.OperationalError:
@@ -149,18 +164,24 @@ def read_marker(conn, key: str = MARKER_KEY):
 
 
 def write_marker(conn, value_iso: str, now_iso: str, key: str = MARKER_KEY) -> None:
+    """Store the cutover marker timestamp."""
+
     conn.execute(UPSERT_META, (key, value_iso, now_iso))
 
 
 def count_rows(conn, table: str = "meta") -> int:
+    """Return the number of rows in a table (default: meta)."""
+
     return int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
 
 
 # ─────────────────────────────────────────────────────────────
-# مسیر اصلی
+# main route
 # ─────────────────────────────────────────────────────────────
 
 def main(argv=None) -> int:
+    """Command-line entry point that writes the cutover marker."""
+
     p = argparse.ArgumentParser(
         prog="set_cutover_marker.py",
         description="ثبت نشانه‌ی cutover زمانی در جدول meta (idempotent؛ فاز E.0/E.0.13).",
@@ -206,7 +227,7 @@ def main(argv=None) -> int:
         print(f"دیتابیس    : {db_path}")
         return EXIT_OK if (ok or not args.verify) else EXIT_ERROR
 
-    # ─── تعیین مقدار ───
+    # ─── Determining the value ───
     if args.date:
         dt, err = parse_iso_utc(args.date)
         if err:

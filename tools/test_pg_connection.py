@@ -1,31 +1,42 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tools/test_pg_connection.py
+# @brief:        Connection and schema health check for PostgreSQL (phase E.1).
+# @details:      Responsibilities: Connect, verify the schema and report the Alembic head.
+#                Main API: load_psycopg(), dsn_from_env(), mask_dsn(), alembic_head(), collect(),
+#                judge(), report(), build_parser() (+1 more)
+#                Side effects: database access
+# @dependencies: external: psycopg
+# @notes:        Reads environment variables: PGPASSWORD, PG_DSN. Can be run directly as a script.
+# =============================================================================
+
 """
-tools/test_pg_connection.py — آزمون سلامت اتصال و schema در PostgreSQL (فاز E.1).
+tools/test_pg_connection.py — Connection and schema health test in PostgreSQL (Phase E.1).
 
-چه می‌سنجد؟
+What does it measure?
 -----------
-  ۱) اتصال با DSN (از `--dsn` یا `PG_DSN` یا متغیرهای استاندارد libpq)
-  ۲) نسخه‌ی سرور و پورت/میزبان
-  ۳) `TimeZone` نشست و سرور (هدف پروژه: UTC — `docs/timezone-contract.md`)
-  ۴) encoding / collation / ctype دیتابیس (هدف: UTF8 / C / C)
-  ۵) جدول‌های برنامه (۱۱ مورد) و نسخه‌ی `alembic_version` در برابر head واقعی migrationها
-  ۶) شمارش سطرهای هر جدول (خالی بودن = هشدار، نه خطا)
-  ۷) آزمون نوشتنِ **رولبک‌شده** (اثبات مجوز INSERT بدون باقی‌گذاشتن هیچ سطری)
+  1) Connect with DSN (from `--dsn` or `PG_DSN` or standard libpq variables)
+  2) Server version and port/host
+  3) ``TimeZone'' session and server (project goal: UTC — `docs/timezone-contract.md')
+  4) encoding / collation / ctype database (target: UTF8 / C / C)
+  5) Program tables (11 items) and ``alembic_version'' against the real head of migrations
+  6) Counting the rows of each table (emptiness = warning, not error)
+  7) **Rollbacked** writing test (proof of INSERT permission without leaving any lines)
 
-کد خروج
+exit code
 -------
-  0 = همه‌چیز سالم (حتی اگر جدول‌ها خالی باشند؛ هشدار چاپ می‌شود)
-  1 = خطا (اتصال ناموفق: سرویس خاموش، رمز/نام دیتابیس غلط، شبکه)
-  2 = نیازمند اقدام انسانی (psycopg نصب نیست، DSN تنظیم نشده، schema ساخته نشده،
-      یا نسخه‌ی schema با head فرق دارد ⇒ اجرای migration لازم است)
+  0 = everything healthy (even if tables are empty; warning is printed)
+  1 = error (connection failed: service shut down, wrong password/database name, network)
+  2 = requires human action (psycopg not installed, DSN not set, schema not built,
+      Or the version of the schema is different from the head ⇒ migration is necessary)
 
-نمونه
+sample
 -----
-    python tools/test_pg_connection.py                        # گزارش کامل
-    python tools/test_pg_connection.py --quiet                # یک خط خلاصه (برای start.bat)
+    python tools/test_pg_connection.py # Full report
+    python tools/test_pg_connection.py --quiet # A summary line (for start.bat)
     python tools/test_pg_connection.py --dsn "host=... dbname=printguard ..."
-    python tools/test_pg_connection.py --no-write-check       # بدون آزمون نوشتن
+    python tools/test_pg_connection.py --no-write-check # No write test
 """
 
 from __future__ import annotations
@@ -41,17 +52,16 @@ EXIT_OK = 0
 EXIT_ERROR = 1
 EXIT_NEEDS_ACTION = 2
 
-#: جدول‌های برنامه (۱۰ مورد) + جدول نشانه/نسخه‌ها
+#: program tables (10 items) + sign/versions table
 APP_TABLES = (
     "logs", "toner_history", "sensor_readings", "users", "printer_counters",
     "cartridge_state", "cartridge_yield_profiles", "yield_samples",
     "toner_snapshots_v2", "security_events",
 )
-EXTRA_TABLES = ("meta", "alembic_version")
 EXPECTED_APP_TABLES = len(APP_TABLES)
 EXPECTED_TZ = "UTC"
-#: نام‌های معادل UTC در PostgreSQL (offset صفر). «UTC» و «Etc/UTC» یکی‌اند و هشدار
-#: دادن برای دومی، هشدار کاذب است؛ ولی «Asia/Tehran» باید همچنان گرفته شود.
+#: UTC equivalent names in PostgreSQL (zero offset). "UTC" and "Etc/UTC" are the same and warning
+#: Giving for the latter is a false alarm; But "Asia/Tehran" should still be taken.
 UTC_ALIASES = frozenset({"UTC", "ETC/UTC", "ETC/GMT", "GMT", "GMT0", "ZULU", "UNIVERSAL"})
 EXPECTED_ENCODING = "UTF8"
 EXPECTED_COLLATE = "C"
@@ -60,11 +70,11 @@ VERSIONS_DIR = Path(__file__).resolve().parent.parent / "alembic" / "versions"
 
 
 # ─────────────────────────────────────────────────────────────
-# کمک‌کارهای DSN / درایور (بدون وابستگی به import های سنگین)
+# DSN / driver helpers (without dependence on heavy imports)
 # ─────────────────────────────────────────────────────────────
 
 def load_psycopg():
-    """psycopg ۳ را برمی‌گرداند یا None."""
+    """psycopg returns 3 or None."""
     try:
         import psycopg  # type: ignore
         return psycopg
@@ -73,7 +83,7 @@ def load_psycopg():
 
 
 def dsn_from_env() -> str:
-    """DSN از `--dsn`/`PG_DSN`/متغیرهای libpq (به ترتیب اولویت)."""
+    """DSN from `--dsn`/`PG_DSN`/libpq variables (in order of preference)."""
     dsn = os.getenv("PG_DSN", "").strip()
     if dsn:
         return dsn
@@ -85,15 +95,15 @@ def dsn_from_env() -> str:
 
 
 def mask_dsn(dsn: str) -> str:
-    """رمز را از DSN پاک می‌کند (هرگز رمز چاپ/لاگ نشود)."""
+    """Clears password from DSN (never print/log password)."""
     return " ".join("password=***" if t.lower().startswith("password=") else t
                     for t in str(dsn).split())
 
 
 def alembic_head() -> str | None:
-    """head واقعی از فایل‌های `alembic/versions/*.py` (بدون فراخوانی alembic).
+    """The actual head from `alembic/versions/*.py` files (without calling alembic).
 
-    head = ریویژنی که در هیچ فایل دیگری به‌عنوان `down_revision` نیامده باشد.
+    head = a revision that does not appear in any other file as `down_revision'.
     """
     try:
         files = sorted(VERSIONS_DIR.glob("*.py"))
@@ -119,11 +129,11 @@ def alembic_head() -> str | None:
 
 
 # ─────────────────────────────────────────────────────────────
-# سنجه‌ها
+# Gauges
 # ─────────────────────────────────────────────────────────────
 
 def collect(cur, dsn: str, run_write_check: bool = True) -> dict:
-    """همه‌ی سنجه‌ها را در یک ساختار برمی‌گرداند."""
+    """Returns all metrics in a structure."""
     info = {"dsn": mask_dsn(dsn), "rows": {}, "missing": [], "present": [], "warnings": []}
 
     cur.execute("""
@@ -183,7 +193,7 @@ def collect(cur, dsn: str, run_write_check: bool = True) -> dict:
             cur.execute("ROLLBACK")
             info["write_ok"] = bool(got and got[0] == "probe")
             info["write_rolled_back"] = True
-        except Exception as exc:                    # noqa: BLE001 — گزارش، نه کرش
+        except Exception as exc:                    # noqa: BLE001 — report, not crash
             try:
                 cur.execute("ROLLBACK")
             except Exception:                       # noqa: BLE001
@@ -195,7 +205,7 @@ def collect(cur, dsn: str, run_write_check: bool = True) -> dict:
 
 
 def judge(info: dict) -> tuple:
-    """(کد خروج, فهرست هشدارها, فهرست اقدام‌ها) — قواعد داوری در یک‌جا."""
+    """(exit code, list of warnings, list of actions) — arbitration rules in one place."""
     warnings, actions = [], []
 
     if (info["session_tz"] or "").upper() not in UTC_ALIASES:
@@ -239,6 +249,8 @@ def judge(info: dict) -> tuple:
 
 
 def report(info: dict, warnings, actions, quiet: bool) -> None:
+    """Print the PostgreSQL connection and schema report."""
+
     if quiet:
         summary = (f"[DB] PG {info['server_version']} | db={info['database']} | "
                    f"user={info['user']} | tz={info['session_tz']} | "
@@ -297,6 +309,8 @@ def report(info: dict, warnings, actions, quiet: bool) -> None:
 # ─────────────────────────────────────────────────────────────
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the command-line argument parser."""
+
     p = argparse.ArgumentParser(
         prog="test_pg_connection.py",
         description="آزمون اتصال/تنظیمات/schema دیتابیس PostgreSQL (فاز E.1).",
@@ -313,6 +327,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    """Command-line entry point of the PostgreSQL connection check."""
+
     args = build_parser().parse_args(argv)
 
     psycopg = load_psycopg()
@@ -335,7 +351,7 @@ def main(argv=None) -> int:
         with psycopg.connect(dsn, connect_timeout=int(max(1, args.timeout))) as conn:
             with conn.cursor() as cur:
                 info = collect(cur, dsn, run_write_check=not args.no_write_check)
-    except Exception as exc:  # noqa: BLE001 — هر خطای اتصال باید پیام روشن بدهد
+    except Exception as exc:  # noqa: BLE001 — Any connection error should give a clear message
         name = type(exc).__name__
         detail = str(exc).strip().splitlines()[0] if str(exc).strip() else ""
         hints = []

@@ -1,4 +1,4 @@
-# استقرار پشت nginx — دامنه printer.arman-group.ir
+# Deployment behind nginx — domain printer.arman-group.ir
 
 > **تفکیک مسئولیت:** دو مشکل مستقل وجود دارد. ① گواهی TLS فقط روی **سرور/nginx** درست می‌شود
 > (هیچ تغییری در کد اپ آن را حل نمی‌کند). ② `ProxyFix` تغییر **کد اپ** است و فقط رفتار
@@ -6,7 +6,7 @@
 
 ---
 
-## ۱) گواهی TLS — علت اصلی `ERR_CERT_AUTHORITY_INVALID` (سمت سرور)
+## 1) TLS certificate — root cause of `ERR_CERT_AUTHORITY_INVALID` (server side)
 
 `printer.arman-group.ir` به دو IP رند-رابین می‌رود:
 
@@ -64,7 +64,7 @@ echo | openssl s_client -connect 94.183.132.237:443 -servername printer.arman-gr
 
 ---
 
-## ۲) ProxyFix در اپ — `TRUST_PROXY=1` (سمت کد — اعمال شد)
+## 2) ProxyFix in the app — `TRUST_PROXY=1` (code side — applied)
 
 nginx می‌آید TLS را terminate می‌کند و HTTP ساده به Flask می‌دهد؛ بدون ProxyFix،
 Flask فکر می‌کند همه‌چیز `http` است. با این تغییر، فقط وقتی متغیر محیطی
@@ -85,7 +85,7 @@ Environment=TRUST_PROXY=1
 
 ---
 
-## ۳) رفتار جدید فرانت‌اند (کد — اعمال شد)
+## 3) New front-end behaviour (code — applied)
 
 `dashboard.js` دیگر با یک fetch ناموفق نمی‌میرد:
 
@@ -100,7 +100,7 @@ Environment=TRUST_PROXY=1
 
 ---
 
-## ۴) چک‌لیست نهایی استقرار
+## 4) Final deployment checklist
 
 ```text
 [ ] certbot برای printer.arman-group.ir روی 2.180.16.22 اجرا شد

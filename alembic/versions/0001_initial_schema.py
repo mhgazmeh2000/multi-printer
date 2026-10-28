@@ -1,50 +1,59 @@
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:  alembic/versions/0001_initial_schema.py
+# @brief: Alembic baseline migration 0001: creates the initial SQLite-compatible schema.
+# @notes: Alembic revision kept as migration history. Do not edit it; schema
+#         changes must go into a new revision.
+# =============================================================================
+
 """
-0001_initial_schema — migration پایه (baseline) فاز E.1.
+0001_initial_schema — baseline migration for phase E.1.
 
-چه می‌سازد؟
-------------
-۱۱ جدول = ۱۰ جدول برنامه + جدول `meta` (تنها افزوده‌ی فاز E.0، کار E.0.13)
-به‌همراه ۱۳ ایندکس. این migration **وضعیت نهاییِ امروزِ SQLite** را بازتولید می‌کند؛
-ستون‌هایی که تا امروز با `ALTER TABLE` به جدول‌ها اضافه شده‌اند
-(`users.sensor_*`، `printer_counters.toner_overrides`، `cartridge_state.cycle_*`) در
-همین DDL یک‌جا آمده‌اند، چون baseline به‌جای بازپخش تاریخچه، شکل نهایی را می‌سازد.
+What it creates
+---------------
+11 tables = the 10 application tables + the `meta` table (the only addition of phase E.0, task E.0.13),
+plus 13 indexes. This migration reproduces the **final state of today's SQLite schema**. Columns that
+were added to tables with `ALTER TABLE` until now (`users.sensor_*`, `printer_counters.toner_overrides`,
+`cartridge_state.cycle_*`) are in this same DDL, because the baseline builds the final shape instead of
+replaying the history.
 
-تصمیم‌های آگاهانه
------------------
-• نوع‌ها **همان SQLite امروز** می‌مانند: timestampها `TEXT` و booleanها `INTEGER`.
-  تبدیل `TEXT → TIMESTAMPTZ` کار فاز E.4 است (تبصره‌ی صریح فاز E.1).
-• دو نگاشتِ دوحالته (variant) برای اینکه یک migration هم SQLite را عیناً بازتولید کند و
-  هم روی PG معنای درست داشته باشد:
-    - شناسه‌ها: `BIGINT` روی PG، `INTEGER` روی SQLite. (`INTEGER` عیناً لازم است، چون
-      `AUTOINCREMENT` در SQLite فقط روی `INTEGER PRIMARY KEY` مجاز است؛ با `BIGINT`
-      هم schema یکسان نمی‌شد و هم autoincrement کار نمی‌کرد.)
-    - اعشاری‌ها: `DOUBLE PRECISION` روی PG (۸ بایت، هم‌معنای `REAL` در SQLite)،
-      `REAL` روی SQLite (تا schema بایت‌به‌بایت یکسان بماند؛ `FLOAT` می‌شد `FLOAT`).
-• هیچ کلید خارجی‌ای وجود ندارد (مثل امروز) و هیچ داده‌ای درج نمی‌شود.
-• `sqlite_sequence` ساخته نمی‌شود؛ خود SQLite در حضور `AUTOINCREMENT` می‌سازد.
-  برای همین ۷ جدول `sqlite_autoincrement=True` صریح آمده (SQLAlchemy به‌طور پیش‌فرض
-  این کلمه را رندر نمی‌کند و بدون آن، DDL با امروزِ برنامه یکی نمی‌شد و درجِ بدون id
-  رفتار «بازاستفاده‌ی id» می‌گرفت).
+Deliberate decisions
+--------------------
+• Types **stay as in today's SQLite**: timestamps are `TEXT` and booleans are `INTEGER`.
+  Converting `TEXT → TIMESTAMPTZ` is the work of phase E.4 (explicit note in phase E.1).
+• Two dual-dialect variants, so that one migration both reproduces SQLite exactly and has the
+  right meaning on PG:
+    - IDs: `BIGINT` on PG, `INTEGER` on SQLite. (`INTEGER` is required, because `AUTOINCREMENT`
+      in SQLite is only allowed on `INTEGER PRIMARY KEY`; with `BIGINT` the schema would not
+      match and autoincrement would not work.)
+    - Floats: `DOUBLE PRECISION` on PG (8 bytes, same meaning as `REAL` in SQLite), `REAL` on
+      SQLite (so the schema stays byte-for-byte the same; `FLOAT` would have become `FLOAT`).
+• No foreign keys (as today) and no data is inserted.
+• `sqlite_sequence` is not created; SQLite creates it itself when `AUTOINCREMENT` is present.
+  That is why 7 tables have an explicit `sqlite_autoincrement=True` (SQLAlchemy does not render
+  this keyword by default; without it the DDL would not match today's program, and an insert
+  without an id would get "id reuse" behaviour).
 
-تفاوت‌های عمدی و مستندشده با schema امروز SQLite (هر دو مورد «سخت‌گیرانه‌تر و هم‌سو با PG»اند)
---------------------------------------------------------------------------------------------
-۱. ۹ ستون در migration صریحاً `NOT NULL` هستند: هفت `id` (کلیدهای AUTOINCREMENT) و دو
-   کلید متنی `printer_counters.ip` و `cartridge_yield_profiles.cartridge_key`.
-   در SQLite امروز این‌ها `notnull=0` ثبت می‌شوند (ویژگی خودِ SQLite برای ستون کلید)،
-   ولی در عمل هرگز NULL نمی‌گیرند و در PG هم کلید اصلی ذاتاً NOT NULL است.
-   SQLAlchemy برای ستون‌های `primary_key=True` همیشه NOT NULL می‌نویسد؛ حذف آن ممکن
-   نیست مگر با کنارگذاشتن قید کلید اصلی — که تغییر معنای schema بود، نه بازتولید آن.
-۲. روی PostgreSQL، شناسه‌ها با `BIGSERIAL` (seq + `nextval`) ساخته می‌شوند، نه
-   `GENERATED … AS IDENTITY`. هر دو رفتار autoincrement یکسان می‌دهند؛ تغییر به
-   IDENTITY در فاز E.4 (همراه بازبینی نوع‌ها) انجام می‌شود تا این baseline «شکل امروز»
-   را بازتولید کند.
+Intentional, documented differences from today's SQLite schema (both are "stricter and aligned with PG")
+--------------------------------------------------------------------------------------------------------
+1. 9 columns are explicitly `NOT NULL` in the migration: the seven `id` columns (AUTOINCREMENT keys) and
+   two text keys `printer_counters.ip` and `cartridge_yield_profiles.cartridge_key`.
+   In today's SQLite these are recorded with `notnull=0` (a SQLite property of key columns), but in
+   practice they never receive NULL, and in PG a primary key is NOT NULL by definition.
+   SQLAlchemy always writes NOT NULL for `primary_key=True` columns; removing it is not possible
+   without dropping the primary-key constraint, which would change the meaning of the schema instead
+   of reproducing it.
+2. On PostgreSQL, IDs are created with `BIGSERIAL` (sequence + `nextval`), not
+   `GENERATED … AS IDENTITY`. Both give the same autoincrement behaviour; the change to IDENTITY
+   happens in phase E.4 (together with the type review), so that this baseline reproduces the
+   "today's shape".
 
-نکته‌ی مهم برای دیتابیس موجود
------------------------------
-روی SQLite موجودِ سرور (`logs.db` که همین جدول‌ها را دارد) نباید `upgrade head` زد؛
-باید `alembic stamp head` خورد تا نسخه‌ی schema ثبت شود. `upgrade head` فقط برای
-دیتابیس خالی (PostgreSQL تازه یا فایل SQLite خالی) است. جزئیات در `docs/phase-e-plan.md`.
+Important note for an existing database
+---------------------------------------
+On the existing SQLite server database (`logs.db`, which already has these tables) do NOT run
+`upgrade head`; run `alembic stamp head` so the schema version is recorded. `upgrade head` is only
+for an empty database (a fresh PostgreSQL or an empty SQLite file). Details are in
+`docs/phase-e-plan.md`.
 """
 from __future__ import annotations
 
@@ -53,7 +62,7 @@ from sqlalchemy.dialects.postgresql import DOUBLE_PRECISION
 from alembic import op
 import sqlalchemy as sa
 
-# شناسه‌ی یکتای این migration
+# Unique identifier of this migration
 revision = "0001"
 down_revision = None
 branch_labels = None
@@ -61,6 +70,7 @@ depends_on = None
 
 
 def upgrade() -> None:
+    """Create the baseline schema: tables and indexes matching the current SQLite layout."""
     op.create_table(
         "cartridge_state",
         sa.Column("printer_ip", sa.Text, primary_key=True),
@@ -123,7 +133,7 @@ def upgrade() -> None:
         sa.Column("paper_size", sa.Text, nullable=True),
         sa.Column("username", sa.Text, nullable=True),
         sa.Column("details", sa.Text, nullable=True),
-        # AUTOINCREMENT در SQLite: عیناً همان DDL امروزِ برنامه (و sqlite_sequence).
+        # AUTOINCREMENT in SQLite: exactly today's program DDL (and sqlite_sequence).
         sqlite_autoincrement=True,
     )
     op.create_table(
@@ -164,7 +174,7 @@ def upgrade() -> None:
         sa.Column("success", sa.Integer, nullable=True, server_default=sa.text('0')),
         sa.Column("details", sa.Text, nullable=True),
         sa.Column("created_at", sa.Text, nullable=False),
-        # AUTOINCREMENT در SQLite: عیناً همان DDL امروزِ برنامه (و sqlite_sequence).
+        # AUTOINCREMENT in SQLite: exactly today's program DDL (and sqlite_sequence).
         sqlite_autoincrement=True,
     )
     op.create_table(
@@ -177,7 +187,7 @@ def upgrade() -> None:
         sa.Column("value", sa.REAL().with_variant(DOUBLE_PRECISION, "postgresql"), nullable=True),
         sa.Column("unit", sa.Text, nullable=True),
         sa.Column("status", sa.Text, nullable=True),
-        # AUTOINCREMENT در SQLite: عیناً همان DDL امروزِ برنامه (و sqlite_sequence).
+        # AUTOINCREMENT in SQLite: exactly today's program DDL (and sqlite_sequence).
         sqlite_autoincrement=True,
     )
     op.create_table(
@@ -189,7 +199,7 @@ def upgrade() -> None:
         sa.Column("toner_level", sa.Integer, nullable=True),
         sa.Column("yield_per_page", sa.Integer, nullable=True),
         sa.Column("source", sa.Text, nullable=True, server_default=sa.text("'poll'")),
-        # AUTOINCREMENT در SQLite: عیناً همان DDL امروزِ برنامه (و sqlite_sequence).
+        # AUTOINCREMENT in SQLite: exactly today's program DDL (and sqlite_sequence).
         sqlite_autoincrement=True,
     )
     op.create_table(
@@ -210,7 +220,7 @@ def upgrade() -> None:
         sa.Column("source", sa.Text, nullable=True),
         sa.Column("valid", sa.Integer, nullable=True, server_default=sa.text('1')),
         sa.Column("reject_reason", sa.Text, nullable=True),
-        # AUTOINCREMENT در SQLite: عیناً همان DDL امروزِ برنامه (و sqlite_sequence).
+        # AUTOINCREMENT in SQLite: exactly today's program DDL (and sqlite_sequence).
         sqlite_autoincrement=True,
     )
     op.create_table(
@@ -240,7 +250,7 @@ def upgrade() -> None:
         sa.Column("sensor_alert_cooldown_minutes", sa.Integer, nullable=True, server_default=sa.text('30')),
         sa.Column("sensor_alert_start_hour", sa.Integer, nullable=True, server_default=sa.text('0')),
         sa.Column("sensor_alert_end_hour", sa.Integer, nullable=True, server_default=sa.text('24')),
-        # AUTOINCREMENT در SQLite: عیناً همان DDL امروزِ برنامه (و sqlite_sequence).
+        # AUTOINCREMENT in SQLite: exactly today's program DDL (and sqlite_sequence).
         sqlite_autoincrement=True,
     )
     op.create_table(
@@ -264,7 +274,7 @@ def upgrade() -> None:
         sa.Column("reject_reason", sa.Text, nullable=True),
         sa.Column("source", sa.Text, nullable=True),
         sa.Column("created_at", sa.Text, nullable=True),
-        # AUTOINCREMENT در SQLite: عیناً همان DDL امروزِ برنامه (و sqlite_sequence).
+        # AUTOINCREMENT in SQLite: exactly today's program DDL (and sqlite_sequence).
         sqlite_autoincrement=True,
     )
     op.create_table(
@@ -274,7 +284,7 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.Text, nullable=False),
     )
 
-    # ─── ایندکس‌ها (۱۳ مورد، عیناً همان نام‌ها) ───
+    # ─── Indexes (13 items, exactly the same names) ───
     op.create_index("idx_cartridge_state_key", "cartridge_state", ["cartridge_key"])
     op.create_index("idx_printer_ip", "logs", ["printer_ip"])
     op.create_index("idx_sec_event_type", "security_events", ["event_type"])
@@ -291,7 +301,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """حذف کامل (indexها اول، سپس جدول‌ها) — `downgrade base` باید بی‌خطا کار کند."""
+    """Full drop (indexes first, then tables) — `downgrade base` must run without error."""
     op.drop_index("idx_cartridge_state_key", table_name="cartridge_state")
     op.drop_index("idx_printer_ip", table_name="logs")
     op.drop_index("idx_sec_event_type", table_name="security_events")

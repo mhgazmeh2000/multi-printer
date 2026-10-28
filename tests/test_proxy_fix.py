@@ -1,17 +1,28 @@
 # -*- coding: utf-8 -*-
-"""
-تست‌های reverse-proxy (ProxyFix) و مسیر CSRF روی endpoint های سیستمی.
+# =============================================================================
+# @file:         tests/test_proxy_fix.py
+# @brief:        Tests for reverse-proxy handling (ProxyFix) and CSRF on system endpoints.
+# @details:      Responsibilities: Verify that forwarded headers and CSRF checks behave correctly
+#                behind a proxy.
+#                Main API: ProxyProbeBase, ProxyFixTests, PollNowCsrfTests
+#                Side effects: none at import time
+# @dependencies: internal: core.database, core.poller, models, web | external: flask
+# @notes:        Reads environment variables: TRUST_PROXY. Can be run directly as a script.
+# =============================================================================
 
-پوشش:
-  ۱) بدون TRUST_PROXY: هدرهای X-Forwarded-* نادیده گرفته می‌شوند (ضد جعل هدر).
-  ۲) با TRUST_PROXY=1: X-Forwarded-Proto/For از nginx معتبرند → request.is_secure
-     پشت TLS-termination درست می‌شود (پیش‌نیاز WTF_CSRF_SSL_STRICT و redirectهای https).
-  ۳) با TRUST_PROXY=1 ولی بدون هدر: هیچ اعتماد کوری وجود ندارد.
-  ۴) فقط یک hop اعتماد می‌شود (x_for=1) — در XFF زنجیره‌ای، آخرین hop.
-  ۵) POST /api/poll/now با CSRF نامعتبر → 400 + {"error": "csrf_token_invalid"}
-     (همان قراردادی که retry فرانت‌اند در apiFetch روی آن سوار است).
-  ۶) POST /api/poll/now با توکن تازه‌ی /api/status → 200 {"status": "started"}.
-  ۷) busy بودن چرخه‌ی poll → 200 {"status": "busy"} (رفتار فعلی حفظ شود).
+"""
+reverse-proxy tests (ProxyFix) and CSRF route on system endpoints.
+
+Coverage:
+  1) Without TRUST_PROXY: X-Forwarded-* headers are ignored (anti-header forgery).
+  2) With TRUST_PROXY=1: X-Forwarded-Proto/For from nginx are valid → request.is_secure
+     It is fixed behind TLS-termination (prerequisite WTF_CSRF_SSL_STRICT and https redirects).
+  3) With TRUST_PROXY=1 but no header: there is no blind trust.
+  4) Only one hop is trusted (x_for=1) — in chained XFF, the last hop.
+  5) POST /api/poll/now with invalid CSRF → 400 + {"error": "csrf_token_invalid"}
+     (The same contract that the retry front end in apiFetch is based on).
+  6) POST /api/poll/now with new token /api/status → 200 {"status": "started"}.
+  7) poll cycle being busy → 200 {"status": "busy"} (keep the current behavior).
 """
 import os
 import tempfile
@@ -22,9 +33,10 @@ from core.database import init_db
 
 
 class ProxyProbeBase(unittest.TestCase):
-    """پایه: ساخت app با/بدون TRUST_PROXY + ثبت probe برای دیدن is_secure از درون."""
+    """Base: build app with/without TRUST_PROXY + register probe to see is_secure from inside."""
 
     def _make(self, trust_proxy=None):
+        """Helper: make."""
         from flask import request
         from web import create_app
         with mock.patch.dict(os.environ, {}, clear=False):
@@ -38,6 +50,7 @@ class ProxyProbeBase(unittest.TestCase):
 
         @app.after_request
         def _probe(resp):
+            """Helper: probe."""
             seen["secure"] = request.is_secure
             seen["remote"] = request.remote_addr
             return resp
@@ -46,18 +59,21 @@ class ProxyProbeBase(unittest.TestCase):
 
 
 class ProxyFixTests(ProxyProbeBase):
+    """Tests for proxy fix."""
     def setUp(self):
+        """Prepare the fixtures that each test in this class uses."""
         self.tmp = tempfile.TemporaryDirectory()
         self.old_cwd = os.getcwd()
         os.chdir(self.tmp.name)
         init_db()
 
     def tearDown(self):
+        """Release the resources that each test in this class created."""
         os.chdir(self.old_cwd)
         self.tmp.cleanup()
 
     def test_no_trust_proxy_ignores_forwarded_headers(self):
-        """پیش‌فرض (توسعه/دسترسی مستقیم): هدر جعل‌شده نباید is_secure را عوض کند."""
+        """Default (development/direct access): Forged header should not override is_secure."""
         client = self._make(trust_proxy=None)
         client.get("/login", headers={
             "X-Forwarded-Proto": "https",
@@ -67,7 +83,7 @@ class ProxyFixTests(ProxyProbeBase):
         self.assertNotEqual(self.seen["remote"], "9.9.9.9")
 
     def test_trust_proxy_honors_forwarded_proto_and_for(self):
-        """با TRUST_PROXY=1 و nginx جلوی برنامه: scheme و IP واقعی دیده می‌شوند."""
+        """With TRUST_PROXY=1 and nginx in front of the application: scheme and real IP are seen."""
         client = self._make(trust_proxy="1")
         client.get("/login", headers={
             "X-Forwarded-Proto": "https",
@@ -77,27 +93,28 @@ class ProxyFixTests(ProxyProbeBase):
         self.assertEqual(self.seen["remote"], "9.9.9.9")
 
     def test_trust_proxy_without_headers_is_noop(self):
-        """با TRUST_PROXY=1 ولی بدون هدر: هیچ اعتماد کوری رخ نمی‌دهد."""
+        """With TRUST_PROXY=1 but no header: no blind trust occurs."""
         client = self._make(trust_proxy="1")
         client.get("/login")
         self.assertFalse(self.seen["secure"])
 
     def test_only_one_hop_trusted(self):
-        """x_for=1 ⇒ از XFF زنجیره‌ای فقط آخرین hop (nginx خودمان) اعتماد می‌شود."""
+        """x_for=1 ⇒ From the XFF chain, only the last hop (our own nginx) is trusted."""
         client = self._make(trust_proxy="1")
         client.get("/login", headers={"X-Forwarded-For": "1.1.1.1, 9.9.9.9"})
         self.assertEqual(self.seen["remote"], "9.9.9.9")
 
 
 class PollNowCsrfTests(unittest.TestCase):
-    """قرارداد 400/200 روی /api/poll/now — مسیری که apiFetch برای retry استفاده می‌کند."""
+    """400/200 convention on /api/poll/now — the path apiFetch uses to retry."""
 
     def setUp(self):
+        """Prepare the fixtures that each test in this class uses."""
         self.tmp = tempfile.TemporaryDirectory()
         self.old_cwd = os.getcwd()
         os.chdir(self.tmp.name)
         init_db()
-        os.environ.pop("TRUST_PROXY", None)  # این تست‌ها مستقل از proxy باشند
+        os.environ.pop("TRUST_PROXY", None)  # These tests are independent of the proxy
         from web import create_app
         self.app = create_app()
         self.app.config["TESTING"] = True
@@ -110,22 +127,25 @@ class PollNowCsrfTests(unittest.TestCase):
             sess["_fresh"] = True
 
     def tearDown(self):
+        """Release the resources that each test in this class created."""
         os.chdir(self.old_cwd)
         self.tmp.cleanup()
 
     def _csrf_token(self):
+        """Helper: csrf token."""
         r = self.client.get("/api/status")
         self.assertEqual(r.status_code, 200)
         return (r.get_json() or {}).get("csrf_token", "")
 
     def test_poll_now_with_invalid_csrf_returns_400_json(self):
+        """Verifies poll now with invalid csrf returns 400 json."""
         r = self.client.post("/api/poll/now", headers={"X-CSRFToken": "bogus-token"})
         self.assertEqual(r.status_code, 400)
         body = r.get_json() or {}
         self.assertEqual(body.get("error"), "csrf_token_invalid")
 
     def test_poll_now_with_fresh_token_from_status_succeeds(self):
-        """توکن تازه از /api/status ⇒ 200. عین مسیر retry در window.apiFetch."""
+        """Fresh token from /api/status ⇒ 200. Same retry path in window.apiFetch."""
         import core.poller as poller_mod
         calls = []
         orig = poller_mod.poll_all
@@ -140,6 +160,7 @@ class PollNowCsrfTests(unittest.TestCase):
             poller_mod.poll_all = orig
 
     def test_poll_now_busy_when_polling_lock_held(self):
+        """Verifies poll now busy when polling lock held."""
         import core.poller as poller_mod
         token = self._csrf_token()
         with poller_mod._polling_lock:

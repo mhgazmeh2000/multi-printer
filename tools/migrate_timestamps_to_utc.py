@@ -1,62 +1,73 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tools/migrate_timestamps_to_utc.py
+# @brief:        Migrates SQLite timestamps to the standard UTC 'Z' format (phase E.3).
+# @details:      Responsibilities: Convert timestamp values in place and write a manifest.
+#                Main API: split_awareness(), convert_value(), connect_ro(), table_columns(),
+#                read_cutover(), sha256_of(), scan(), migrate_rows() (+6 more)
+#                Side effects: database access, runs external processes, file I/O
+# @dependencies: internal: config, core.time_utils
+# @notes:        Reads environment variables: DB_BACKEND, PG_DSN. Can be run directly as a script.
+# =============================================================================
+
 """
-tools/migrate_timestamps_to_utc.py — مهاجرت timestampهای SQLite به فرمت استاندارد UTC-Z (فاز E.3).
+tools/migrate_timestamps_to_utc.py — Migration of SQLite timestamps to standard UTC-Z format (phase E.3).
 
-چه می‌کند؟
+what does it do
 ----------
-همهٔ مقادیر زمانی جدول‌های برنامه را به **فرمت استاندارد پروژه**
-(``2026-10-03T12:00:00.123456Z`` — ۲۷ کاراکتر، همیشه UTC، همیشه ``Z``) تبدیل می‌کند.
-قاعدهٔ تفسیر، همان قاعدهٔ قفل‌شدهٔ ``docs/timezone-contract.md`` §۸.۳ است و
-دسته‌بندی از **همان تابع** ابزار E.0.2 (``tools/analyze_old_events.py::classify``)
-می‌آید تا دو ابزار هرگز از هم جدا نشوند:
+All the time values of the program tables to **standard project format**
+(``2026-10-03T12:00:00.123456Z'' — 27 characters, always UTC, always ``Z'') converts.
+The interpretation rule is the same as the locked rule ``docs/timezone-contract.md'' §8.3 and
+Classification from the **same function** of the E.0.2 tool (``tools/analyze_old_events.py::classify'')
+It comes so that the two tools are never separated:
 
-| مقدار ورودی | تفسیر | خروجی |
+| The input value | Commentary Output
 |---|---|---|
-| ``2026-10-01T08:51:39.937749`` (naive) | ساعت محلی ``Asia/Tehran`` | ``2026-10-01T05:21:39.937749Z`` |
-| ``…Z`` پیش از نشانهٔ cutover | برچسب جعلی (باگ D.6) ⇒ ساعت محلی | تبدیل‌شده |
-| ``…Z`` پس از نشانهٔ cutover | UTC واقعی | نرمال‌شده به فرمت استاندارد |
+| ``2026-10-01T08:51:39.937749'' (naive) | ``Asia/Tehran'' local time | ``2026-10-01T05:21:39.937749Z'' |
+| ``...Z'' before the cutover sign | Fake Label (Bug D.6) ⇒ Local Time | converted |
+| ``...Z'' after the cutover sign | Actual UTC | Normalized to standard format
 
-⚠ **نقطهٔ کور شناخته‌شدهٔ این قاعده:** ردیف جعلی‌ای که در **۳:۳۰ پیش از** لحظهٔ cutover
-واقعی نوشته شده، مقدار محلی‌اش (که ۳:۳۰ جلوتر است) از نشانه عبور می‌کند و «UTC واقعی»
-تشخیص داده می‌شود. این محدودیت در سند ``docs/timezone-contract.md`` §۸.۳ پذیرفته شده
-(نشانه، لحظهٔ استقرار نسخهٔ اصلاح‌شده است) و عدد آن با ابزار E.0.2
-(``tools/analyze_old_events.py``) پیش از مهاجرت دیده می‌شود؛ در DB این مخزن صفر ردیف
-``Z`` وجود دارد، پس اثر عملی ندارد.
-| ``2026-10-03T09:55:51+00:00`` | offset صریح ⇒ همان‌طور (UTC واقعی) | استانداردشده |
-| ``2026-10-03T11:00:00+03:30`` | offset صریح ⇒ همان‌طور (اندازه‌گیری‌شده و در manifest شمرده می‌شود) | استانداردشده |
-| خراب / تجزیه‌ناپذیر | **دست‌نخورده** + هشدار | skip |
+⚠ **Known blind spot of this rule:** The fake row at **3:30 before** the moment of cutover
+written real, its local value (which is 3:30 ahead) crosses the mark and "UTC real"
+is recognized. This limitation is accepted in the document ``docs/timezone-contract.md'' §8.3
+(the sign is the moment of installation of the modified version) and its number with the tool E.0.2
+(``tools/analyze_old_events.py'') seen before migration; In the DB of this repository there are zero rows
+``Z'' exists, so it has no practical effect.
+| ``2026-10-03T09:55:51+00:00'' | explicit offset ⇒ ditto (true UTC) | Standardized
+| ``2026-10-03T11:00:00+03:30'' | Explicit offset ⇒ ditto (measured and counted in manifest) | Standardized
+| Corrupt / indestructible | **Intact** + Warning | skip |
 
-idempotency (چرا اجرای دوباره چیزی را خراب نمی‌کند)
+idempotency (why re-execution doesn't break anything)
 ---------------------------------------------------
-قاعدهٔ «``Z`` پیش از cutover ⇒ جعلی» فقط برای دادهٔ **قدیمی** درست است، ولی ردیف‌های
-مهاجرت‌شده هم می‌توانند زمانی پیش از cutover داشته باشند (کل تاریخ!). تفکیک با
-**فرمت** انجام می‌شود، نه با زمان:
+The rule "``Z'' before cutover ⇒ fake" is only true for **old** data, but rows
+Migrated can also have a time before cutover (the whole date!). Separation with
+**Format** is done, not by time:
 
-  • ``Z`` با ۶ رقم میکروثانیه (``.ffffff``) ⇒ فرمت استاندارد E.3 ⇒ **UTC واقعی** ⇒ no-op؛
-  • ``Z`` بدون میکروثانیه ⇒ نویسنده‌های قدیمی موتور کارتریج
-    (``strftime("%Y-%m-%dT%H:%M:%SZ")``) ⇒ قاعدهٔ cutover اعمال می‌شود.
+  • ``Z'' with 6 microsecond digits (``.ffffff``) ⇒ E.3 standard format ⇒ **True UTC** ⇒ no-op;
+  • ``Z'' without microseconds ⇒ old cartridge motor writers
+    (``strftime("%Y-%m-%dT%H:%M:%SZ")``) ⇒ the cutover rule is applied.
 
-پس اجرای دوباره: هر ردیف در دستهٔ ``already_standard`` می‌افتد و هیچ UPDATEای زده
-نمی‌شود (تست دارد).
+So run again: every row falls in ``already_standard'' category and no UPDATE is done
+Can't (test)
 
-ایمنی
+safety
 -----
-  • ``--dry-run``: فقط شمارش، بدون هیچ نوشتنی (و بدون بکاپ)؛
-  • پیش از هر نوشتن: بکاپ ``<db>-<YYYYmmdd-HHMMSS>.e3bak`` (نام‌گذاری با ``logs.db-*``
-    سازگار است ⇒ در ``.gitignore`` می‌افتد و git status را آلوده نمی‌کند)؛
-  • کل به‌روزرسانی در **یک تراکنش**؛ هر خطای غیرمنتظره ⇒ rollback و کد خروج ۱؛
-  • ``meta.value`` دست‌نخورده می‌ماند: نشانهٔ cutover خودش مرجع تفسیر است و نباید
-    تبدیل شود (فقط ``meta.updated_at`` مثل بقیه تبدیل می‌شود).
+  • ``--dry-run'': only counting, no writing (and no backup);
+  • Before each write: backup ``<db>-<YYYYmmdd-HHMMSS>.e3bak'' (named with ``logs.db-*''
+    Compatible ⇒ falls in ``.gitignore'' and doesn't pollute git status);
+  • Total update in **one transaction**; Any unexpected error ⇒ rollback and exit code 1;
+  • ``meta.value'' remains intact: the cutover token itself is a reference to interpretation and should not
+    convert (only ``meta.updated_at'' is converted like the others).
 
-کدهای خروج
+exit codes
 ----------
-  0 = مهاجرت انجام شد (یا dry-run). ردیف‌های زباله/خالی فقط هشدارند و در manifest می‌آیند.
-  1 = خطای اجرایی (DB نبود/نخواندنی، خطای نوشتن — با rollback)
-  2 = نیازمند اقدام: نشانهٔ cutover نیست، یا ردیف ``Z`` بدون نشانهٔ قابل‌اعتماد
-      (``z_cutover_unknown``) داریم ⇒ تفسیر خودکار ممکن نیست.
+  0 = migration done (or dry-run). Garbage/Empty rows are only warnings and appear in the manifest.
+  1 = execution error (DB missing/unreadable, write error — with rollback)
+  2 = action required: no cutover token, or ``Z'' row without reliable token
+      (``z_cutover_unknown'') ⇒ automatic interpretation is not possible.
 
-نمونه
+sample
 -----
     python tools\\migrate_timestamps_to_utc.py --db logs.db --dry-run
     python tools\\migrate_timestamps_to_utc.py --db logs.db
@@ -64,23 +75,23 @@ idempotency (چرا اجرای دوباره چیزی را خراب نمی‌کن
     python tools\\migrate_timestamps_to_utc.py --db logs.db --backup-only
     python tools\\migrate_timestamps_to_utc.py --db logs.db --pg-dsn "host=… dbname=printguard" --backup-only
 
-بکاپ (E.6.2)
+Backup (E.6.2)
 ------------
-پیش از نوشتن، بکاپ گرفته می‌شود و **هیچ‌کدام از دو مسیر بی‌صدا رد نمی‌شود**:
+Before writing, it is backed up and **none of the two silent paths are bypassed**:
 
-* **SQLite** (همیشه): کپی فیزیکی کنار فایل، الگوی ``logs.db-<stamp>.e3bak`` — همان
-  رفتار پیشین، بدون تغییر.
-* **PostgreSQL**: اگر DB_BACKEND=postgresql و ``PG_DSN`` ست باشد (یا ``--pg-dsn`` داده
-  شود) ``pg_dump --format=custom`` در ``printguard-pg-<stamp>.dump`` و سپس **تأیید** با
-  ``pg_restore --list``: dump خالی/نیمه/بی‌جدول ⇒ خطای صریح و توقف. نبودِ ``pg_dump`` هم
-  خطاست (با پیام نصب); ``--skip-pg-backup`` تنها راه آگاهانهٔ بی‌گذراندن آن است.
-* ``--backup-only``: فقط بکاپ (PG: dump تأییدشده / SQLite: کپی) و خروج، بدون اسکن و
-  بدون هیچ نوشتنی روی دیتابیس.
+* **SQLite** (always): physical copy next to file, template ``logs.db-<stamp>.e3bak'' — same
+  Previous behavior, no change.
+* **PostgreSQL**: if DB_BACKEND=postgresql and ``PG_DSN'' is set (or ``--pg-dsn'' data
+  ``pg_dump --format=custom'' in ``printguard-pg-<stamp>.dump'' and then **confirm** with
+  ``pg_restore --list'': dump empty/half/no table ⇒ explicit error and stop. No ``pg_dump'' either
+  error (with installation message); ``--skip-pg-backup'' is the only way to consciously skip it.
+* ``--backup-only'': backup only (PG: verified dump / SQLite: copy) and exit, no scan and
+  Without any writing on the database.
 
-sha256 بکاپ PG در manifest (کلید ``pg_backup`` با toc/tables/sha256) ثبت می‌شود؛ رمز
-libpq به ``PGPASSWORD`` منتقل می‌شود تا در آرگومان خط فرمان و manifest دیده نشود.
-دلیل این طراحی: یافتهٔ E.4.11 (بند ۷.۱ docs/postgresql-strictness.md) نشان داد «بکاپ»
-روی PG می‌توانست بی‌صدا **هیچ** باشد و همان‌طور گزارش شود.
+sha256 PG backup is registered in manifest (key ``pg_backup'' with toc/tables/sha256); password
+libpq is passed to ``PGPASSWORD'' so that it is not seen in command line arguments and manifests.
+The reason for this design: finding E.4.11 (paragraph 7.1 docs/postgresql-strictness.md) showed "backup"
+On the PG it could be silent **none** and reported as such.
 """
 
 from __future__ import annotations
@@ -111,9 +122,9 @@ EXIT_NEEDS_ACTION = 2
 
 CUTOVER_KEY = "timezone_cutover_at"
 
-#: ستون‌های زمانی هر جدول — از DDL واقعی `logs.db` استخراج شده‌اند
-#: (`PRAGMA table_info`)، نه از حافظه. اگر جدولی/ستونی در DB نباشد، هشدار داده
-#: می‌شود و رد می‌شود (سازگاری با نسخه‌های قدیمی‌تر schema).
+#: Time columns of each table — extracted from the actual DDL of `logs.db`
+#: (`PRAGMA table_info`), not from memory. If there is no table/column in DB, give warning
+#: yes and no (compatibility with older versions of schema).
 TIME_COLUMNS = {
     "logs": ["timestamp"],
     "security_events": ["timestamp", "created_at"],
@@ -128,10 +139,10 @@ TIME_COLUMNS = {
     "meta": ["updated_at"],
 }
 
-#: ستون‌هایی که عمداً دست‌نخورده می‌مانند (مرجع تفسیر، نه دادهٔ تاریخی).
+#: Columns intentionally left intact (reference to commentary, not historical data).
 PROTECTED_COLUMNS = {("meta", "value")}
 
-#: `Z` با ۶ رقم میکروثانیه ⇒ فرمت استاندارد E.3.
+#: `Z' with 6 microsecond digits ⇒ E.3 standard format.
 _STANDARD_Z = re.compile(r"\.\d{6}Z$")
 
 TEHRAN = ZoneInfo(DEFAULT_DISPLAY_TZ)
@@ -139,11 +150,11 @@ TEHRAN = ZoneInfo(DEFAULT_DISPLAY_TZ)
 
 def _load_classify():
     """
-    تابع ``classify`` را از ابزار E.0.2 می‌آورد (یک پیاده‌سازی، دو مصرف‌کننده).
+    Imports the ``classify'' function from the E.0.2 utility (one implementation, two consumers).
 
-    چرا import فایل‌محور: پوشهٔ ``tools/`` پکیج نیست؛ با ``spec_from_file_location``
-    همان ماژول مستقل بار می‌شود و اگر روزی منطق دسته‌بندی عوض شود، هر دو ابزار
-    با هم عوض می‌شوند (نه از هم جدا).
+    Why file-oriented import: the ``tools/'' folder is not a package; with ``spec_from_file_location''
+    The same module is loaded independently, and if the categorization logic ever changes, both tools
+    They change together (not separately).
     """
     path = PROJECT_ROOT / "tools" / "analyze_old_events.py"
     spec = importlib.util.spec_from_file_location("analyze_old_events", path)
@@ -156,17 +167,17 @@ classify = _load_classify()
 
 
 # ─────────────────────────────────────────────────────────────
-# تبدیل مقادیر
+# Convert values
 # ─────────────────────────────────────────────────────────────
 
 def split_awareness(raw: str) -> tuple:
     """
-    (رشته، دسته) را برای یک مقدار خام برمی‌گرداند؛ جدا از قاعدهٔ E.3 برای idempotency.
+    returns (string, handle) for a raw value; Apart from rule E.3 for idempotency.
 
     Returns:
-        ``(نوع, مقدار)`` که نوع یکی است از:
-        ``standard`` (فرمت استاندارد E.3 — no-op)، ``naive``، ``z``، ``offset``،
-        ``empty``، ``unparsable``.
+        ``(type, value)'' where the type is one of:
+        ``standard'' (E.3 standard format — no-op), ``naive'', ``z'', ``offset'',
+        ``empty'', ``unparsable''.
     """
     ts = (raw or "").strip()
     if not ts:
@@ -186,38 +197,38 @@ def split_awareness(raw: str) -> tuple:
 
 def convert_value(raw: str, cutover: datetime | None) -> tuple:
     """
-    یک مقدار زمانی را به فرمت استاندارد تبدیل می‌کند.
+    Converts a time value to standard format.
 
     Args:
-        raw: مقدار خام ستون.
-        cutover: لحظهٔ نشانهٔ cutover (آگاه به UTC) برای تفکیک ``Z`` جعلی از واقعی.
+        raw: the raw value of the column.
+        cutover: cutover signal moment (UTC aware) to distinguish fake ``Z'' from real.
 
     Returns:
-        ``(new_value, category, changed)`` — ``new_value`` برای مقادیر
-        دست‌نیافتنی همان مقدار خام است (هیچ حذفی انجام نمی‌شود).
+        ``(new_value, category, changed)'' — ``new_value'' for values
+        Unreachable is the same as the raw value (no deletion is performed).
     """
     kind, ts = split_awareness(raw)
     if kind == "empty":
         return raw, "empty", False
     if kind == "standard":
-        # فرمت استاندارد ⇒ UTC واقعی؛ صرفاً نرمال‌سازی (معمولاً هیچ تغییری نیست)
+        # standard format ⇒ actual UTC; Normalization only (usually no change)
         dt = datetime.strptime(ts, ISO_Z_FORMAT).replace(tzinfo=timezone.utc)
         new = dt.strftime(ISO_Z_FORMAT)
         return new, "already_standard", False
     if kind == "unparsable":
         return raw, "unparsable", False
     if kind == "naive":
-        dt = datetime.fromisoformat(ts).replace(tzinfo=TEHRAN)   # ساعت محلی نصب
+        dt = datetime.fromisoformat(ts).replace(tzinfo=TEHRAN)   # Installation local time
         return dt.astimezone(timezone.utc).strftime(ISO_Z_FORMAT), "naive_local", True
     if kind == "offset":
         dt = datetime.fromisoformat(ts)
         return dt.astimezone(timezone.utc).strftime(ISO_Z_FORMAT), "offset_aware", True
-    # kind == "z": برچسب Z قدیمی → قاعدهٔ cutover
+    # kind == "z": old Z label → cutover rule
     category = classify(ts, cutover)
     if category == "z_cutover_unknown":
         return raw, "z_cutover_unknown", False
     if category == "z_before_cutover":
-        # برچسب جعلی: مقدار در واقع ساعت محلی بوده
+        # Fake tag: The value is actually local time
         naive = datetime.fromisoformat(ts[:-1])
         dt = naive.replace(tzinfo=TEHRAN)
         return dt.astimezone(timezone.utc).strftime(ISO_Z_FORMAT), "z_before_cutover", True
@@ -228,16 +239,18 @@ def convert_value(raw: str, cutover: datetime | None) -> tuple:
 
 
 # ─────────────────────────────────────────────────────────────
-# کمکی‌های DB
+# DB auxiliaries
 # ─────────────────────────────────────────────────────────────
 
 def connect_ro(path: str) -> sqlite3.Connection:
-    """اتصال فقط-خواندنی (تحلیل بدون هیچ خطر نوشتن)."""
+    """Read-only connection (analysis without any write risk)."""
     uri = f"file:{Path(path).resolve().as_posix()}?mode=ro"
     return sqlite3.connect(uri, uri=True)
 
 
 def table_columns(conn: sqlite3.Connection, table: str) -> list:
+    """Return the column names of a table."""
+
     try:
         conn.execute(f'SELECT 1 FROM "{table}" LIMIT 1')
     except sqlite3.Error:
@@ -247,10 +260,10 @@ def table_columns(conn: sqlite3.Connection, table: str) -> list:
 
 def read_cutover(conn: sqlite3.Connection) -> tuple:
     """
-    نشانهٔ cutover را از جدول ``meta`` می‌خواند.
+    Reads the cutover token from the ``meta'' table.
 
     Returns:
-        ``(datetime|None, str)`` — مقدار و منبع/دلیل.
+        ``(datetime|None, str)'' — value and source/reason.
     """
     try:
         row = conn.execute("SELECT value FROM meta WHERE key = ?", (CUTOVER_KEY,)).fetchone()
@@ -269,6 +282,8 @@ def read_cutover(conn: sqlite3.Connection) -> tuple:
 
 
 def sha256_of(path: str) -> str:
+    """Return the SHA-256 hex digest of a file."""
+
     h = hashlib.sha256()
     with open(path, "rb") as fh:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
@@ -277,11 +292,11 @@ def sha256_of(path: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────
-# مهاجرت
+# immigration
 # ─────────────────────────────────────────────────────────────
 
 def scan(db_path: str, cutover: datetime, tables: list) -> dict:
-    """شمارش دسته‌ها بدون هیچ نوشتنی (پایهٔ dry-run و manifest)."""
+    """Batch counting without any writing (dry-run and manifest base)."""
     report = {"tables": {}, "totals": {}, "skipped_samples": []}
     conn = connect_ro(db_path)
     try:
@@ -328,7 +343,7 @@ def scan(db_path: str, cutover: datetime, tables: list) -> dict:
 
 
 def migrate_rows(db_path: str, cutover: datetime, tables: list) -> dict:
-    """اجرای تبدیل در **یک تراکنش**؛ خروجی: دیکشنری افزوده‌های هر جدول."""
+    """Execution of conversion in **one transaction**; Output: Dictionary of additions of each table."""
     applied = {}
     conn = sqlite3.connect(db_path)
     try:
@@ -341,7 +356,7 @@ def migrate_rows(db_path: str, cutover: datetime, tables: list) -> dict:
                       and (table, c) not in PROTECTED_COLUMNS]
             if not wanted:
                 continue
-            # rowid برای شناسایی ردیف؛ جدول‌های WITHOUT ROWID نداریم (DDL پروژه).
+            # rowid to identify the row; We do not have tables WITHOUT ROWID (project DDL).
             select = ", ".join(f'"{c}"' for c in wanted)
             rows = conn.execute(f'SELECT rowid, {select} FROM "{table}"').fetchall()
             updates = 0
@@ -366,10 +381,10 @@ def migrate_rows(db_path: str, cutover: datetime, tables: list) -> dict:
 
 def make_backup(db_path: str) -> str:
     """
-    بکاپ فیزیکی پیش از نوشتن.
+    Physical backup before writing.
 
-    نام پیش‌فرض ``<db>-<YYYYmmdd-HHMMSS>.e3bak`` است؛ چون با الگوی
-    ``logs.db-*`` در ``.gitignore`` می‌افتد، ``git status`` آلوده نمی‌شود.
+    The default name is ``<db>-<YYYYmmdd-HHMMSS>.e3bak''; Because with the pattern
+    ``logs.db-*'' falls in ``.gitignore'', ``git status'' is not infected.
     """
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     backup = f"{db_path}-{stamp}.e3bak"
@@ -378,10 +393,11 @@ def make_backup(db_path: str) -> str:
 
 
 class BackupError(RuntimeError):
-    """بکاپ گرفته/تأیید نشد — با پیام عملیاتی (نه traceback)."""
+    """Backup/Failed — with action message (not traceback)."""
 
 
 def _tool_path(name: str) -> str:
+    """Locate an external tool on PATH and return its path."""
     from shutil import which
 
     found = which(name)
@@ -394,17 +410,17 @@ def _tool_path(name: str) -> str:
 
 def _env_without_password(dsn: str) -> dict:
     """
-    رمز را از DSN به محیط منتقل می‌کند تا در `ps`/shell history دیده نشود.
+    Transfers the password from the DSN to the environment so that it is not visible in `ps`/shell history.
 
-    libpq پیش از خواندن DSN، متغیرهای محیطی را می‌بیند؛ پس PGPASSWORD تنها راه
-    رساندن رمز به pg_dump/pg_restore بدون نوشتنش در آرگومان خط فرمان است.
+    libpq looks at the environment variables before reading the DSN; So PGPASSWORD is the only way
+    Pass the password to pg_dump/pg_restore without writing it in the command line argument.
     """
     env = dict(os.environ)
     m = re.search(r"(?:^|\s)password=(\S+)", dsn)
     if m:
         env["PGPASSWORD"] = m.group(1).strip("'\"")
         dsn = re.sub(r"(?:^|\s)password=\S+", " ", dsn).strip()
-        env["_PG_DUMP_DSN"] = dsn          # DSN بدون رمز، برای لاگ‌کردن
+        env["_PG_DUMP_DSN"] = dsn          # DSN without password, for logging
     else:
         env["_PG_DUMP_DSN"] = dsn
     env.setdefault("PGCONNECT_TIMEOUT", "15")
@@ -412,7 +428,7 @@ def _env_without_password(dsn: str) -> dict:
 
 
 def _discard_unverified(path: str) -> None:
-    """فایل بکاپِ تأییدنشده را پاک می‌کند؛ اگر نشد، لااوه هشدار می‌دهد."""
+    """Deletes the unverified backup file; If it doesn't, Laveh warns."""
     try:
         os.remove(path)
     except OSError as exc:
@@ -421,12 +437,12 @@ def _discard_unverified(path: str) -> None:
 
 def verify_pg_dump(path: str, *, expect_tables=()) -> list:
     """
-    با `pg_restore --list` مطمئن می‌شود فایل واقعاً یک dump قابل‌بازگردانی است.
+    With `pg_restore --list` it is ensured that the file is indeed a restoreable dump.
 
-    چرا این-stage: خروجی موفق `pg_dump -Fc` تنها «فایلِ بزرگ» است؛ یک dump نیمه‌cut
-    (دیسک پر، سرور ریستارت‌شده) هم size دارد و هم همین‌جا رد می‌شود. `expect_tables`
-    هم اختیاری است: اگر داده شد، نبودِ هر نام ⇒ خطا (پس «dumpِ خالی از schema اشتباه»
-    هم از این دروازه رد نمی‌شود).
+    Why this-stage: The successful output of `pg_dump -Fc` is only "big file"; A half-cut dump
+    (disk full, server restarted) has both size and is rejected here. ``expect_tables''
+    It is also optional: if given, the absence of any name ⇒ error (so "empty dump of wrong schema"
+    It does not pass through this gate either).
     """
     pg_restore = _tool_path("pg_restore")
     if not os.path.exists(path) or os.path.getsize(path) == 0:
@@ -436,9 +452,9 @@ def verify_pg_dump(path: str, *, expect_tables=()) -> list:
     if proc.returncode != 0:
         raise BackupError(
             f"pg_restore --list خطا داد (dump معتبر نیست): {proc.stderr.strip()[:300]}")
-    # قالب خط TOC در pg_restore --list:  <entry>; <catalog> <oid> TABLE <schema> <name> <owner>
-    # (در pg_dump متن/سادهٔ جدول و «TABLE DATA» جداست؛ خط دوم عمداً رد می‌شود، وگرنه
-    # نامِ اشتباه به‌جای جدول برگردانده می‌شد.)
+    # TOC line format in pg_restore --list: <entry>; <catalog> <oid> TABLE <schema> <name> <owner>
+    # (in pg_dump the plain/text of the table and "TABLE DATA" are separated; the second line is intentionally omitted, otherwise
+    # The wrong name was returned instead of the table.)
     entries = re.findall(r"^\s*\d+;\s+\d+\s+\d+\s+TABLE(?!\s+DATA)\s+\S+\s+(\S+)",
                          proc.stdout, re.M)
     if not entries:
@@ -452,11 +468,11 @@ def verify_pg_dump(path: str, *, expect_tables=()) -> list:
 
 def take_pg_backup(dsn: str, out_dir: str, *, expect_tables=()) -> dict:
     """
-    `pg_dump --format=custom` + تأیید با `pg_restore --list`.
+    `pg_dump --format=custom` + Verify with `pg_restore --list`.
 
-    چرا custom و نه plain: `-Fc` فشرده است، با `pg_restore -t/-n` قابل انتخاب
-    برگردانده می‌شود، و — مهم‌تر برای یک شاهد عملیاتی — با `--list` بدون اتصال به
-    سرور قابل بازرسی است. نام فایل `printguard-pg-<UTC stamp>.dump` در `out_dir`.
+    Why custom and not plain: `-Fc` is compressed, selectable with `pg_restore -t/-n`
+    is returned, and — more importantly for an operational witness — with `--list` without binding to
+    The server is auditable. File name `printguard-pg-<UTC stamp>.dump` in `out_dir`.
     """
     pg_dump = _tool_path("pg_dump")
     if not os.path.isdir(out_dir):
@@ -472,10 +488,10 @@ def take_pg_backup(dsn: str, out_dir: str, *, expect_tables=()) -> dict:
                 f"pg_dump ناموفق بود: {proc.stderr.strip()[:300] or '(بدون stderr)'}")
         entries = verify_pg_dump(out_path, expect_tables=expect_tables)
     except BackupError:
-        # `pg_dump -Fc` فایل را **پیش از** موفقیت می‌سازد؛ پس یک اجرای نیمه‌کاره
-        # (دیسک پر، اتصال قطع، اتصال رد) فایلی ۰‌بایتی یا ناقص جا می‌گذارد. اگر
-        # بماند، فردا کسی آن را در `ls printguard-pg-*.dump` می‌بیند و «بکاپ»
-        # فرض می‌کند — همان خطای «بکاپِ جعلی» که در E.4.11 ثبت شد.
+        # `pg_dump -Fc' makes the file **before** success; So a half-baked performance
+        # (disk full, connection broken, connection refused) leaves a 0-byte or incomplete file. If
+        # Stay, tomorrow someone will see it in `ls printguard-pg-*.dump' and "backup"
+        # Assumes - Same "fake backup" error as logged in E.4.11.
         _discard_unverified(out_path)
         raise
     return {
@@ -485,12 +501,14 @@ def take_pg_backup(dsn: str, out_dir: str, *, expect_tables=()) -> dict:
         "sha256": sha256_of(out_path),
         "toc_entries": len(entries),
         "tables": sorted(set(entries)),
-        "dsn": env.get("_PG_DUMP_DSN", ""),        # بدون رمز — برای manifest
+        "dsn": env.get("_PG_DUMP_DSN", ""),        # No password — for manifest
         "taken_at": datetime.now(timezone.utc).strftime(ISO_Z_FORMAT),
     }
 
 
 def parse_args(argv=None):
+    """Parse the command-line arguments of the timestamp migration."""
+
     ap = argparse.ArgumentParser(
         prog="migrate_timestamps_to_utc.py",
         description="مهاجرت timestampهای SQLite به فرمت استاندارد UTC-Z (فاز E.3).",
@@ -517,14 +535,14 @@ def parse_args(argv=None):
 
 
 def _pg_dsn_from_env() -> str:
-    """``PG_DSN`` فقط وقتی که خودِ برنامه روی postgresql تنظیم شده باشد."""
+    """``PG_DSN'' only when the application itself is set to postgresql."""
     if (os.environ.get("DB_BACKEND", "") or "").strip().lower() not in ("postgresql", "postgres", "pg"):
         return ""
     return (os.environ.get("PG_DSN", "") or "").strip()
 
 
 def _resolve_db_path(args) -> str:
-    """``--db`` وگرنه ``config.settings.DB_PATH`` (lazy import مثل پیش از این)."""
+    """``--db'' or ``config.settings.DB_PATH'' (lazy import as before)."""
     db_path = (args.db or "").strip()
     if db_path:
         return db_path
@@ -533,6 +551,8 @@ def _resolve_db_path(args) -> str:
 
 
 def main(argv=None) -> int:
+    """Command-line entry point of the timestamp migration."""
+
     args = parse_args(argv)
     try:
         db_path = _resolve_db_path(args)
@@ -540,18 +560,18 @@ def main(argv=None) -> int:
         print(f"✗ مسیر دیتابیس معلوم نشد: {exc}", file=sys.stderr)
         return EXIT_ERROR
 
-    # ── E.6.2: بکاپ PostgreSQL، تأییدشده با pg_restore --list ─────────
-    # این ابزار فایل SQLite را بازنویسی می‌کند؛ پس «دیتابیس زنده» وقتی PG است،
-    # در معرض خطرِ *واردشدنِ* دادهٔ تغییرکرده قرار می‌گیرد، نه در معرض نوشتن
-    # مستقیم. تصمیم: پیش از هر کاری، یک شاهدِ قابل‌بازگردانی از PG بگیر. اگر
-    # pg_dump نبود یا خطا داد ⇒ اجرا **متوقف** می‌شود (هیچ بکاپ بی‌صدایی
-    # «گرفته‌شده» حساب نمی‌شود؛ همان درسی که از findings E.4.11 گرفته شد).
+    # ── E.6.2: PostgreSQL backup, verified with pg_restore --list ─────────
+    # This tool overwrites the SQLite file; So "live database" when it is PG,
+    # It is exposed to the risk of *importing* modified data, not write exposure
+    # directly Decision: Before doing anything, get a recoverable witness from PG. If
+    # pg_dump was missing or gave an error ⇒ execution **stops** (no silent backup
+    # "taken" does not count; The same lesson that was taken from findings E.4.11).
     pg_backup = None
     dsn = (args.pg_dsn or "").strip() or ("" if args.skip_pg_backup else _pg_dsn_from_env())
     if dsn:
-        # پیش‌فرضِ پوشهٔ بکاپ: **کنار فایل دیتابیس**، نه پوشهٔ جاری — در غیر این صورت
-        # یک اجرای معمولی از ریشهٔ مخزن، بکاپ باینری را وسط working tree می‌ریزد
-        # (این را خودِ سوئیت PG در E.6.2 نشان داد: ۲۶ فایل dump در ریشه).
+        # Default backup folder: **next to database file**, not current folder - otherwise
+        # A typical run from the root of the repository dumps the binary backup in the middle of the working tree
+        # (This was revealed by the PG suite itself in E.6.2: 26 dump files in the root).
         pg_out_dir = args.backup_out or os.path.dirname(os.path.abspath(db_path))
         try:
             pg_backup = take_pg_backup(dsn, pg_out_dir)
@@ -588,7 +608,7 @@ def main(argv=None) -> int:
 
     tables = [t.strip() for t in args.tables.split(",") if t.strip()] or list(TIME_COLUMNS)
 
-    # ── نشانهٔ cutover ─────────────────────────────────────────
+    # Cutover sign
     conn = connect_ro(db_path)
     try:
         marker, marker_src = read_cutover(conn)
@@ -618,7 +638,7 @@ def main(argv=None) -> int:
         print(f"cutover : {marker.isoformat()}  ({marker_src})")
         print(f"حالت    : {'dry-run (بدون نوشتن)' if args.dry_run else 'اجرای واقعی'}")
 
-    # ── اسکن ──────────────────────────────────────────────────
+    # Scanning
     report = scan(db_path, marker, tables)
     if not args.quiet:
         print("\n── دسته‌بندی مقادیر ─────────────────────────────")
@@ -669,7 +689,7 @@ def main(argv=None) -> int:
             print("\n✔ هیچ تبدیلی لازم نبود (idempotent).")
         return _exit_code(report)
 
-    # ── بکاپ + اجرا ───────────────────────────────────────────
+    # Backup + run
     backup = None
     if not args.no_backup:
         backup = make_backup(db_path)
@@ -714,18 +734,18 @@ def main(argv=None) -> int:
 
 def _exit_code(report: dict) -> int:
     """
-    کد خروج از نتیجهٔ اسکن.
+    Exit code from the scan result.
 
-    ``z_cutover_unknown`` (ردیف ``Z`` بدون نشانهٔ قابل‌اعتماد) ⇒ ۲: تصمیم انسانی
-    لازم است. ردیف‌های زباله/خالی فقط **هشدار**اند (خروجی ۰) چون هیچ تفسیر
-    معناداری برایشان وجود ندارد و دست‌نخورده‌ماندنشان بی‌خطر است؛ همه در manifest
-    فهرست می‌شوند.
+    ``z_cutover_unknown'' (row ``Z'' without reliable sign) ⇒ 2: human decision
+    it is necessary Garbage/empty rows are **warning** only (output 0) because no interpretation
+    There is no meaning for them and it is safe to remain untouched; All in the manifest
+    are listed.
     """
     return EXIT_NEEDS_ACTION if report["totals"]["needs_decision"] else EXIT_OK
 
 
 def _write_manifest(path: str, db_path: str, manifest: dict, verbose: bool = False) -> str | None:
-    """نوشتن manifest JSON (پیش‌فرض: کنار خود دیتابیس با timestamp — TD-005)."""
+    """Write JSON manifest (default: next to database itself with timestamp — TD-005)."""
     if path and path.strip():
         target = path.strip()
     else:

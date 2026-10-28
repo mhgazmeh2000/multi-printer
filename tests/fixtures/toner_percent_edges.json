@@ -1,0 +1,10 @@
+[
+  {"remaining": -3, "level": null, "status": "unknown"},
+  {"remaining": -2, "level": null, "status": "unknown"},
+  {"remaining": -1, "level": null, "status": "unknown"},
+  {"remaining": 0, "level": 0, "status": "empty"},
+  {"remaining": 42, "level": 42, "status": "ok"},
+  {"remaining": 100, "level": 100, "status": "ok"},
+  {"remaining": 101, "level": 100, "status": "ok"},
+  {"remaining": 659039, "level": 100, "status": "ok"}
+]

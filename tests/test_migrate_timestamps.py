@@ -1,11 +1,21 @@
 # -*- coding: utf-8 -*-
-"""
-tests/test_migrate_timestamps.py — تست‌های نام‌گذاری دارای برچسب زمانی manifest (TD-005).
+# =============================================================================
+# @file:         tests/test_migrate_timestamps.py
+# @brief:        Tests for manifest timestamp naming in the timestamp migration tool (TD-005).
+# @details:      Responsibilities: Check the manifest naming scheme.
+#                Main API: TestTimestampedManifest
+#                Side effects: database access, file I/O
+# @dependencies: stdlib only
+# @notes:        None.
+# =============================================================================
 
-بررسی الزامات بدهی فنی TD-005:
-۱. نام‌گذاری فایل manifest شامل پسوند زمانی {db_path}.e3-manifest-{timestamp}.json
-۲. حفظ فایل‌های قبلی در اجراهای پیاپی (عدم بازنویسی و تولید چند manifest)
-۳. حفظ ساختار و محتوای استاندارد مانیفست
+"""
+tests/test_migrate_timestamps.py — Naming tests with manifest timestamps (TD-005).
+
+Technical Debt Requirements Review TD-005:
+1. Naming the manifest file including the time extension {db_path}.e3-manifest-{timestamp}.json
+2. Saving previous files in consecutive executions (not rewriting and generating multiple manifests)
+3. Maintaining the standard structure and content of the manifest
 """
 
 from __future__ import annotations
@@ -24,6 +34,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _load_tool():
+    """Helper: load tool."""
     spec = importlib.util.spec_from_file_location(
         "migrate_timestamps_to_utc",
         PROJECT_ROOT / "tools" / "migrate_timestamps_to_utc.py",
@@ -37,7 +48,9 @@ tool = _load_tool()
 
 
 class TestTimestampedManifest(unittest.TestCase):
+    """Tests for timestamped manifest."""
     def setUp(self):
+        """Prepare the fixtures that each test in this class uses."""
         self.tmp = tempfile.TemporaryDirectory()
         self.db = os.path.join(self.tmp.name, "logs.db")
         conn = sqlite3.connect(self.db)
@@ -55,10 +68,11 @@ class TestTimestampedManifest(unittest.TestCase):
         conn.close()
 
     def tearDown(self):
+        """Release the resources that each test in this class created."""
         self.tmp.cleanup()
 
     def test_manifest_filename_has_timestamp(self):
-        """نام فایل مانیفست بدون پارامتر --manifest باید حاوی برچسب زمانی YYYYmmdd-HHMMSS باشد."""
+        """The manifest filename without the --manifest parameter must contain the timestamp YYYYmmdd-HHMMSS."""
         exit_code = tool.main(["--db", self.db, "--dry-run", "--quiet"])
         self.assertEqual(exit_code, 0)
 
@@ -72,7 +86,7 @@ class TestTimestampedManifest(unittest.TestCase):
         )
 
     def test_multiple_runs_create_multiple_manifests(self):
-        """اجراهای متوالی بدون پرچم --manifest نباید فایل قبلی را رونویسی کنند (TD-005)."""
+        """Successive runs without the --manifest flag should not overwrite the previous file (TD-005)."""
         code1 = tool.main(["--db", self.db, "--dry-run", "--quiet"])
         self.assertEqual(code1, 0)
 
@@ -88,7 +102,7 @@ class TestTimestampedManifest(unittest.TestCase):
         )
 
     def test_manifest_content_unchanged(self):
-        """محتوای مانیفست با نام‌گذاری زمانی ساختار و کلیدهای کامل E.3 را حفظ می‌کند."""
+        """Time-named manifest content preserves structure and full E.3 keys."""
         code = tool.main(["--db", self.db, "--dry-run", "--quiet"])
         self.assertEqual(code, 0)
 

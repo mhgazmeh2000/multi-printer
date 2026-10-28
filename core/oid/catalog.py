@@ -1,10 +1,21 @@
+# =============================================================================
+# @file:         core/oid/catalog.py
+# @brief:        Catalogue of the supported OIDs for every brand.
+# @details:      Responsibilities: Hold the static OID definitions used by the scanner and the
+#                collectors.
+#                Main API: none (no public functions or classes)
+#                Side effects: none at import time
+# @dependencies: stdlib only
+# @notes:        None.
+# =============================================================================
+
 """
-کاتالوگ کامل OIDهای پشتیبانی‌شده برای همه برندها.
-هر ورودی: (oid_string, type, category, description)
+Complete catalog of supported OIDs for all brands.
+Each entry: (oid_string, type, category, description)
 """
 
 OID_CATALOG = {
-    # ══ System (همه برندها) ══
+    # ══ System (all brands) ══
     "sys_descr":        ("1.3.6.1.2.1.1.1.0",                          "str",  "sys",      "توضیح سیستم"),
     "sys_uptime":       ("1.3.6.1.2.1.1.3.0",                          "int",  "sys",      "uptime"),
     "sys_hostname":     ("1.3.6.1.2.1.1.5.0",                          "str",  "sys",      "hostname"),
@@ -20,7 +31,7 @@ OID_CATALOG = {
     "sensor_hum1_st":   ("1.3.6.1.4.1.47206.111.1.1.0",                 "int",  "sensor",   "وضعیت رطوبت پورت 1"),
     "sensor_hum2":      ("1.3.6.1.4.1.47206.111.2.2.0",                 "int",  "sensor",   "رطوبت پورت 2 سنسور"),
     "sensor_hum2_st":   ("1.3.6.1.4.1.47206.111.2.1.0",                 "int",  "sensor",   "وضعیت رطوبت پورت 2"),
-    # ══ Printer MIB (همه برندها) ══
+    # ══ Printer MIB (all brands) ══
     "model_mib":        ("1.3.6.1.2.1.43.5.1.1.16.1",                  "str",  "identity", "مدل"),
     "serial_mib":       ("1.3.6.1.2.1.43.5.1.1.17.1",                  "str",  "identity", "سریال"),
     "print_total":      ("1.3.6.1.2.1.43.10.2.1.4.1.1",                "int",  "counter",  "کل چاپ"),
@@ -38,7 +49,7 @@ OID_CATALOG = {
     "tray2_cap":        ("1.3.6.1.2.1.43.8.2.1.9.1.2",                 "int",  "tray",     "ظرفیت سینی 2"),
     "tray2_level":      ("1.3.6.1.2.1.43.8.2.1.10.1.2",                "int",  "tray",     "سطح سینی 2"),
     "cover_status":     ("1.3.6.1.2.1.43.6.1.1.3.1.1",                 "int",  "status",   "وضعیت درب"),
-    # ══ Toshiba اختصاصی ══
+    # ══ Toshiba exclusive ══
     "tsh_model":        ("1.3.6.1.4.1.1129.2.3.50.1.2.3.1.3.1.1",      "str",  "identity", "مدل Toshiba"),
     "tsh_serial":       ("1.3.6.1.4.1.1129.2.3.50.1.2.4.1.8.1.1",      "str",  "identity", "سریال Toshiba"),
     "tsh_firmware":     ("1.3.6.1.4.1.1129.2.3.50.1.2.3.1.4.1.1",      "str",  "identity", "فریمور Toshiba"),
@@ -61,7 +72,7 @@ OID_CATALOG = {
     "tsh_mag_st":       ("1.3.6.1.4.1.1129.2.3.50.1.3.21.8.1.3.1.2",   "int",  "supply",   "وضعیت Magenta"),
     "tsh_yel_st":       ("1.3.6.1.4.1.1129.2.3.50.1.3.21.8.1.3.1.3",   "int",  "supply",   "وضعیت Yellow"),
     "tsh_blk_st":       ("1.3.6.1.4.1.1129.2.3.50.1.3.21.8.1.3.1.4",   "int",  "supply",   "وضعیت Black"),
-    # ══ Canon اختصاصی ══
+    # ══ Exclusive Canon ══
     "canon_model":      ("1.3.6.1.4.1.1602.1.1.1.1.0",                  "str",  "identity", "مدل Canon"),
     "canon_serial":     ("1.3.6.1.4.1.1602.1.2.1.4.0",                  "str",  "identity", "سریال Canon"),
     "canon_firmware":   ("1.3.6.1.4.1.1602.1.1.1.4.0",                  "str",  "identity", "فریمور Canon"),
@@ -72,7 +83,7 @@ OID_CATALOG = {
     "canon_scan":       ("1.3.6.1.4.1.1602.1.11.2.1.1.3.12",            "int",  "counter",  "اسکن Canon ✓"),
     "canon_lbp_total":  ("1.3.6.1.4.1.1602.1.11.1.1.1.3.1",             "int",  "counter",  "کل چاپ Canon LBP"),
     "canon_lbp_color":  ("1.3.6.1.4.1.1602.1.11.1.1.1.3.4",             "int",  "counter",  "چاپ رنگی Canon LBP"),
-    # ══ HP اختصاصی ══
+    # ══ Dedicated HP ══
     "hp_model":         ("1.3.6.1.4.1.11.2.3.9.1.1.3.1.1.1.1.2.0",     "str",  "identity", "مدل HP"),
     "hp_serial":        ("1.3.6.1.4.1.11.2.3.9.1.1.3.1.1.1.1.3.0",     "str",  "identity", "سریال HP"),
     "hp_firmware":      ("1.3.6.1.4.1.11.2.3.9.1.1.3.1.1.1.1.7.0",     "str",  "identity", "فریمور HP"),
@@ -82,7 +93,7 @@ OID_CATALOG = {
     "hp_scan_color":    ("1.3.6.1.4.1.11.2.3.9.6.1.1.3.1",             "int",  "counter",  "اسکن رنگی HP"),
     "hp_scan_mono":     ("1.3.6.1.4.1.11.2.3.9.6.1.1.10.1",            "int",  "counter",  "اسکن سیاه‌سفید HP"),
     "hp_fax":           ("1.3.6.1.4.1.11.2.3.9.6.1.1.11.1",            "int",  "counter",  "فکس HP"),
-    # ══ Brother اختصاصی ══
+    # ══ Exclusive Brother ══
     "bro_model":        ("1.3.6.1.4.1.2435.2.4.3.99.3.1.6.1.2.1",      "str",  "identity", "مدل Brother"),
     "bro_serial":       ("1.3.6.1.4.1.2435.2.4.3.99.3.1.6.1.2.3",      "str",  "identity", "سریال Brother"),
     "bro_firmware":     ("1.3.6.1.4.1.2435.2.4.3.1240.6.5.0",           "str",  "identity", "فریمور Brother"),

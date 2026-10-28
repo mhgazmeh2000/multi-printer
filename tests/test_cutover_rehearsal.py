@@ -1,12 +1,24 @@
 # -*- coding: utf-8 -*-
-"""
-tests/test_cutover_rehearsal.py — آزمون تمرین Cutover با داده‌ی مصنوعی ۳۰MB (فاز F.4).
+# =============================================================================
+# @file:         tests/test_cutover_rehearsal.py
+# @brief:        Cutover rehearsal test with synthetic data (phase F.4).
+# @details:      Responsibilities: Run a full migration rehearsal on generated data.
+#                Main API: TestCutoverRehearsal
+#                Side effects: database access
+# @dependencies: internal: tools.generate_cutover_fixture, tools.migrate_sqlite_to_pg | external:
+#                psycopg, pytest
+# @notes:        Reads environment variables: PG_DSN. PostgreSQL-live tests skip automatically
+#                when no server is reachable.
+# =============================================================================
 
-اهداف آزمون:
+"""
+tests/test_cutover_rehearsal.py — Cutover rehearsal test with 30MB synthetic data (phase F.4).
+
+Objectives of the test:
 -----------
-۱. اندازه‌گیری دقیق و واقعی زمان مراحل مختلف migration (Dry-run, COPY, Batch, setval, Verify, Rollback).
-۲. اعتبارسنجی فرآیند بازگشت اضطراری (Rollback با TRUNCATE) در کمتر از ۳۰ ثانیه.
-۳. تضمین سلامت توالی‌های IDENTITY و امکان درج ردیف جدید بدون خطا (R-1).
+1. Accurate and real time measurement of different stages of migration (Dry-run, COPY, Batch, setval, Verify, Rollback).
+2. Validate the emergency return process (Rollback with TRUNCATE) in less than 30 seconds.
+3. Ensuring the health of IDENTITY sequences and the possibility of inserting new rows without errors (R-1).
 """
 
 from __future__ import annotations
@@ -33,17 +45,18 @@ FIXTURE_PATH = pathlib.Path(DEFAULT_OUTPUT_PATH)
 @pytest.mark.pg_live
 @pytest.mark.slow
 class TestCutoverRehearsal:
-    """تمرین عملیات Cutover با داده‌های مصنوعی ۳۰ مگابایت بر روی کلاستر زنده PostgreSQL."""
+    """Practice Cutover operation with 30 MB artificial data on live PostgreSQL cluster."""
 
     def setup_method(self):
-        # بررسی وجود DSN زنده
+        # Check for live DSN
+        """Helper: setup method."""
         dsn = os.environ.get("PG_DSN", "") or ""
         if not dsn.strip():
             pytest.skip("PG_DSN ست نشده است ⇒ تمرین Cutover روی PG زنده اجرا نمی‌شود")
 
     def test_cutover_rehearsal_with_synthetic_30mb(self, tmp_path):
-        """تمرین کامل cutover با ۳۰MB داده‌ی مصنوعی و ثبت زمان‌های هر گام."""
-        # ۱. تولید fixture در صورت عدم وجود
+        """Complete cutover training with 30MB of artificial data and record the times of each step."""
+        # 1. Production of fixture if it does not exist
         if not FIXTURE_PATH.exists() or FIXTURE_PATH.stat().st_size < 25 * 1024 * 1024:
             generate_synthetic_db(
                 output_path=str(FIXTURE_PATH),
@@ -61,12 +74,12 @@ class TestCutoverRehearsal:
             "fixture_size_bytes": fixture_size_bytes,
         }
 
-        # ابتدا مطمئن شویم جداول PG خالی هستند
+        # First, make sure the PG tables are empty
         with psycopg.connect(dsn, autocommit=True) as conn:
             truncate_all_pg_tables(conn)
 
         try:
-            # ۲. سنجش زمان Dry-Run
+            # 2. Dry-Run time measurement
             t0 = time.perf_counter()
             exit_code_dry = migration_main([
                 "--source", str(FIXTURE_PATH),
@@ -77,7 +90,7 @@ class TestCutoverRehearsal:
             assert exit_code_dry == EXIT_DRY_RUN
             metrics["dry_run_seconds"] = round(dry_run_seconds, 3)
 
-            # ۳. سنجش زمان اجرای واقعی Migration (شامل COPY و Batch و setval)
+            # 3. Measuring the actual execution time of Migration (including COPY, Batch and setval)
             t1 = time.perf_counter()
             exit_code_mig = migration_main([
                 "--source", str(FIXTURE_PATH),
@@ -89,14 +102,14 @@ class TestCutoverRehearsal:
             assert exit_code_mig == EXIT_SUCCESS
             metrics["total_seconds"] = round(total_migration_seconds, 3)
 
-            # ۴. بررسی سلامت R-1 (درج بدون ID در جدول logs)
+            # 4. R-1 health check (insert without ID in the logs table)
             with psycopg.connect(dsn, autocommit=True) as conn:
                 with conn.cursor() as cur:
                     cur.execute("SELECT max(id) FROM logs")
                     migrated_max_id = cur.fetchone()[0]
                     assert migrated_max_id is not None
 
-                    # درج سطر جدید متکی بر توالی
+                    # Sequence-dependent newline insertion
                     cur.execute(
                         """
                         INSERT INTO logs (printer_ip, timestamp, type, message)
@@ -108,7 +121,7 @@ class TestCutoverRehearsal:
                     assert new_id > migrated_max_id
                     metrics["insert_after_migration_ok"] = True
 
-            # ۵. سنجش زمان بازگشت (Rollback با TRUNCATE)
+            # 5. Return time measurement (Rollback with TRUNCATE)
             t2 = time.perf_counter()
             with psycopg.connect(dsn, autocommit=True) as conn:
                 truncate_all_pg_tables(conn)
@@ -118,7 +131,7 @@ class TestCutoverRehearsal:
             rollback_seconds = time.perf_counter() - t2
             metrics["rollback_seconds"] = round(rollback_seconds, 3)
 
-            # ۶. بررسی آستانه‌های پذیرش (Thresholds)
+            # 6. Examining acceptance thresholds (Thresholds)
             assert metrics["dry_run_seconds"] < 10.0, "Dry-run بیش از حد طول کشید"
             assert metrics["total_seconds"] < 30.0, "کل زمان مهاجرت ۳۰MB بیش از ۳۰ ثانیه شد"
             assert metrics["rollback_seconds"] < 5.0, "عملیات Rollback بیش از ۵ ثانیه طول کشید"

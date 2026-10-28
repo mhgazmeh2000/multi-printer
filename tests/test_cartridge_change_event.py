@@ -1,21 +1,31 @@
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tests/test_cartridge_change_event.py
+# @brief:        Tests for the CARTRIDGE_CHANGED event.
+# @details:      Responsibilities: Check when the event is raised and what it records.
+#                Main API: CartridgeChangeEventTests
+#                Side effects: none at import time
+# @dependencies: internal: core, core.collectors.base, core.database
+# @notes:        Can be run directly as a script.
+# =============================================================================
+
 """
-تست‌های قابلیت «رویداد خودکار تعویض/شارژ کارتریج» (CARTRIDGE_CHANGED).
+"CARTRIDGE_CHANGED" (CARTRIDGE_CHANGED) feature tests.
 
-الگوی تشخیص عیناً همان الگوی اثبات‌شده‌ی REFILL تک‌رنگ (کاندید در جهش >۲۰٪ با
-صفحات کم → پایداری سطح در ۲ poll متوالی → رویداد یک‌شوت) است، اما per-color و
-فقط روی داده‌ی واقعی (raw_level) تا تعویض کارتریج‌های رنگی (C/M/Y) هم لاگ شود
-و برآوردهای نمایشی (canon_status_code و …) رویداد جعلی نسازند.
+The detection pattern is exactly the same as the proven monochromatic REFILL pattern (candidate in mutation >20% with
+Low plates → level stability in 2 consecutive polls → one-shot event), but per-color and
+Only real data (raw_level) will be logged until changing color cartridges (C/M/Y).
+And show estimations (canon_status_code, etc.) do not create fake events.
 
-قواعد کلیدی تست‌شده:
-  ۱) جهش ۳۰→۹۰ سیان: اول کاندید، بعد از ۲ poll پایدار → دقیقاً یک رویداد.
-  ۲) نوسان (۳۰→۹۰→۳۰): هیچ رویدادی.
-  ۳) جهش همراه با چاپ زیاد (delta_pages >= 50): کاندید نمی‌شود (رفتار لگاسی).
-  ۴) رنگِ لگاسی (black) همان مسیر REFILL را دارد → بدون رویداد تکراری.
-  ۵) رنگ‌های بدون داده‌ی واقعی و کلیدهای غیر CMYK (drum): هیچ رویدادی.
-  ۶) manual_override: تشخیص کاملاً خاموش.
-  ۷) رویداد فقط یک‌بار ثبت می‌شود (one-shot).
-  ۸) برگشت سطح به زیر کاندید، pending را می‌باطلد و چرخه‌ی تازه hits را صفر می‌کند.
+Key rules tested:
+  1) Cyan 30→90 jump: first candidate, after 2 stable polls → exactly one event.
+  2) Oscillation (30→90→30): no event.
+  3) Mutation with a lot of printing (delta_pages >= 50): not a candidate (legacy behavior).
+  4) The legacy color (black) has the same path as REFILL → no duplicate event.
+  5) Colors without real data and non-CMYK keys (drum): no event.
+  6) manual_override: detection completely off.
+  7) The event is registered only once (one-shot).
+  8) Returning the level below the candidate cancels pending and resets the new cycle of hits to zero.
 """
 import os
 import tempfile
@@ -29,14 +39,17 @@ recorded_events = []
 
 
 def _fake_add_event(ip, etype, details):
+    """Helper: fake add event."""
     recorded_events.append({"ip": ip, "type": etype, "details": dict(details or {})})
 
 
 class CartridgeChangeEventTests(unittest.TestCase):
+    """Tests for cartridge change event."""
     IP = "10.9.9.9"
-    UP = 600_000_000  # uptime بالا (صدم ثانیه) تا reset detection دخالت نکند
+    UP = 600_000_000  # High uptime (hundreds of seconds) so that reset detection does not interfere
 
     def setUp(self):
+        """Prepare the fixtures that each test in this class uses."""
         self.tmp = tempfile.TemporaryDirectory()
         self.old_cwd = os.getcwd()
         os.chdir(self.tmp.name)
@@ -47,6 +60,7 @@ class CartridgeChangeEventTests(unittest.TestCase):
         base_mod.add_event = _fake_add_event
 
     def tearDown(self):
+        """Release the resources that each test in this class created."""
         base_mod.add_event = self._orig_add_event
         store._prev._cache.clear()
         os.chdir(self.old_cwd)
@@ -54,9 +68,11 @@ class CartridgeChangeEventTests(unittest.TestCase):
 
     # ─── helpers ───
     def _events(self, etype):
+        """Helper: events."""
         return [e for e in recorded_events if e["type"] == etype]
 
     def _seed(self, total=1000, manual_override=0):
+        """Helper: seed."""
         store._prev.set(self.IP, {
             "print_total": total,
             "full_color": 0,
@@ -71,7 +87,7 @@ class CartridgeChangeEventTests(unittest.TestCase):
 
     def _poll(self, total, toner_levels, legacy_color="black",
               current_toner=60, uptime=None):
-        """یک poll واقعی: prev از store خوانده می‌شود (مثل مسیر enhanced)."""
+        """A real poll: prev is read from the store (like the enhanced path)."""
         prev = store._prev.get(self.IP) or {}
         base_mod._counters_event(
             self.IP, total, prev, [], [],
@@ -83,19 +99,20 @@ class CartridgeChangeEventTests(unittest.TestCase):
             uptime=uptime if uptime is not None else (self.UP + total * 100),
         )
 
-    # ─── ۱) سناریوی اصلی: تعویض کارتریج رنگی ───
+    # ─── 1) The main scenario: replacing the color cartridge ───
     def test_color_cartridge_change_logged_once_after_two_stable_polls(self):
+        """Verifies color cartridge change logged once after two stable polls."""
         self._seed(total=1000)
-        # baseline: سطح واقعی سیان 30٪
+        # baseline: true cyan level 30%
         self._poll(1000, {"cyan": 30})
         self.assertEqual(self._events("CARTRIDGE_CHANGED"), [])
-        # جهش به 90٪ (تعویض) → فقط کاندید، هنوز رویداد نه
+        # Jump to 90% (substitution) → candidate only, not event yet
         self._poll(1002, {"cyan": 90})
         self.assertEqual(self._events("CARTRIDGE_CHANGED"), [])
-        # poll پایدار اول (hits=1)
+        # First stable poll (hits=1)
         self._poll(1004, {"cyan": 90})
         self.assertEqual(self._events("CARTRIDGE_CHANGED"), [])
-        # poll پایدار دوم (hits=2) → رویداد تأییدشده
+        # Second persistent poll (hits=2) → event confirmed
         self._poll(1006, {"cyan": 90})
         evs = self._events("CARTRIDGE_CHANGED")
         self.assertEqual(len(evs), 1)
@@ -108,59 +125,64 @@ class CartridgeChangeEventTests(unittest.TestCase):
         self.assertEqual(d.get("severity"), "info")
         self.assertIn("آبی", d.get("message", ""))
         self.assertIn("تعویض", d.get("message", ""))
-        # یک‌شوت: pollهای بعدی رویداد تکراری نسازند
+        # One shot: the next polls do not create a duplicate event
         self._poll(1008, {"cyan": 90})
         self._poll(1010, {"cyan": 88})
         self.assertEqual(len(self._events("CARTRIDGE_CHANGED")), 1)
 
-    # ─── ۲) نوسان/بليپ: هیچ رویدادی ───
+    # ─── 2) Oscillation/Blip: No event ───
     def test_flapping_level_never_confirms(self):
+        """Verifies flapping level never confirms."""
         self._seed(total=1000)
         self._poll(1000, {"magenta": 30})
-        self._poll(1001, {"magenta": 90})   # کاندید
-        self._poll(1002, {"magenta": 30})   # برگشت → کاندید باطل
-        self._poll(1003, {"magenta": 90})   # کاندید تازه
-        self._poll(1004, {"magenta": 30})   # باطل
-        self._poll(1005, {"magenta": 88})   # جهش از 30 → کاندید تازه
+        self._poll(1001, {"magenta": 90})   # candidate
+        self._poll(1002, {"magenta": 30})   # Back → Invalid candidate
+        self._poll(1003, {"magenta": 90})   # new candidate
+        self._poll(1004, {"magenta": 30})   # void
+        self._poll(1005, {"magenta": 88})   # Jump from 30 → fresh candidate
         self.assertEqual(self._events("CARTRIDGE_CHANGED"), [])
 
-    # ─── ۳) جهش همراه چاپ زیاد: کاندید نمی‌شود (رفتار لگاسی) ───
+    # ─── 3) Mutation with a lot of printing: not a candidate (legacy behavior) ───
     def test_no_candidate_when_many_pages_printed(self):
+        """Verifies no candidate when many pages printed."""
         self._seed(total=1000)
         self._poll(1000, {"yellow": 30})
-        # ۶۰ صفحه چاپ + جهش سطح → پنجره‌ی <۵۰ رد می‌شود
+        # 60 print pages + level jump → window <50 is rejected
         self._poll(1060, {"yellow": 95})
         self._poll(1062, {"yellow": 95})
         self._poll(1064, {"yellow": 95})
         self.assertEqual(self._events("CARTRIDGE_CHANGED"), [])
 
-    # ─── ۴) رنگ لگاسی (black): مسیر REFILL جداست؛ بدون تکرار ───
+    # ─── 4) Legacy color (black): the REFILL route is separate; No repetition ───
     def test_legacy_color_not_double_logged(self):
+        """Verifies legacy color not double logged."""
         self._seed(total=1000)
-        # مشکی به current_toner_level وصل است (legacy REFILL)، سیان ثابت
+        # Black is connected to current_toner_level (legacy REFILL), fixed cyan
         self._poll(1000, {"black": 40, "cyan": 60}, current_toner=40)
         self._poll(1001, {"black": 95, "cyan": 60}, current_toner=95)
         self._poll(1002, {"black": 95, "cyan": 60}, current_toner=95)
         self._poll(1003, {"black": 95, "cyan": 60}, current_toner=95)
-        # برای مشکی: REFILL لگاسی تأیید می‌شود ولی CARTRIDGE_CHANGED هرگز نه
+        # For black: Legacy REFILL is verified but CARTRIDGE_CHANGED never
         self.assertEqual(self._events("CARTRIDGE_CHANGED"), [])
         refills = self._events("REFILL")
         self.assertEqual(len(refills), 1)
         self.assertTrue(refills[0]["details"].get("confirmed"))
 
-    # ─── ۵) فقط داده‌ی واقعی: رنگ بدون raw و کلیدهای غیر CMYK نادیده‌اند ───
+    # ─── 5) Real data only: color without raw and non-CMYK keys are ignored ───
     def test_only_real_levels_and_cmyk_keys_are_considered(self):
+        """Verifies only real levels and cmyk keys are considered."""
         self._seed(total=1000)
-        # «drum» یک کارتریج تونر نیست؛ و رنگی که در toner_levels نیست (مثل
-        # تخمین canon_status_code که raw_level ندارد) اصلاً وارد نمی‌شود.
+        # The "drum" is not a toner cartridge; and a color that is not in toner_levels (eg
+        # canon_status_code estimate that does not have raw_level) is not entered at all.
         self._poll(1000, {"drum": 30, "cyan": 50})
         self._poll(1001, {"drum": 95, "cyan": 50})
         self._poll(1002, {"drum": 95})
         self._poll(1003, {"drum": 95})
         self.assertEqual(self._events("CARTRIDGE_CHANGED"), [])
 
-    # ─── ۶) manual_override: تشخیص خاموش ───
+    # ─── 6) manual_override: off detection ───
     def test_manual_override_disables_detection(self):
+        """Verifies manual override disables detection."""
         self._seed(total=1000, manual_override=1)
         self._poll(1000, {"cyan": 30})
         self._poll(1001, {"cyan": 95})
@@ -168,24 +190,26 @@ class CartridgeChangeEventTests(unittest.TestCase):
         self._poll(1003, {"cyan": 95})
         self.assertEqual(self._events("CARTRIDGE_CHANGED"), [])
 
-    # ─── ۷) باطل‌شدن pending و شروع چرخه‌ی تازه با hits صفر ───
+    # ─── 7) Canceling pending and starting a new cycle with zero hits ───
     def test_pending_resets_after_level_fall(self):
+        """Verifies pending resets after level fall."""
         self._seed(total=1000)
         self._poll(1000, {"cyan": 30})
-        self._poll(1001, {"cyan": 90})   # کاندید
+        self._poll(1001, {"cyan": 90})   # candidate
         self._poll(1002, {"cyan": 90})   # hits=1
-        self._poll(1003, {"cyan": 35})   # سقوط → کاندید باطل
+        self._poll(1003, {"cyan": 35})   # Fall → invalid candidate
         self.assertEqual(self._events("CARTRIDGE_CHANGED"), [])
-        self._poll(1004, {"cyan": 90})   # کاندید تازه (hits=0)
-        self._poll(1005, {"cyan": 90})   # hits=1 → هنوز رویداد نه
+        self._poll(1004, {"cyan": 90})   # new candidate (hits=0)
+        self._poll(1005, {"cyan": 90})   # hits=1 → No event yet
         self.assertEqual(self._events("CARTRIDGE_CHANGED"), [])
-        self._poll(1006, {"cyan": 90})   # hits=2 → رویداد
+        self._poll(1006, {"cyan": 90})   # hits=2 → event
         evs = self._events("CARTRIDGE_CHANGED")
         self.assertEqual(len(evs), 1)
         self.assertEqual(evs[0]["details"].get("prev_toner"), 35)
 
-    # ─── ۸) تعویض چند رنگ هم‌زمان: هرکدام یک رویداد ───
+    # ─── 8) Changing multiple colors at the same time: each one an event ───
     def test_multiple_colors_each_logged_once(self):
+        """Verifies multiple colors each logged once."""
         self._seed(total=1000)
         levels = {"cyan": 30, "magenta": 25, "yellow": 40}
         self._poll(1000, levels)

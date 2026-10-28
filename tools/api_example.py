@@ -1,19 +1,29 @@
 # -*- coding: utf-8 -*-
-"""tools/api_example.py — نمونه‌ی استفاده‌ی اسکریپتی از API پرینت‌گارد.
+# =============================================================================
+# @file:         tools/api_example.py
+# @brief:        Example script showing how to call the PrintGuard HTTP API.
+# @details:      Responsibilities: Log in and call a few endpoints as a usage example.
+#                Main API: login(), main()
+#                Side effects: network I/O
+# @dependencies: external: requests
+# @notes:        Can be run directly as a script.
+# =============================================================================
 
-ورود با session واقعی + CSRF (همان مسیری که مرورگر می‌رود) و سپس فراخوانی
-endpointهای GET. پاسخ خطای «csrf_token_invalid» یعنی رقص کوکی/توکن رعایت
-نشده — این اسکریپت دقیقاً همان را خودکار می‌کند.
+"""tools/api_example.py — example script usage of Print Guard API.
 
-مثال‌ها:
+Log in with a real session + CSRF (the same path as the browser) and then call
+GET endpoints. "csrf_token_invalid" error response means compliance cookie/token dance
+Not done — this script automates exactly that.
+
+Examples:
     python tools/api_example.py admin mypass /api/status
     python tools/api_example.py admin mypass /api/printers /api/printer/172.16.25.54
     python tools/api_example.py admin mypass /api/status --base http://localhost:5050
 
-نکته‌ها:
-- نام فیلد کاربر در فرم «identifier» است (نام کاربری یا ایمیل).
-- در حالت development چالش reCAPTCHA کنار گذاشته می‌شود؛ اگر روی سرور
-  reCAPTCHA واقعی فعال باشد، ورود اسکریپتی ممکن نیست (از مرورگر استفاده کنید).
+Tips:
+- The name of the user field in the form is "identifier" (username or email).
+- In the development mode, the reCAPTCHA challenge is omitted; If on the server
+  Real reCAPTCHA is enabled, script login is not possible (use browser).
 """
 import argparse
 import json
@@ -33,6 +43,7 @@ _CSRF_RES = (
 
 
 def _extract_csrf(html):
+    """Extract the CSRF token from an HTML page."""
     for rx in _CSRF_RES:
         m = rx.search(html)
         if m:
@@ -41,7 +52,7 @@ def _extract_csrf(html):
 
 
 def login(session, base, identifier, password):
-    """ورود واقعی: دریافت فرم → استخراج csrf_token → POST لاگین."""
+    """Actual login: receive form → extract csrf_token → POST login."""
     r = session.get(base + "/login", timeout=15)
     r.raise_for_status()
     token = _extract_csrf(r.text)
@@ -54,8 +65,8 @@ def login(session, base, identifier, password):
         "g-recaptcha-response": "",
     }, timeout=15, allow_redirects=False)
     loc = r.headers.get("Location") or ""
-    # ورود ناموفق هم 302 برمی‌گرداند ولی به /login?next=... — موفق یعنی رفتن
-    # به داشبورد/صفحه‌ی next، نه برگشت به لاگین.
+    # Unsuccessful login also returns 302, but to /login?next=... — successful means leaving
+    # Go to dashboard/next page, not back to login.
     if r.status_code in (301, 302, 303) and "/login" not in loc:
         return
     raise RuntimeError(
@@ -65,6 +76,8 @@ def login(session, base, identifier, password):
 
 
 def main():
+    """Command-line example: log in and call the given API paths."""
+
     ap = argparse.ArgumentParser(description="نمونه‌ی فراخوانی API پرینت‌گارد با ورود + CSRF")
     ap.add_argument("identifier", help="نام کاربری یا ایمیل")
     ap.add_argument("password", help="رمز عبور")

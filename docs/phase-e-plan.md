@@ -1,4 +1,4 @@
-# طرح اجرایی فاز E — PostgreSQL + Alembic + SNMP Exporter + Dashboard
+# Execution plan for phase E — PostgreSQL + Alembic + SNMP Exporter + Dashboard
 
 **دامنه:** فاز E روی شاخه‌ی `phase-c`؛ هدف نهایی: انتقال منبع حقیقت از SQLite به
 **PostgreSQL 16** روی همان ویندوزسرور، بدون تغییر منطق دامنه، با برگشت‌پذیری کامل تا
@@ -25,7 +25,7 @@
 
 ---
 
-## ۱. وضعیت E.1 — بسته‌شده (Baseline)
+## 1. Status of E.1 — closed (baseline)
 
 | # | گام | کامیت | خروجی |
 |---|---|---|---|
@@ -69,7 +69,7 @@
 
 ---
 
-## ۲. E.2 — فعال‌سازی backend دوگانه
+## 2. E.2 — enabling the dual backend
 
 **هدف:** `DB_BACKEND=postgresql` بدون تغییر منطق دامنه کار کند؛ `sqlite` همچنان پیش‌فرض
 و سالم بماند.
@@ -101,7 +101,7 @@
 
 ---
 
-## ۳. E.3 — نویسندگان آگاه-UTC ✅ **بسته شد (۲۰۲۶-۱۰-۰۴)**
+## 3. E.3 — UTC-aware writers ✅ **closed (2026-10-04)**
 
 **هدف:** اجرای **الزام آگاه-UTC** (`docs/timestamp-consumers.md` §۶)؛ این گیتِ سختِ
 پیش از cutover است.
@@ -145,7 +145,7 @@ diff قابل‌توجیه (fixtureها بایت‌به‌بایت تغییر ن
 
 ---
 
-## ۴. E.4 — سخت‌گیری‌های PG: ترجمه‌ی موارد 🔴 و 🟡 — ✅ **بسته (۱۴ کامیت کد + این گام مستندات)**
+## 4. E.4 — PG strictness: handling of 🔴 and 🟡 items — ✅ **closed (14 code commits + this documentation step)**
 
 **وضعیت E.4: بسته** — `3f4a0e7 … 56710ea` (۱۴ کامیت، سنجیده‌شده با
 `git rev-list --count 3f4a0e7^..56710ea` ⇒ ۱۴) + این گام مستندات. جدول ۱۷ ردیفی با وضعیت هر ردیف در
@@ -200,7 +200,7 @@ backend و دو TZ (مرجع برنامه: ۲۸۱؛ افزایش‌ها از E.1
 
 ---
 
-## ۵. E.5 — اجرای کامل تست‌ها روی **هر دو** دیتابیس — ✅ **بسته (۳ کامیت کد/تست + این گام مستندات)**
+## 5. E.5 — full test run on **both** databases — ✅ **closed (3 code/test commits + this documentation step)**
 
 **هدف (تصمیم مالک، گزینهٔ ۱):** صفر شکست روی هر دو backend + ترجمهٔ سه محل زندهٔ
 `INSERT OR REPLACE`، با هِلپر در `core/db/` و ایزولاسیون در `tests/conftest.py`.
@@ -281,7 +281,7 @@ PG-محور آن فایل‌ها (مثل `PostgresBootstrapLiveTests`) بی‌د
 **مسیر برگشت:** `git revert` هر یک از سه کامیت مستقل است؛ رفتار SQLite در هیچ‌کدام
 تغییر نکرده (golden ۱۰/۱۰ و ۴۹۱ تست سبز گواه همان است).
 
-## ۶. E.6 — تصمیم‌ها (قفل‌کردن پیش از cutover) — ✅ **بسته (۷ کامیت کد/تست + ۲ کامیت مستندات، ۲۰۲۶-۱۰-۰۴)**
+## 6. E.6 — decisions (locked before cutover) — ✅ **closed (7 code/test commits + 2 documentation commits, 2026-10-04)**
 
 طبق بند ۲ سند cutover، این موارد باید **صریح و مکتوب** شوند:
 
@@ -314,7 +314,7 @@ golden ۱۰/۱۰.
 
 ---
 
-## ۷. E.7 — آماده‌سازی cutover (بدون عبور از مرز)
+## 7. E.7 — cutover preparation (without crossing the boundary)
 
 **هدف:** همه‌ی پیش‌نیازها آماده و سنجیده شوند، ولی **cutover در فاز E رخ نمی‌دهد**
 (طبق `docs/cutover-plan.md`: cutover = اولین نوشتن Flask روی PG، و گام‌های ۳ تا ۷ در فاز F).
@@ -349,7 +349,7 @@ golden ۱۰/۱۰.
 
 ---
 
-## ۸. کارهای باز مرتبط با فاز E
+## 8. Open items related to phase E
 
 | مورد | وضعیت | یادداشت |
 |---|---|---|

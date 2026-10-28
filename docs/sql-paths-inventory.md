@@ -1,4 +1,4 @@
-# فهرست مسیرهای SQL خام — نقشه‌ی ترجمه برای PostgreSQL (فاز E)
+# Inventory of raw SQL paths — translation map for PostgreSQL (phase E)
 
 **فاز:** E.0، کار E.0.12. **وضعیت:** فقط مستندسازی؛ در این گام هیچ SQLای تغییر نکرده است.
 **روش:** پیمایش AST روی `core/`, `web/`, `tools/`, `create_admin.py`, `models.py`, `config/`
@@ -9,7 +9,7 @@
 
 ---
 
-## ۱. خلاصه‌ی عددی (دامنه‌ی کار)
+## 1. Numerical summary (scope of the work)
 
 **۱۲۱ فراخوانی SQL خام** در کد برنامه و ابزارها (بدون تست‌ها):
 
@@ -32,7 +32,7 @@
 
 ---
 
-## ۲. جدول اصلی — سازه‌های مخصوص SQLite و معادل PG
+## 2. Main table — SQLite-specific constructs and their PG equivalents
 
 | # | سازه | محل (file:line) | معادل PostgreSQL | کلاس |
 |---|---|---|---|---|
@@ -97,7 +97,7 @@ naive با TimeZone نشست تفسیر می‌شود ⇒ جابه‌جایی ۳
 
 ---
 
-## ۳. مسیرهای SQL خام بیرون از adapter (فاز F، دست‌نخورده)
+## 3. Raw SQL paths outside the adapter (phase F, left untouched)
 
 `sqlite3.connect` خام — به‌جز `core/db/connection.py:242` که تنها اتصال مجاز برنامه است:
 
@@ -117,7 +117,7 @@ naive با TimeZone نشست تفسیر می‌شود ⇒ جابه‌جایی ۳
 
 ---
 
-## ۴. ترتیب پیشنهادی ترجمه در فاز E
+## 4. Suggested translation order in phase E
 
 ۱. **ابتدا** زیرساخت: `placeholders.py` (escape `%`)، `AUTOINCREMENT`→`IDENTITY`،
    `lastrowid`→`RETURNING` (چون فقط یک محل است)؛
@@ -134,7 +134,7 @@ naive با TimeZone نشست تفسیر می‌شود ⇒ جابه‌جایی ۳
 
 ---
 
-## ۵. بازتولید اندازه‌گیری‌ها
+## 5. Reproducing the measurements
 
 ```bash
 # پیمایش فراخوانی‌های SQL (AST)
@@ -160,7 +160,7 @@ grep -rn "PRAGMA" --include=*.py core web                       # ۴ محل فع
 
 ---
 
-## ۶. ارجاع‌های متقابل
+## 6. Cross-references
 
 | سند | چه چیزی را پوشش می‌دهد |
 |---|---|

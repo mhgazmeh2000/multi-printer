@@ -1,25 +1,36 @@
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         core/db/placeholders.py
+# @brief:        Converts query parameter placeholders between SQLite and PostgreSQL styles.
+# @details:      Responsibilities: Translate '?' placeholders to '%s' (and escape percent signs)
+#                per backend.
+#                Main API: escape_percent_signs(), translate_placeholders()
+#                Side effects: none at import time
+# @dependencies: internal: .exceptions
+# @notes:        None.
+# =============================================================================
+
 """
-ترجمه‌ی placeholder پارامتر کوئری (فاز D ساخته شد، فاز E.2 فعال شد).
+Query parameter placeholder translation (phase D was created, phase E.2 was activated).
 
-همه‌ی کوئری‌های مخزن با سبک SQLite نوشته شده‌اند (``?``). روی PostgreSQL همان
-کوئری‌ها باید با ``%s`` اجرا شوند؛ این ماژول همان ترجمه را انجام می‌دهد و از
-E.2 در ``ConnectionAdapter._sql`` روی مسیر postgresql صدا زده می‌شود (روی
-sqlite هیچ تغییری نمی‌دهد و همان رشته‌ی ورودی برگردانده می‌شود).
+All repository queries are written in SQLite style (``?``). On the same PostgreSQL
+Queries must be executed with ``%s''; This module performs the same translation and from
+E.2 is called in ``ConnectionAdapter._sql'' on the postgresql path (on
+sqlite does not change anything and the same input string is returned).
 
-قاعده: ``?`` فقط وقتی ترجمه می‌شود که **خارج از** رشته‌ی نقل‌قول، شناسه‌ی
-دابل‌کوت، کامنت خطی (``--``) و کامنت بلوکی (``/* */``) باشد.
+Rule: ``?'' is translated only when **outside** the quoted string, id
+double quote, linear comment (``--``) and block comment (``/* */``).
 
-escape درصد (فاز E.2)
+escape percentage (phase E.2)
 ---------------------
-psycopg متن کوئری را در سطح **کاراکتری** برای placeholderها اسکن می‌کند؛ پس هر
-``%`` تنها (حتی داخل رشته‌ی نقل‌قول یا کامنت) باید ``%%`` باشد وگرنه با
-``ProgrammingError: only '%s', '%b', '%t' are allowed as placeholders`` می‌شکند
-(اندازه‌گیری‌شده روی psycopg 3.3.6). ترتیب کار مهم است: **اول** escape درصد،
-**بعد** ترجمه‌ی ``?`` — تا ``%s``های تازه‌ساخته‌شده دوباره escape نشوند.
+psycopg scans the query text at the **character** level for placeholders; So every
+Only ``%'' (even inside the quote or comment string) should be ``%%'' otherwise ba
+``ProgrammingError: only '%s', '%b', '%t' are allowed as placeholders'' breaks
+(measured on psycopg 3.3.6). The order of work is important: **first** escape percent,
+**Next** translation of ``?'' — so that the newly created ``%s'' are not escaped again.
 
-توجه: escape روی backend ``sqlite`` انجام **نمی‌شود** (رفتار sqlite3 هیچ مفهومی
-از ``%`` ندارد و تغییرش متن کوئری را خراب می‌کرد).
+Note: escape **doesn't** work on backend ``sqlite'' (behavior of sqlite3 makes no sense
+does not have ``%'' and changing it would destroy the query text).
 """
 
 from __future__ import annotations
@@ -28,8 +39,8 @@ from typing import Optional
 
 from .exceptions import PlaceholderTranslationError
 
-#: سبک placeholder هر backend. کلیدهای این دیکشنری باید با ثابت‌های
-#: ``core.db.connection.BACKEND_*`` یکسان بمانند (تست نگهبان دارد).
+#: Placeholder style of each backend. The keys of this dictionary must be with constants
+#: ``core.db.connection.BACKEND_*'' remain the same (it has a guard test).
 PLACEHOLDER_STYLE = {
     "sqlite": "?",
     "postgresql": "%s",
@@ -37,14 +48,14 @@ PLACEHOLDER_STYLE = {
 
 
 def _replace_question_marks(sql: str, replacement: str) -> str:
-    """جایگزینی ``?``های خارج از رشته/شناسه/کامنت."""
+    """Replace ``?''s outside the string/id/comment."""
     out = []
     i = 0
     n = len(sql)
     while i < n:
         ch = sql[i]
 
-        # رشته‌ی تک‌کوت‌دار: '' = کوت فرار
+        # Single-quoted string: '' = escape quote
         if ch == "'":
             j = i + 1
             while j < n:
@@ -59,7 +70,7 @@ def _replace_question_marks(sql: str, replacement: str) -> str:
             i = j
             continue
 
-        # شناسه‌ی دابل‌کوت‌دار: "" = دابل‌کوت فرار
+        # Double-quoted identifier: "" = escaped double-quote
         if ch == '"':
             j = i + 1
             while j < n:
@@ -74,7 +85,7 @@ def _replace_question_marks(sql: str, replacement: str) -> str:
             i = j
             continue
 
-        # کامنت خطی تا پایان خط
+        # Line comment until the end of the line
         if ch == "-" and i + 1 < n and sql[i + 1] == "-":
             j = sql.find("\n", i)
             j = n if j == -1 else j
@@ -82,7 +93,7 @@ def _replace_question_marks(sql: str, replacement: str) -> str:
             i = j
             continue
 
-        # کامنت بلوکی
+        # Block comment
         if ch == "/" and i + 1 < n and sql[i + 1] == "*":
             j = sql.find("*/", i + 2)
             j = n if j == -1 else j + 2
@@ -102,11 +113,11 @@ def _replace_question_marks(sql: str, replacement: str) -> str:
 
 def escape_percent_signs(sql: str) -> str:
     """
-    هر ``%`` را به ``%%`` تبدیل می‌کند (قرارداد psycopg برای متن کوئری).
+    Converts any ``%'' to ``%%'' (psycopg's convention for query text).
 
-    عمداً **متنی** است و نه سازه‌شناسانه: psycopg هم متن را کاراکتری اسکن می‌کند،
-    پس ``%`` داخل رشته/کامنت هم باید escape شود. این تابع idempotent **نیست**
-    (اجرای دوباره ``%%%%`` می‌سازد) چون کاربردش فقط یک‌بار در مسیر ترجمه است.
+    It is deliberately **textual** and not structural: psycopg also scans text character by character.
+    So ``%'' inside the string/comment must be escaped. This function is **not** idempotent.
+    (Executing it again makes ``%%%%'') because it is used only once in the translation path.
     """
     return sql.replace("%", "%%")
 
@@ -114,18 +125,18 @@ def escape_percent_signs(sql: str) -> str:
 def translate_placeholders(sql: str, backend: str,
                            *, escape_percent: Optional[bool] = None) -> str:
     """
-    کوئری نوشته‌شده با سبک ``?`` را به سبک backend مقصد ترجمه می‌کند.
+    Translates a query written with the ``?'' style to the style of the destination backend.
 
     Args:
-        sql: متن کوئری.
-        backend: ``"sqlite"`` (بازگشت بدون تغییر) یا ``"postgresql"``.
-        escape_percent: ``None`` ⇒ پیش‌فرضِ backend (postgresql: ``True``،
-            sqlite: ``False``). دادن ``True`` همراه ``sqlite`` خطای صریح است تا
-            کسی اشتباهی متن SQLite را خراب نکند.
+        sql: query text.
+        backend: ``"sqlite"`` (return unchanged) or ``"postgresql"``.
+        escape_percent: ``None'' ⇒ backend default (postgresql: ``True'',
+            sqlite: ``False''). Giving ``True'' with ``sqlite'' is an explicit error
+            Don't mess up the SQLite text by mistake.
 
     Raises:
-        PlaceholderTranslationError: backend ناشناخته، sql غیررشته، یا
-            ``escape_percent=True`` همراه backendی که این مفهوم را ندارد.
+        PlaceholderTranslationError: unknown backend, non-string sql, or
+            ``escape_percent=True'' comes with a backend that does not have this concept.
     """
     if not isinstance(sql, str):
         raise PlaceholderTranslationError(
@@ -147,7 +158,7 @@ def translate_placeholders(sql: str, backend: str,
         return sql
 
     if escape_percent is None:
-        escape_percent = True  # پیش‌فرض مسیر postgresql
+        escape_percent = True  # Default postgresql path
     prepared = escape_percent_signs(sql) if escape_percent else sql
     return _replace_question_marks(prepared, style)
 

@@ -1,4 +1,4 @@
-# تصمیم‌های فاز E.6 — قفل‌شده پیش از cutover
+# Phase E.6 decisions — locked before cutover
 
 **مخزن:** شاخه‌ی `phase-c` · **تاریخ:** ۲۰۲۶-۱۰-۰۴ · **دامنه:** E.6.1 … E.6.11
 **قاعدهٔ نگارش این سند (دستور مالک):** برای هر تصمیم سه چیز نوشته شود —
@@ -16,7 +16,7 @@
 
 ---
 
-## جدول خلاصه (۱۰ ردیف)
+## Summary table (10 rows)
 
 | # | موضوع | تصمیم | کامیت | اثر بر production |
 |---|---|---|---|---|
@@ -33,7 +33,7 @@
 
 ---
 
-## ۶.۱ — `import_db.py`: بازنشستگی، نه ترجمه
+## 6.1 — `import_db.py`: retirement, not translation
 
 **تصمیم:** مسیر **نوشتن** import روی PostgreSQL بازنشسته است: گارد یکپارچه با
 پیام روشن می‌ایستد و هیچ `INSERT`/`CREATE TABLE` روی PG ساخته نمی‌شود. مسیر
@@ -63,7 +63,7 @@
 
 ---
 
-## ۶.۲ — بکاپ: `pg_dump --format=custom` + تأیید، جای کپی فایل
+## 6.2 — Backup: `pg_dump --format=custom` + verification, instead of a file copy
 
 **تصمیم:** در `tools/migrate_timestamps_to_utc.py`: روی PG بکاپ =
 `pg_dump --format=custom` با تأیید `pg_restore --list` (ردیف‌های TOC شمرده
@@ -98,7 +98,7 @@ manifest (تست: `test_pg_dump_is_called_without_password_on_the_command_line`)
 
 ---
 
-## ۶.۳ — collation: `C` می‌ماند
+## 6.3 — Collation: `C` stays
 
 **تصمیم:** collation دیتابیس/ستون‌ها روی PG **`C`** می‌ماند. ترتیب فارسیِ نمایشی
 همان‌طور که امروز در UI انجام می‌شود (`localeCompare` در `web/static/js/dashboard.js`)
@@ -135,7 +135,7 @@ manifest (تست: `test_pg_dump_is_called_without_password_on_the_command_line`)
 
 ---
 
-## ۶.۴ — `logs.details` ⇒ `jsonb` روی PG؛ بقیه TEXT
+## 6.4 — `logs.details` ⇒ `jsonb` on PG; the rest stay TEXT
 
 **تصمیم:** تنها ستونی که SQL روی محتوای JSON آن می‌خواند (`logs.details`) روی PG
 به `jsonb` می‌رود (migration `0004_jsonb_columns.py`؛ روی SQLite no-op). چهار ستون
@@ -182,7 +182,7 @@ manifest (تست: `test_pg_dump_is_called_without_password_on_the_command_line`)
 
 ---
 
-## ۶.۵ — TD-001: حذف، نه احیا
+## 6.5 — TD-001: removal, not revival
 
 **تصمیم:** `_save_counters_to_db` (۵۳ خط، بدون هیچ فراخوان) حذف شد؛ **نه** احیا.
 
@@ -201,7 +201,7 @@ manifest (تست: `test_pg_dump_is_called_without_password_on_the_command_line`)
 
 ---
 
-## ۶.۶ — TD-002: allowlist برای `next`، و بستن حفرۀ `\`
+## 6.6 — TD-002: allowlist for `next`, and closing the `\` gap
 
 **تصمیم:** در پاسخ‌های ۴۰۱/۳۰۲ گارد `before_request`، `next` دیگر `request.url`
 کامل نیست؛ از `request.path` + `query_string` **خام** ساخته می‌شود و اگر
@@ -228,7 +228,7 @@ manifest (تست: `test_pg_dump_is_called_without_password_on_the_command_line`)
 
 ---
 
-## ۶.۷ — TD-004: بایندینگ `log` در مسیر خطای `/api/security/stats`
+## 6.7 — TD-004: binding `log` in the error path of `/api/security/stats`
 
 **تصمیم:** `import logging` + `log = logging.getLogger("PrinterMonitor")` در
 `web/routes/security.py` (همان قرارداد ده فایل route دیگر).
@@ -249,7 +249,7 @@ manifest (تست: `test_pg_dump_is_called_without_password_on_the_command_line`)
 
 ---
 
-## ۶.۸ — TD-005 و TD-006: ثبت و موکول (بدون تغییر کد)
+## 6.8 — TD-005 and TD-006: recorded and deferred (no code change)
 
 **تصمیم:** هیچ‌کدام در E.6 رفع نشد؛ هر دو با **مقصد صریح** ثبت شدند:
 TD-005 (manifest بازنویسی‌شدنی) ⇒ **فاز F** (کنار ابزار مهاجرت داده، جایی که
@@ -272,7 +272,7 @@ TD-005 (manifest بازنویسی‌شدنی) ⇒ **فاز F** (کنار ابز�
 
 ---
 
-## ۶.۹ — TD-009 (`_exists_by_cols` ⇒ `col IS $1` روی PG): بدون رفع، زیر گارد
+## 6.9 — TD-009 (`_exists_by_cols` ⇒ `col IS $1` on PG): not fixed, kept under a guard
 
 **تصمیم:** رفع نشد؛ گارد یکپارچۀ ۶.۱ که کل مسیر نوشتن import روی PG را می‌بندد،
 آن را هم بی‌مصرف می‌کند.
@@ -290,7 +290,7 @@ SQLite هم لازم نیست (`IS NULL` همان‌جا درست کار می‌
 
 ---
 
-## ۶.۱۰ — TD-012: ثبت رسمی در جدول بدهی
+## 6.10 — TD-012: official entry in the debt table
 
 **تصمیم:** وضعیت ۵۲ تست SQLite-محور که زیر `DB_BACKEND=postgresql` می‌شکستند،
 **مدیریت‌شده** ثبت شد (marker `sqlite_only` + auto-skip در `tests/conftest.py` از
@@ -317,7 +317,7 @@ E.5.2)، و ردیف TD-012 به **جدول** بدهی هم اضافه شد (ت�
 
 ---
 
-## سنجه‌های نهایی فاز E.6
+## Final measures of phase E.6
 
 | سنجه | عدد |
 |---|---|

@@ -1,3 +1,15 @@
+# =============================================================================
+# @file:         core/cartridge_change_engine.py
+# @brief:        Generic cartridge-change engine: decides from counter and identity evidence
+#                whether a cartridge was replaced.
+# @details:      Responsibilities: Evaluate evidence from identity, reset and fallback signals and
+#                return a verdict.
+#                Main API: evaluate_cartridge_change()
+#                Side effects: none at import time
+# @dependencies: internal: core.time_utils
+# @notes:        None.
+# =============================================================================
+
 """Generic cartridge-change evidence engine.
 
 This module intentionally avoids model-specific assumptions. It evaluates a
@@ -19,14 +31,15 @@ replace the generic evidence payload.
 from __future__ import annotations
 
 import hashlib
-from core.time_utils import utc_now_iso
 from typing import Any, Dict, List, Optional
 
+from core.time_utils import utc_now_iso
+
 CONFIDENCE_LEVELS = ("UNKNOWN", "POSSIBLE", "PROBABLE", "CONFIRMED")
-CONFIDENCE_SCORE = {name: idx for idx, name in enumerate(CONFIDENCE_LEVELS)}
 
 
 def _normalize(value: Any) -> Optional[str]:
+    """Normalize a value to a stripped string, or None when it is empty."""
     if value is None:
         return None
     text = str(value).strip()
@@ -39,6 +52,7 @@ def _normalize(value: Any) -> Optional[str]:
 
 
 def _as_int(value: Any) -> Optional[int]:
+    """Convert a value to int, or None when it is not numeric."""
     if value is None:
         return None
     try:
@@ -48,6 +62,7 @@ def _as_int(value: Any) -> Optional[int]:
 
 
 def _identity_from_record(record: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Build the cartridge identity string from a stored record, or None when missing."""
     if not record:
         return None
     for key in ("chip_id", "serial", "cartridge_model", "supply_description", "supply_counter"):
@@ -58,6 +73,7 @@ def _identity_from_record(record: Optional[Dict[str, Any]]) -> Optional[str]:
 
 
 def _hash_event(printer_ip: str, old_identity: str, new_identity: str, timestamp: str) -> str:
+    """Return a SHA-256 digest that identifies one cartridge change event."""
     digest = hashlib.sha256()
     digest.update(str(printer_ip).encode("utf-8"))
     digest.update(b"|")
@@ -70,6 +86,7 @@ def _hash_event(printer_ip: str, old_identity: str, new_identity: str, timestamp
 
 
 def _record_evidence(name: str, prev_value: Any, curr_value: Any, confidence: str, source: str, reason: str) -> Dict[str, Any]:
+    """Build one evidence entry that records a field comparison used in change detection."""
     return {
         "name": name,
         "prev": prev_value,
@@ -123,6 +140,7 @@ def evaluate_cartridge_change(prev: Optional[Dict[str, Any]], curr: Optional[Dic
     evidence: List[Dict[str, Any]] = []
 
     def add_evidence(name: str, prev_value: Any, curr_value: Any, confidence: str, source: str, reason: str):
+        """Append an evidence entry to the current analysis; an unknown confidence becomes UNKNOWN."""
         if confidence not in CONFIDENCE_LEVELS:
             confidence = "UNKNOWN"
         evidence.append(_record_evidence(name, prev_value, curr_value, confidence, source, reason))
@@ -279,40 +297,6 @@ def evaluate_cartridge_change(prev: Optional[Dict[str, Any]], curr: Optional[Dic
             "new_identity": result["new_identity"],
             "evidence": result["evidence"],
             "evidence_source": ",".join(sorted({ev["source"] for ev in result["evidence"] if ev["confidence"] != "UNKNOWN"})),
-            "confidence": result["confidence"],
-            "detection_method": result["detection_method"],
-            "detection_methods": result.get("detection_methods", []),
-            "timestamp": timestamp,
-            "event_id": _hash_event(
-                (prev.get("printer_ip") or curr.get("printer_ip") or "unknown"),
-                result["old_identity"],
-                result["new_identity"],
-                timestamp,
-            ),
-        }
-
-    return result
-
-    old_identity = _identity_from_record(prev)
-    new_identity = _identity_from_record(curr)
-    if old_identity is not None and new_identity is not None and old_identity != new_identity:
-        result["old_identity"] = old_identity
-        result["new_identity"] = new_identity
-    else:
-        result["old_identity"] = old_identity
-        result["new_identity"] = new_identity
-
-    if result["should_emit"] and result["old_identity"] and result["new_identity"]:
-        timestamp = utc_now_iso()
-        result["event"] = {
-            "printer_ip": (prev.get("printer_ip") or curr.get("printer_ip") or "unknown"),
-            "brand": prev.get("brand") or curr.get("brand") or "",
-            "model": prev.get("model") or curr.get("model") or "",
-            "color": prev.get("color") or curr.get("color") or "",
-            "old_identity": result["old_identity"],
-            "new_identity": result["new_identity"],
-            "evidence": evidence,
-            "evidence_source": ",".join(sorted({ev["source"] for ev in evidence if ev["confidence"] != "UNKNOWN"})),
             "confidence": result["confidence"],
             "detection_method": result["detection_method"],
             "detection_methods": result.get("detection_methods", []),

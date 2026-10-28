@@ -1,26 +1,38 @@
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tests/test_upsert_cross_backend.py
+# @brief:        Tests for the cross-backend upsert helper (E.5).
+# @details:      Responsibilities: Verify the upsert SQL for SQLite and PostgreSQL.
+#                Main API: HelperFragmentTests, SourceContractTests, ColumnCompletenessTests,
+#                _UpsertBehaviourMixin, SqliteUpsertBehaviourTests, PostgresUpsertBehaviourTests
+#                Side effects: database access
+# @dependencies: internal: core.database, core.db, core.db.schema, core.yield_engine | external:
+#                psycopg
+# @notes:        Can be run directly as a script.
+# =============================================================================
+
 """
-تست‌های E.5 — ``upsert_sql`` و سه محلی که از ``INSERT OR REPLACE`` منتقل شدند.
+E.5 Tests — ``upsert_sql'' and three locations moved from ``INSERT OR REPLACE''.
 
-چرا این فایل هست
+Why is this file?
 ----------------
-``INSERT OR REPLACE`` نحو SQLite است؛ روی PostgreSQL با
-``syntax error at or near "OR"`` (42601) می‌شکند. در نخستین سنجش E.5 (کل سوئیت با
-``DB_BACKEND=postgresql``) ۲۰ شکست فقط از همین یک الگو بود. هِلپر
-``core.db.upsert_sql`` جمله را backend-aware می‌سازد:
+``INSERT OR REPLACE'' is the SQLite syntax; on PostgreSQL with
+``syntax error at or near "OR"'' (42601) breaks. In the first measurement E.5 (the whole suite with
+``DB_BACKEND=postgresql'') The 20 failures were from just this one pattern. helper
+``core.db.upsert_sql'' makes the statement backend-aware:
 
-  • SQLite — ``INSERT OR REPLACE INTO t (…) VALUES (…)``  ⇒ بایت‌به‌بایت همان امروز؛
-  • PG — ``INSERT … ON CONFLICT (کلید) DO UPDATE SET c = EXCLUDED.c …``.
+  • SQLite — ``INSERT OR REPLACE INTO t (…) VALUES (…)'' ⇒ byte by byte today;
+  • PG — ``INSERT … ON CONFLICT (key) DO UPDATE SET c = EXCLUDED.c …``.
 
-این ترجمه **فقط** وقتی معنای داده را عوض نمی‌کند که جمله *همهٔ* ستون‌های جدول را
-ببنویسد (``docs/insert-or-replace-inventory.md`` §۳.۱): SQLite با REPLACE ردیف را
-حذف و دوباره می‌سازد (پس ستون نوشته‌نشده به پیش‌فرض برمی‌گردد) و PG درجا UPDATE
-می‌کند (ستون نوشته‌نشده ارزش قبلی را نگه می‌دارد). پس بخشی از همین فایل، قفل
-هم‌خوانی «فهرست ستون‌های درج == همهٔ ستون‌های جدول» است — اگر روزی ستونی به جدول
-اضافه شود، این تست می‌شکند و یادآوری می‌کند که آن جمله دیگر «pernِ کامل» نیست.
+This translation **only** does not change the meaning of the data when the sentence of *all* columns of the table
+Write (``docs/insert-or-replace-inventory.md`` §3.1): SQLite with REPLACE row
+deletes and rebuilds (so unwritten column goes back to default) and PG in-place UPDATE
+does (the unwritten column keeps the previous value). So part of the same file, lock
+The match is "insert column list == all table columns" — if one column to the table
+is added, this breaks the test and reminds that the sentence is no longer "full pern".
 
-دو رویه که سنجیده می‌شوند: **درج جدید**، **تعارض ⇒ به‌روزرسانی**، **idempotent**
-(اجرای دوباره ⇒ همان نتیجه)، و **حفظ ستون‌های دیگر** وقتی واقعاً نوشته می‌شوند.
+Two procedures are evaluated: **insert new**, **conflict ⇒ update**, **idempotent**
+(execute again ⇒ same result), and **maintain other columns** when they are actually written.
 """
 import ast
 import os
@@ -46,7 +58,7 @@ IP = "203.0.113.160"
 
 
 def _pg_target():
-    """``(dsn, None)`` اگر PG در دسترس باشد، وگرنه ``(None, دلیلِ skip)``."""
+    """``(dsn, None)'' if PG is available, otherwise ``(None, skip reason)''."""
     dsn = (os.getenv(ENV_PG_DSN, "") or "").strip()
     if not dsn:
         return None, (f"{ENV_PG_DSN} ست نشده است ⇒ تست‌های PGِ زنده‌ی این فایل اجرا نمی‌شوند "
@@ -66,13 +78,13 @@ _PG_DSN, _PG_SKIP = _pg_target()
 
 def _pin_sqlite(test):
     """
-    محیطِ یک تستِ SQLite-محور را قفل می‌کند.
+    Locks the environment of a SQLite-based test.
 
-    چرا لازم است: ``init_db()`` و ``ensure_yield_tables()`` بک‌اند را از محیط
-    می‌خوانند؛ اگر سوئیت با ``DB_BACKEND=postgresql`` اجرا شود و این قفل نباشد،
-    جدول‌ها روی PG ساخته می‌شوند و فایل موقت خالی می‌ماند ⇒ «no such table»
-    (همین اتّفاق در گام E.5 افتاد). قفل PG_DSN هم مانع از آن می‌شود که تصادفی
-    روی DB مخزن نوشته شود.
+    Why it is needed: ``init_db()'' and ``ensure_yield_tables()'' backend from environment
+    they sing; If the suite is run with ``DB_BACKEND=postgresql'' and it is not locked,
+    Tables are created on PG and the temporary file remains empty ⇒ "no such table"
+    (The same thing happened in step E.5). The PG_DSN lock also prevents accidental
+    be written on the repository DB.
     """
     env = mock.patch.dict(os.environ, {"DB_BACKEND": BACKEND_SQLITE, ENV_PG_DSN: ""})
     env.start()
@@ -82,15 +94,18 @@ def _pin_sqlite(test):
 
 
 # ─────────────────────────────────────────────────────────────────────
-# A) خودِ هِلپر (بدون دیتابیس)
+# A) Helper itself (without database)
 # ─────────────────────────────────────────────────────────────────────
 class HelperFragmentTests(unittest.TestCase):
 
+    """Tests for helper fragment."""
     def test_sqlite_keeps_the_historic_statement(self):
+        """Verifies sqlite keeps the historic statement."""
         sql = upsert_sql("t", ("a", "b"), ("a",), backend=BACKEND_SQLITE)
         self.assertEqual(sql, 'INSERT OR REPLACE INTO "t" ("a", "b") VALUES (?, ?)')
 
     def test_postgres_targets_the_conflict_key(self):
+        """Verifies postgres targets the conflict key."""
         sql = upsert_sql("t", ("a", "b"), ("a",), backend=BACKEND_POSTGRESQL)
         self.assertEqual(
             sql,
@@ -98,6 +113,7 @@ class HelperFragmentTests(unittest.TestCase):
             'ON CONFLICT ("a") DO UPDATE SET "b" = EXCLUDED."b"')
 
     def test_conflict_columns_are_excluded_from_the_update_list(self):
+        """Verifies conflict columns are excluded from the update list."""
         sql = upsert_sql("t", ("ip", "color", "n"), ("ip", "color"), backend=BACKEND_POSTGRESQL)
         self.assertIn('ON CONFLICT ("ip", "color")', sql)
         self.assertEqual(sql.count("= EXCLUDED."), 1, sql)
@@ -106,18 +122,19 @@ class HelperFragmentTests(unittest.TestCase):
             self.assertNotIn(f'"{key}" = EXCLUDED.', sql, f"کلید نباید در SET بیاید: {sql}")
 
     def test_no_updatable_column_falls_back_to_do_nothing(self):
-        """اگر همهٔ ستون‌ها کلید باشند، ``DO UPDATE SET`` خالی نحوی نامعتبر است."""
+        """Empty ``DO UPDATE SET'' is an invalid syntax if all columns are keys."""
         sql = upsert_sql("t", ("a",), ("a",), backend=BACKEND_POSTGRESQL)
         self.assertTrue(sql.endswith("DO NOTHING"), sql)
 
     def test_explicit_values_sql_is_passed_through(self):
-        """مقدار ثابت در VALUES (مثل ``'high'``) حفظ می‌شود و تعداد جای‌نما چک نمی‌شود."""
+        """The fixed value is kept in VALUES (like ``'high'') and the number of placeholders is not checked."""
         sql = upsert_sql("t", ("a", "b", "c"), ("a",), values_sql="?, 'x', ?",
                          backend=BACKEND_POSTGRESQL)
         self.assertIn("VALUES (?, 'x', ?)", sql)
         self.assertIn('"c" = EXCLUDED."c"', sql)
 
     def test_validation_is_strict(self):
+        """Verifies validation is strict."""
         for kwargs in (
             {"table": "t", "columns": (), "conflict_columns": ("a",)},
             {"table": "t", "columns": ("a",), "conflict_columns": ()},
@@ -128,6 +145,7 @@ class HelperFragmentTests(unittest.TestCase):
                     upsert_sql(**kwargs)
 
     def test_backend_default_follows_env(self):
+        """Verifies backend default follows env."""
         with mock.patch.dict(os.environ, {"DB_BACKEND": "postgresql"}):
             self.assertIn("ON CONFLICT", upsert_sql("t", ("a", "b"), ("a",)))
         with mock.patch.dict(os.environ, {"DB_BACKEND": "sqlite"}):
@@ -135,25 +153,25 @@ class HelperFragmentTests(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────
-# B) قفل‌های ساختاری روی کد
+# B) Structural locks on code
 # ─────────────────────────────────────────────────────────────────────
 class SourceContractTests(unittest.TestCase):
-    """هیچ ``INSERT OR REPLACE`` دستی در کد برنامه نماند (تصمیم E.5)."""
+    """No manual ``INSERT OR REPLACE'' is left in the program code (decision E.5)."""
 
-    #: تنها جاهای مجاز برای متن «INSERT OR REPLACE» در core/ و web/ — آگاهانه و
-    #: مستند. اگر سومی اضافه شود، این تست می‌شکند.
-    #: (در E.6.5 سومِ پیشین — کد مردهٔ TD-001 در enhanced_collector — حذف شد، پس
-    #:  allow-list هم کوتاه شد؛ شاهدِ «حذف‌شدن» در تست پایین همین فایل است.)
+    #: The only places allowed for "INSERT OR REPLACE" text are in core/ and web/ — knowingly and
+    #Documentary. If a third is added, this test breaks.
+    #: (In E.6.5 the third previous — TD-001 dead code in enhanced_collector — was removed, so
+    #: allow-list was also shortened; The witness of "deletion" in the test below is the same file.)
     ALLOWED_SITES = {
-        # خودِ هِلپر: جملهٔ SQLite را همین‌جا می‌سازد.
+        # Helper itself: Creates the SQLite statement right here.
         "core/db/upsert.py": "سازندهٔ جمله",
-        # حالت replace در import: فقط برای مقصد SQLite ساخته می‌شود و مسیر PG
-        # پیش از آن با گارد یکپارچه بسته شده (E.4.8b) و در E.6.1 بازنشسته شد.
+        # replace mode in import: it is made only for the SQLite destination and the path is PG
+        # Previously closed with integral guard (E.4.8b) and retired in E.6.1.
         "web/routes/import_db.py": "جملهٔ پویا، زیر گارد PG",
     }
 
     def _docstring_linenos(self, source):
-        """خطوط docstring (نه کد) تا آن‌ها در شمارش نیایند."""
+        """docstring lines (not code) so they don't count."""
         lines = set()
         tree = ast.parse(source)
         for node in ast.walk(tree):
@@ -167,9 +185,9 @@ class SourceContractTests(unittest.TestCase):
 
     def test_only_the_allowed_sites_mention_insert_or_replace(self):
         """
-        قاعدهٔ E.5: کد برنامه جملهٔ ``INSERT OR REPLACE`` دستی نمی‌نویسد، جز سه
-        محلی که در ``ALLOWED_SITES`` با دلیل ثبت شده‌اند. شمارش با AST است تا
-        docstringها و کامنتها به‌عنوان «کد» شمرده نشوند.
+        Rule E.5: The program code does not write the ``INSERT OR REPLACE'' sentence by hand, except for three
+        Sites that are registered in ``ALLOWED_SITES'' with reason. Counting with AST is up
+        docstrings and comments should not count as "code".
         """
         found = {}
         for root in ("core", "web"):
@@ -188,9 +206,9 @@ class SourceContractTests(unittest.TestCase):
 
     def test_the_untouched_sites_are_still_documented(self):
         """
-        یک محل آگاهانه دست‌نخورده (fixtureهای golden، تصمیم E.5)، یک محل زیر گارد
-        (import_db، تصمیم E.6.1: بازنشستگی) و یک محل **حذف‌شده** (TD-001 در E.6.5).
-        اگر روزی کسی این وضعیت را بی‌مقدمه عوض کند، این تست می‌پرسد چرا.
+        A consciously intact location (golden fixtures, decision E.5), an under-guard location
+        (import_db, decision E.6.1: retirement) and a **removed** location (TD-001 in E.6.5).
+        If one day someone suddenly changes this situation, this test will ask why.
         """
         dead = (ROOT / "core" / "enhanced_collector.py").read_text(encoding="utf-8")
         self.assertNotIn("INSERT OR REPLACE", dead,
@@ -203,7 +221,7 @@ class SourceContractTests(unittest.TestCase):
         self.assertNotIn("upsert_sql", route)
 
     def test_three_live_sites_call_the_helper(self):
-        """سه محل زنده باید از هِلپر صدا بزنند (نه رشتهٔ SQL دستی)."""
+        """The three live locations must call the helper (not the manual SQL string)."""
         expected = {"core/database.py": 1, "core/yield_engine.py": 2}
         for rel, count in expected.items():
             tree = ast.parse((ROOT / rel).read_text(encoding="utf-8"))
@@ -217,18 +235,19 @@ class SourceContractTests(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────
-# C) قفل «همهٔ ستون‌ها» — شرط درستیِ ترجمه
+# C) "all columns" lock — correct translation condition
 # ─────────────────────────────────────────────────────────────────────
 class ColumnCompletenessTests(unittest.TestCase):
-    """فهرست‌های ستونِ سه محل منتقل‌شده باید همان «همهٔ ستون‌های جدول» بمانند."""
+    """The column lists of the moved three places should remain the same as "all table columns"."""
 
     def setUp(self):
+        """Prepare the fixtures that each test in this class uses."""
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.old_cwd = os.getcwd()
-        os.chdir(self.tmp.name)                 # DB_PATH نسبی ⇒ DB موقت
+        os.chdir(self.tmp.name)                 # Relative DB_PATH ⇒ Temporary DB
         self.addCleanup(lambda: os.chdir(self.old_cwd))
-        _pin_sqlite(self)                      # init_db() باید همین فایل را ببیند
+        _pin_sqlite(self)                      # init_db() should see this same file
         import core.database as database
         import core.yield_engine as yield_engine
         database.init_db()
@@ -237,28 +256,31 @@ class ColumnCompletenessTests(unittest.TestCase):
         self.addCleanup(self.conn.close)
 
     def test_printer_counters_columns_are_complete(self):
+        """Verifies printer counters columns are complete."""
         import core.database as database
         table_cols = schema_columns(self.conn, "printer_counters")
-        # ترتیب *اعلام* جدول شرط نیست (toner_overrides با ALTER آخر اضافه شده)، ولی
-        # «پوشش همهٔ ستون‌ها» شرط است — وگرنه ترجمه معنای REPLACE را عوض می‌کند.
+        # The *declaration* order of the table is not a condition (toner_overrides added with the last ALTER), but
+        # "Cover all columns" is a condition — otherwise the translation changes the meaning of REPLACE.
         self.assertEqual(sorted(database._COUNTERS_UPSERT_COLUMNS), sorted(table_cols),
                          "فهرست درج باید همهٔ ستون‌های جدول را بنویسد (شرط §۳.۱)")
-        # همان فهرستی که خواننده می‌سازد، بدون «ip» ⇒ باید زیرمجموعه باشد:
+        # The same directory that the reader creates, without the "ip" ⇒ must be a subdirectory:
         read_cols = [c.strip() for c in database._COUNTERS_COLS.split(",")]
         self.assertEqual(sorted(read_cols), sorted(t for t in table_cols if t != "ip"))
 
     def test_cartridge_state_columns_are_complete(self):
+        """Verifies cartridge state columns are complete."""
         import core.yield_engine as yield_engine
         self.assertEqual(list(yield_engine._STATE_UPSERT_COLUMNS),
                          schema_columns(self.conn, "cartridge_state"))
 
     def test_cartridge_yield_profiles_columns_are_complete(self):
+        """Verifies cartridge yield profiles columns are complete."""
         import core.yield_engine as yield_engine
         self.assertEqual(list(yield_engine._PROFILE_UPSERT_COLUMNS),
                          schema_columns(self.conn, "cartridge_yield_profiles"))
 
     def test_upsert_param_counts_match_the_columns(self):
-        """هر جای‌نمای ``VALUES`` باید یک پارامتر داشته باشد (به‌جز مقادیر ثابت)."""
+        """Every place in the ``VALUES'' view must have a parameter (except constant values)."""
         import core.database as database
         import core.yield_engine as yield_engine
         state_sql = upsert_sql("cartridge_state", yield_engine._STATE_UPSERT_COLUMNS,
@@ -274,12 +296,13 @@ class ColumnCompletenessTests(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────
-# D) رفتار روی هر دو backend — پایهٔ مشترک
+# D) behavior on both backends — common ground
 # ─────────────────────────────────────────────────────────────────────
 class _UpsertBehaviourMixin:
-    """درج جدید / تعارض ⇒ به‌روزرسانی / idempotent، روی اتصالِ ``self.conn``."""
+    """insert new / conflict ⇒ update / idempotent, on connection ``self.conn''."""
 
     def _state(self, **over):
+        """Helper: state."""
         state = {
             "printer_ip": IP, "color": "black", "printer_model": "M-1",
             "cartridge_name": "C-1", "cartridge_key": f"{IP}:M-1:C-1",
@@ -301,6 +324,7 @@ class _UpsertBehaviourMixin:
         return state
 
     def test_fresh_insert_then_conflict_updates(self):
+        """Verifies fresh insert then conflict updates."""
         import core.yield_engine as yield_engine
         self._delete_rows()
 
@@ -310,7 +334,7 @@ class _UpsertBehaviourMixin:
         self.assertIsNotNone(row, "ردیف تازه باید درج شود")
         self.assertEqual(row["current_level"], 55)
 
-        # همان کلید (printer_ip, color) ⇒ باید **به‌روزرسانی** شود، نه ردیف دوم.
+        # The same key (printer_ip, color) ⇒ should be **updated**, not the second row.
         yield_engine._upsert_state(self.conn, self._state(current_level=33, sample_count=4))
         self.conn.commit()
         row2 = yield_engine._load_state(self.conn, IP, "black")
@@ -321,7 +345,7 @@ class _UpsertBehaviourMixin:
         self.assertEqual(count, 1, "REPLACE/upsert باید یک ردیف نگه دارد")
 
     def test_upsert_is_idempotent(self):
-        """اجرای دوباره با همان داده ⇒ همان وضعیت (نه خطا، نه ردیف اضافه)."""
+        """Rerun with same data ⇒ same status (no error, no extra rows)."""
         import core.yield_engine as yield_engine
         self._delete_rows()
         state = self._state()
@@ -336,9 +360,9 @@ class _UpsertBehaviourMixin:
 
     def test_profile_upsert_replaces_instead_of_accumulating(self):
         """
-        ``_upsert_profile_if_high`` با همان ``cartridge_key`` باید profile را
-        جایگزین کند (منطق max/میانگین وزنی داخل تابع است؛ اینجا فقط «یک ردیف»
-        و «مقدار تازه» سنجیده می‌شود).
+        ``_upsert_profile_if_high'' with the same ``cartridge_key'' should profile
+        replace (the max/weighted average logic is inside the function; here it's just "one row"
+        and "fresh value" is measured).
         """
         import core.yield_engine as yield_engine
         self._delete_rows()
@@ -365,22 +389,23 @@ class _UpsertBehaviourMixin:
         self.assertEqual(prof2["yield_per_page"], 1700)
 
     def _delete_rows(self):
-        """پاک‌سازی ردیف‌های تست (کلید profile ``source_printer_ip`` است، نه printer_ip)."""
+        """Clearing test rows (profile key is ``source_printer_ip'', not printer_ip)."""
         self.conn.execute("DELETE FROM cartridge_state WHERE printer_ip = ?", (IP,))
         self.conn.execute("DELETE FROM cartridge_yield_profiles WHERE source_printer_ip = ?", (IP,))
         self.conn.commit()
 
 
 class SqliteUpsertBehaviourTests(_UpsertBehaviourMixin, unittest.TestCase):
-    """روی SQLite: رفتار عیناً همان قبل (REPLACE).
+    """On SQLite: exactly the same behavior as before (REPLACE).
 
-    محیط عمداً روی SQLite قفل می‌شود: ``init_db()`` و ``ensure_yield_tables()``
-    backend را از محیط می‌خوانند، پس اگر سوئیت با ``DB_BACKEND=postgresql`` اجرا
-    شود و اینجا قفل نباشد، جدول‌ها روی PG ساخته می‌شوند و فایل موقت خالی می‌ماند
-    («no such table: cartridge_state» — اتّفاق واقعی همین گام).
+    The environment is intentionally locked to SQLite: ``init_db()'' and ``ensure_yield_tables()''
+    The backend is read from the environment, so if the suite runs with ``DB_BACKEND=postgresql''
+    and it is not locked here, the tables are created on PG and the temporary file remains empty
+    ("no such table: cartridge_state" — the actual occurrence of this step).
     """
 
     def setUp(self):
+        """Prepare the fixtures that each test in this class uses."""
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.old_cwd = os.getcwd()
@@ -397,16 +422,17 @@ class SqliteUpsertBehaviourTests(_UpsertBehaviourMixin, unittest.TestCase):
 
 @unittest.skipUnless(_PG_DSN, _PG_SKIP or "")
 class PostgresUpsertBehaviourTests(_UpsertBehaviourMixin, unittest.TestCase):
-    """روی PG واقعی: همان چهار سنجش، از راه ``ON CONFLICT DO UPDATE``."""
+    """On real PG: same four measurements, via ``ON CONFLICT DO UPDATE''."""
 
     def setUp(self):
+        """Prepare the fixtures that each test in this class uses."""
         if not _PG_DSN:
             self.skipTest(_PG_SKIP or "PG در دسترس نیست")
-        # این کلاس توابع سطح‌برنامه را هم صدا می‌زند (save_printer_counters،
-        # ensure_printer_counters_columns) و آن‌ها backend را از محیط می‌خوانند.
-        # بدون قفل DB_BACKEND، آن فراخوانی‌ها بی‌صدا روی SQLite می‌روند و **DB
-        # مخزن** را می‌نویسند — یک‌بار همین اتّفاق افتاد و logs.db با بازتولید
-        # مهاجرت E.3.5 بایت‌به‌بایت بازگردانی شد. پس: env + cwd موقت + تأیید.
+        # This class also calls application-level functions (save_printer_counters,
+        # ensure_printer_counters_columns) and they read the backend from the environment.
+        # Without the DB_BACKEND lock, those calls go silently to SQLite and **DB
+        # Repository ** — same thing happened once and logs.db with reproduction
+        # E.3.5 byte-byte migration reverted. So: env + temporary cwd + confirm.
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.old_cwd = os.getcwd()
@@ -424,6 +450,7 @@ class PostgresUpsertBehaviourTests(_UpsertBehaviourMixin, unittest.TestCase):
         self.addCleanup(self.conn.close)
 
     def _cleanup(self):
+        """Helper: cleanup."""
         try:
             self.conn.rollback()
             self._delete_rows()
@@ -433,15 +460,15 @@ class PostgresUpsertBehaviourTests(_UpsertBehaviourMixin, unittest.TestCase):
             pass
 
     def test_helper_sql_is_what_pg_accepts(self):
-        """شاهد دوتایی: جملهٔ helper اجرا می‌شود و جملهٔ قدیمی همان‌جا 42601 می‌دهد."""
+        """Double witness: the helper sentence is executed and the old sentence gives 42601."""
         import core.yield_engine as yield_engine
         new_sql = upsert_sql("cartridge_state", yield_engine._STATE_UPSERT_COLUMNS,
                              ("printer_ip", "color"), backend=BACKEND_POSTGRESQL)
         old_sql = new_sql.replace(
             'INSERT INTO "cartridge_state"', 'INSERT OR REPLACE INTO "cartridge_state"', 1)
         old_sql = old_sql.split(" ON CONFLICT", 1)[0]
-        # پارامترها پر می‌شوند تا خطا از مفسر PG بیاید، نه از بررسی تعداد
-        # جای‌نما در خود adapter (آن بررسی جلوتر از ارسال انجام می‌شود).
+        # The parameters are padded so that the error comes from the PG interpreter, not from the number check
+        # placeholder in the adapter itself (that check is done before sending).
         params = (IP, "black") + (None,) * (len(yield_engine._STATE_UPSERT_COLUMNS) - 2)
         with self.assertRaises(DatabaseError) as ctx:
             self.conn.execute(old_sql, params)
@@ -451,7 +478,7 @@ class PostgresUpsertBehaviourTests(_UpsertBehaviourMixin, unittest.TestCase):
         self.assertIn("DO UPDATE SET", new_sql)
 
     def test_save_printer_counters_round_trip_on_pg(self):
-        """``save_printer_counters`` / ``load_printer_counters`` روی PG زنده (محل ۱)."""
+        """``save_printer_counters'' / ``load_printer_counters'' on live PG (location 1)."""
         import core.database as database
         self.conn.execute("DELETE FROM printer_counters WHERE ip = ?", (IP,))
         self.conn.commit()
@@ -463,13 +490,13 @@ class PostgresUpsertBehaviourTests(_UpsertBehaviourMixin, unittest.TestCase):
         self.assertEqual(loaded["print_total"], 120)
 
         data["print_total"] = 240
-        database.save_printer_counters(IP, data)          # تعارض ⇒ به‌روزرسانی
+        database.save_printer_counters(IP, data)          # Conflict ⇒ update
         loaded2 = database.load_printer_counters(IP)
         self.assertEqual(loaded2["print_total"], 240)
         rows = self.conn.execute(
             "SELECT COUNT(*) FROM printer_counters WHERE ip = ?", (IP,)).fetchone()[0]
         self.assertEqual(rows, 1)
-        # اجرای دوم نباید چیزی در log خطا بگذارد (ensure_* روی PG بی‌عمل است)
+        # The second run shouldn't leave anything in the log (ensure_* is inactive on PG)
         with mock.patch("core.database.log") as lg:
             database.ensure_printer_counters_columns()
         lg.exception.assert_not_called()

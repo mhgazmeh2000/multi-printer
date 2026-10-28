@@ -1,4 +1,4 @@
-# گزارش مسیر پیوندی USE_SNMP_EXPORTER=1 در برابر Fixtureهای طلایی (گام H.3)
+# Report on the hybrid path USE_SNMP_EXPORTER=1 against the golden fixtures (step H.3)
 
 **تاریخ:** ۲۰۲۶-۱۰-۰۷  
 **مبنای مخزن:** شاخهٔ `phase-c`، پس از گام‌های H.1 و H.2 و کامیت آزمون‌های مسیر کامل (`tests/test_hybrid_full_path.py`).  
@@ -7,7 +7,7 @@
 
 ---
 
-## ۱. هدف و دامنهٔ سنجش
+## 1. Goal and scope of the measurement
 
 هدف این گام، اعتبارسنجی ایزوله، تکرارپذیر و hermetic مسیر کامل پرچم `USE_SNMP_EXPORTER=1` در دو سطح است:
 1. **سطح ۱ (Adapter Level):** اجرای `collect_via_exporter` در برابر تمام ۵ سناریوی `tests/fixtures/golden/enhanced_*.json` با استفاده از نگاشت Prometheus برگرفته از مشخصات رسمی `monitoring/snmp.yml`.
@@ -21,7 +21,7 @@
 
 ---
 
-## ۲. خلاصهٔ دسته‌بندی ۵‌گانهٔ برگ‌ها
+## 2. Summary of the five-way classification of leaves
 
 با اجرای آزمون‌های سنجش و مسطح‌سازی درخت دیکشنری خروجی (`tools.compare_snmp_sources.flatten`)، کلیهٔ برگ‌های ساختار داده به **۵ دستهٔ جامع و کاملاً مجزا (Pairwise Disjoint)** افراز شدند. هیچ برگِ طبقه‌بندی‌نشده‌ای وجود ندارد:
 
@@ -35,7 +35,7 @@
 
 ---
 
-## ۳. جدول ۳۰ برگِ قابل‌استخراج SNMP (Extractable Leaves) با صفر اختلاف
+## 3. Table of 30 extractable SNMP leaves (Extractable Leaves) with zero difference
 
 در سناریوهای پرینتر رنگی اچ‌پی (`enhanced_01_hp_color_toner_full` و `enhanced_02_hp_color_toner_empty`)، هر ۳۰ برگ زیر با تفاضل صفر میان مسیر exporter و خروجی golden تطبیق دارند:
 
@@ -74,7 +74,7 @@
 
 ---
 
-## ۴. شکاف‌های Fixture طلایی (Fixture Gaps) و برنامهٔ رفع (TD-020)
+## 4. Golden fixture gaps (Fixture Gaps) and fix plan (TD-020)
 
 ### دو کلید واگرا
 - `counters.full_color` (در golden برابر ۲۱۴۸۰ در ۰۱ و ۳۱۰۰ در ۰۲؛ در exporter برابر `None`).
@@ -95,7 +95,7 @@
 
 ---
 
-## ۵. فهرست ۱۲۶ برگِ غنای Legacy و دلیل عدم حضور در Exporter
+## 5. List of 126 Legacy-rich leaves and why they are absent from the Exporter
 
 تعداد ۱۲۶ برگ (در سناریوی پر) و ۱۳۴ برگ (در سناریوی خالی با افزودن ۸ کلید هشدار مصنوعی) در خروجی exporter حضور ندارند. این کلیدها به ۵ زیرگروه تقسیم می‌شوند:
 
@@ -143,7 +143,7 @@
 
 ---
 
-## ۶. اعتبارسنجی سطح ۲ پولر با پرچم فعال (USE_SNMP_EXPORTER=1)
+## 6. Validation of poller level 2 with the flag enabled (USE_SNMP_EXPORTER=1)
 
 آزمون‌های سطح ۲ در `tests/test_hybrid_full_path.py` مؤلفه‌های زیر را به اثبات رساندند:
 
@@ -158,7 +158,7 @@
 
 ---
 
-## ۷. جمع‌بندی معیارهای پذیرش
+## 7. Summary of acceptance criteria
 
 | معیار | وضعیت | شاهد و اندازه‌گیری |
 |---|---|---|

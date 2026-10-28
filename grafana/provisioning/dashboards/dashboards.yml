@@ -1,3 +1,11 @@
+# =============================================================================
+# @file:         grafana/provisioning/dashboards/dashboards.yml
+# @brief:        Grafana provisioning file that loads dashboards from the repository folder.
+# @details:      Responsibilities: Tell Grafana where dashboard JSON files live and how often to reload them.
+# @dependencies: Grafana >= 9 provisioning, grafana/dashboards/
+# @notes:        None.
+# =============================================================================
+
 # Grafana dashboard provisioning
 # Copy this to /etc/grafana/provisioning/dashboards/
 

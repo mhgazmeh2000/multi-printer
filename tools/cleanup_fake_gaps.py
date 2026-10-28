@@ -1,22 +1,32 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tools/cleanup_fake_gaps.py
+# @brief:        Removes fake historical PRINT_GAP events.
+# @details:      Responsibilities: Find and delete fake gap events from the log table.
+#                Main API: find_fake_gaps(), main()
+#                Side effects: database access
+# @dependencies: stdlib only
+# @notes:        Can be run directly as a script.
+# =============================================================================
+
 """
-پاک‌سازی PRINT_GAPهای تاریخی جعلی (tools/cleanup_fake_gaps.py)
+Cleaning up fake historical PRINT_GAPs (tools/cleanup_fake_gaps.py)
 
-زمینه: نسخه‌های قدیمی‌تر از کامیت ۲۴، بعد از ریبوت واقعی برخی پرینترها الگوی
-«شمارنده→0 سپس بازگشت به مقدار NVRAM» را «چاپ جدید» می‌شمردند و یک رویداد
-تخمینی PRINT_GAP مشبه (معمولاً چندهزار صفحه) ثبت می‌کردند. این رویدادها هیچ
-مصرف واقعی شمارنده ندارند (ممیزی audit_pages آن‌ها را با امضای دقیق تشخیص داد).
+Background: Older versions of commit 24, after actual reboot of some template printers
+"Counter→0 then return to NVRAM value" is counted as "New Print" and an event
+They recorded a similar PRINT_GAP estimate (usually several thousand pages). These events are none
+They don't have real consumption counters (audit_pages audit detected them with exact signature).
 
-امضای GAP جعلی (هر سه شرط):
-  ۱) details.prev_total == 0   (بازه از شمارنده‌ی صفرِ پس‌از‌ریبوت شروع شده)
-  ۲) یک رخداد COUNTER_RESET همان دستگاه در ≤۱۵ دقیقه قبل هست که
-     prev_total‌اش با current_total گپ مطابقت دارد (± تلورانس)
-  ۳) pages گپ == current_total
+Fake GAP signature (all three terms):
+  1) details.prev_total == 0 (the interval starts from the zero counter after the reboot)
+  2) A COUNTER_RESET event is the same device ≤15 minutes ago
+     its prev_total matches the current_total of the chat (± tolerance)
+  3) Chat pages == current_total
 
-حالت‌ها:
-    python tools/cleanup_fake_gaps.py                 # پیش‌نمایش (dry-run) — هیچ تغییری نمی‌دهد
-    python tools/cleanup_fake_gaps.py --apply         # حذف واقعی (با بکاپ خودکار logs.db.bak_<ts>)
+Modes:
+    python tools/cleanup_fake_gaps.py # preview (dry-run) — makes no changes
+    python tools/cleanup_fake_gaps.py --apply # real deletion (with automatic backup of logs.db.bak_<ts>)
     python tools/cleanup_fake_gaps.py --db path/to/logs.db --apply
 """
 import argparse
@@ -27,11 +37,12 @@ import shutil
 import sqlite3
 import sys
 
-WINDOW_MIN = 15      # حداکثر فاصله‌ی ریست تا گپ
+WINDOW_MIN = 15      # The maximum distance between reset and gap
 TOL_ABS, TOL_RATIO = 200, 0.005
 
 
 def _fmt(n):
+    """Format an integer with thousands separators."""
     try:
         return f"{int(n):,}"
     except Exception:
@@ -39,7 +50,7 @@ def _fmt(n):
 
 
 def find_fake_gaps(conn):
-    """لیست سطرهای PRINT_GAPِ با امضای reboot-restore."""
+    """List of PRINT_GAP lines signed by reboot-restore."""
     resets_by_ip = {}
     for ip, ts, det in conn.execute("SELECT printer_ip, timestamp, details FROM logs WHERE type='COUNTER_RESET'"):
         try:
@@ -75,6 +86,8 @@ def find_fake_gaps(conn):
 
 
 def main():
+    """Command-line entry point that removes fake PRINT_GAP events."""
+
     ap = argparse.ArgumentParser(description="پاک‌سازی PRINT_GAPهای جعلی reboot-restore")
     ap.add_argument("--db", default="logs.db")
     ap.add_argument("--apply", action="store_true", help="بدون این پرچم فقط پیش‌نمایش انجام می‌شود")
@@ -112,7 +125,7 @@ def main():
         conn.close()
         return
 
-    # بکاپ اجباری
+    # Compulsory backup
     ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     bak = f"{args.db}.bak_{ts}"
     conn.close()

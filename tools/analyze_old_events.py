@@ -1,36 +1,47 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""تحلیل رویدادهای تاریخی: کدام timestamp چه معنی‌ای دارد؟ — گام E.0.2.
+# =============================================================================
+# @file:         tools/analyze_old_events.py
+# @brief:        Analysis script for historical events: determines what each timestamp means.
+# @details:      Responsibilities: Classify old event timestamps and report the cutover analysis.
+#                Main API: resolve_cutover(), parse_ts(), classify(), analyze(), print_report(),
+#                main()
+#                Side effects: database access, runs external processes, file I/O
+# @dependencies: stdlib only
+# @notes:        Can be run directly as a script.
+# =============================================================================
 
-مسئله (تناقض Z): بند ۴ بخش ۶ سند ``docs/timezone-contract.md`` می‌گفت
-«رشته‌های دارای Z و offsetها دست‌نخورده» — یعنی Z را UTC فرض کن. ولی بخش ۳.۵
-همان سند نشان می‌دهد ردیف‌های ``CARTRIDGE_CHANGED`` نوشته‌شده **پیش از D.6**
-برچسب ``Z`` داشتند و مقدارشان ساعت محلی بود (باگ ۲۱۰ دقیقه‌ای). پس «Z = UTC»
-برای داده‌های تاریخی نادرست است و همین تناقض باید پیش از migration حل شود.
+"""Analysis of historical events: which timestamp means what? — Step E.0.2.
 
-این ابزار **فقط می‌خواند** (اتصال با URI ``mode=ro``) و برای هر ردیف تاریخی
-تعیین می‌کند کدام دسته است:
+Problem (Contradiction Z): Paragraph 4 of Section 6 of the document said ``docs/timezone-contract.md''
+"Strings with Z and offsets intact" — i.e. assume Z is UTC. But section 3.5
+The same document shows that ``CARTRIDGE_CHANGED'' lines were written **before D.6**
+They were labeled ``Z'' and their value was local time (210 minute bug). So "Z = UTC"
+It is incorrect for historical data and this inconsistency must be resolved before migration.
 
-    naive        ⇒ ساعت محلی (Asia/Tehran)
-    Z پیش از cutover ⇒ برچسب جعلی؛ مقدار در واقع ساعت محلی است  ⚠
-    Z پس از cutover  ⇒ UTC واقعی
-    offset دار   ⇒ مبهم (مثلاً +03:30 هم می‌تواند «محلی aware» باشد) ⚠
-    غیرقابل تجزیه ⇒ بازبینی دستی
+This tool is **read only** (connection with URI ``mode=ro'') and for each historical row
+Determines which category is:
 
-«cutover» = لحظه‌ای که نسخه‌ی اصلاح‌شده‌ی D.6 روی همان سرور فعال شد (نه لحظه‌ی
-کامیت). اگر ``--cutover`` داده نشود، ابزار سعی می‌کند تاریخ کامیت ``b548e99`` را
-از git بخواند و صریح هشدار می‌دهد که این فقط یک تقریب است.
+    naive ⇒ local time (Asia/Tehran)
+    Z before cutover ⇒ fake tag; The value is actually local time ⚠
+    Z after cutover ⇒ Actual UTC
+    offset ⇒ ambiguous (for example +03:30 can also be "locally aware") ⚠
+    Unbreakable ⇒ Manual review
 
-اجرا:
+"cutover" = the moment when the modified version of D.6 was activated on the same server (not the moment
+commit). If ``--cutover'' is not given, the tool tries the commit date ``b548e99''
+read from git and explicitly warns that this is only an approximation.
+
+Execution:
 
     python tools/analyze_old_events.py --db logs.db
     python tools/analyze_old_events.py --db logs.db --cutover 2026-10-05T08:00:00+00:00
     python tools/analyze_old_events.py --db logs.db --json report.json
 
-کدهای خروج:
-    0 = همه‌ی ردیف‌ها روشن (تفسیر قطعی)
-    2 = ردیف/دستهٔ نیازمند تصمیم دستی وجود دارد
-    1 = خطای اجرایی (DB خوانده نشد)
+Exit codes:
+    0 = all rows on (definitive interpretation)
+    2 = There is a row/category requiring manual decision
+    1 = executable error (DB not read)
 """
 
 from __future__ import annotations
@@ -44,7 +55,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 
-# جدول‌ها و ستون‌های زمانی که این ابزار خلاصه می‌کند
+# Time tables and columns that this tool summarizes
 TIME_TABLES = {
     "logs": ("timestamp", "type"),
     "security_events": ("timestamp", "event_type"),
@@ -54,10 +65,11 @@ TIME_TABLES = {
 }
 
 _ISO_OFFSET = re.compile(r"[+-]\d{2}:?\d{2}$")
-_D6_COMMIT = "b548e99"  # کامیت اصلاح باگ زمانی موتور کارتریج (فاز D.6)
+_D6_COMMIT = "b548e99"  # Commit to fix the timing bug of the cartridge engine (phase D.6)
 
 
 def _run(cmd: list[str], timeout: int = 10) -> str:
+    """Run a command and return its stdout, or an empty string on error."""
     try:
         out = subprocess.run(cmd, capture_output=True, text=True,
                              timeout=timeout, shell=False, errors="replace")
@@ -67,7 +79,7 @@ def _run(cmd: list[str], timeout: int = 10) -> str:
 
 
 def resolve_cutover(explicit: str) -> tuple[datetime | None, str]:
-    """تعیین لحظهٔ cutover: از CLI، وگرنه تقریبِ زمان کامیت D.6."""
+    """Determining the moment of cutover: from CLI, otherwise approximate commit time D.6."""
     if explicit:
         try:
             return parse_ts(explicit), "--cutover (صریح)"
@@ -83,7 +95,7 @@ def resolve_cutover(explicit: str) -> tuple[datetime | None, str]:
 
 
 def parse_ts(raw: str) -> datetime:
-    """ISO-8601 را به datetime aware (UTC) تبدیل می‌کند؛ Z و offset پشتیبانی می‌شود."""
+    """Converts ISO-8601 to datetime aware (UTC); Z and offset are supported."""
     s = (raw or "").strip()
     if not s:
         raise ValueError("رشتهٔ خالی")
@@ -91,12 +103,12 @@ def parse_ts(raw: str) -> datetime:
         s = s[:-1] + "+00:00"
     dt = datetime.fromisoformat(s)
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)  # naive ⇒ همان‌طور تفسیر می‌شود
+        return dt.replace(tzinfo=timezone.utc)  # naive ⇒ is interpreted as such
     return dt.astimezone(timezone.utc)
 
 
 def classify(raw: str, cutover: datetime | None) -> str:
-    """دستهٔ یک مقدار timestamp؛ فقط با شواهد رشته، بدون DB."""
+    """The handle of a timestamp value; Only with string evidence, no DB."""
     ts = (raw or "").strip()
     if not ts:
         return "empty"
@@ -130,7 +142,7 @@ _MEANING = {
 
 def _table_summary(cur, table: str, ts_col: str, extra_col: str | None,
                    cutover: datetime | None, sample: int) -> dict:
-    """شمارش دسته‌ها برای یک جدول؛ بدون هیچ نوشتن."""
+    """count categories for a table; without any writing."""
     res = {"table": table, "exists": True, "total": 0, "by_class": {},
            "samples": [], "by_extra": {}}
     try:
@@ -170,6 +182,8 @@ def _table_summary(cur, table: str, ts_col: str, extra_col: str | None,
 
 
 def analyze(db_path: str, cutover: datetime | None, sample: int) -> dict:
+    """Analyse historical event timestamps around a cutover time."""
+
     report = {"db": os.path.abspath(db_path), "exists": os.path.exists(db_path),
               "tables": [], "error": ""}
     if not report["exists"]:
@@ -193,6 +207,8 @@ def analyze(db_path: str, cutover: datetime | None, sample: int) -> dict:
 
 
 def print_report(rep: dict, cutover: datetime | None, cutover_src: str) -> int:
+    """Print the event-timestamp analysis report and return an exit code."""
+
     print("=" * 72)
     print("تحلیل رویدادهای تاریخی — فاز E.0.2 (فقط خواندن)")
     print("=" * 72)
@@ -250,6 +266,8 @@ def print_report(rep: dict, cutover: datetime | None, cutover_src: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Command-line entry point of the event-timestamp analysis."""
+
     ap = argparse.ArgumentParser(
         description="تحلیل معنی timestampهای تاریخی (فقط خواندن) — گام E.0.2")
     ap.add_argument("--db", default="logs.db", help="مسیر logs.db")

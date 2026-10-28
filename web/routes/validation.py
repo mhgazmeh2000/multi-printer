@@ -1,4 +1,18 @@
+# =============================================================================
+# @file:         web/routes/validation.py
+# @brief:        API routes that validate counters and OID profiles.
+# @details:      Responsibilities: Run the validators and return their results.
+#                Main API: api_validate_counters(), api_validate_oid_profile()
+#                Side effects: defines HTTP routes
+# @dependencies: internal: core, core.collectors.base, core.oid.scanner, core.oid.validator |
+#                external: flask
+# @notes:        None.
+# =============================================================================
+
+"""Counter and OID profile validation API routes."""
+
 from flask import Blueprint, jsonify
+
 from core import store
 from core.collectors.base import validate_counter_consistency
 from core.oid.scanner import _load_oid_profiles
@@ -9,6 +23,8 @@ bp = Blueprint("validation", __name__)
 
 @bp.route('/api/validate/counters', methods=['GET'])
 def api_validate_counters():
+    """Validate the stored counters of all printers and return the problems found."""
+
     with store.data_lock:
         snap = dict(store.printer_data)
 
@@ -37,6 +53,8 @@ def api_validate_counters():
 
 @bp.route('/api/validate/oids/<ip>', methods=['GET'])
 def api_validate_oid_profile(ip):
+    """Validate the stored OID profile of one printer."""
+
     profiles = _load_oid_profiles()
     if ip not in profiles:
         return jsonify({"error": f"پروفایل {ip} یافت نشد"}), 404

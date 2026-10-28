@@ -1,38 +1,46 @@
+# =============================================================================
+# @file:         monitoring/generator.yml
+# @brief:        Specification of the SNMP exporter metric modules and OID mappings.
+# @details:      Responsibilities: Hold the spec from which monitoring/snmp.yml is built (no OIDs are invented here).
+# @dependencies: tools/build_snmp_yml.py, tools/check_oid_coverage.py, tests/test_generator_yml.py
+# @notes:        monitoring/snmp.yml is generated from this file by tools/build_snmp_yml.py; edit the spec, then regenerate.
+# =============================================================================
+
 #
-# monitoring/generator.yml — مشخصاتِ بسته‌بندی SNMP برای PrintGuard (فاز G)
+# monitoring/generator.yml — SNMP package specification for PrintGuard (phase G)
 #
-# مرجع هر OID: `docs/oid-matrix.md` — که خودش را `tools/build_oid_matrix.py` از **کد**
-# می‌سازد. پس هیچ OIDی در این فایل اختراع نشده و هر سطر `source:` به فایل:خط کد دارد.
+# Reference for each OID: `docs/oid-matrix.md` — which itself is `tools/build_oid_matrix.py` from **code**
+# makes So no OID is invented in this file and each `source:` line has a file: line of code.
 #
-# این فایل «spec» پروژه است، نه ورودیِ باینری `snmp_exporter/generator`:
-#   • کلیدهای get / walk(subtree+metrics) / lookups / ignore_values را ابزار خودمان
-#     مصرف می‌کند (`tools/check_oid_coverage.py`) و `monitoring/snmp.yml` دستی از
-#     همین ردیف‌ها ساخته می‌شود (MIBهای vendor در دسترس نیستند)؛
-#   • نام ماژول‌ها 1:1 با collectorهاست تا مقایسهٔ «exporter در برابر collector»
-#     (tools/compare_snmp_sources.py) سیب-به-سیب بماند؛
-#   • `walk` فقط برای جداول اندیس‌دار: یک PDU به‌جای N درخواست — که کل هدف فاز است
-#     (۱۳۲ بسته/دستگاه/چرخه ⇒ چند بسته).
+# This is the project's "spec" file, not the `snmp_exporter/generator' binary entry:
+#   • The get / walk(subtree+metrics) / lookups / ignore_values keys are our own tools
+#     consumes (`tools/check_oid_coverage.py`) and `monitoring/snmp.yml` manually from
+#     The same rows are created (vendor MIBs are not available);
+#   • The names of the modules are 1:1 with collectors to compare "exporter against collector"
+#     (tools/compare_snmp_sources.py) stay apples-to-apples;
+#   • `walk` for indexed tables only: one PDU instead of N requests — which is the whole purpose of the phase
+#     (132 packages/devices/cycles ⇒ multiple packages).
 #
-# افزودن OID:
-#   ۱) اول کد (core/oid/catalog.py یا collector)   ۲) python tools\build_oid_matrix.py --write
-#   ۳) ردیف اینجا، با همان `source:`              ۴) python tools\check_oid_coverage.py → ۰
+# Add OID:
+#   1) First code (core/oid/catalog.py or collector) 2) python tools\build_oid_matrix.py --write
+#   3) The row here, with the same `source:` 4) python tools\check_oid_coverage.py → 0
 #
-# حذف نشانه‌گذاری‌های فارسی/کامنت‌ها مجاز نیست: گیت، کامنت‌های probe-only را هم می‌سنجد.
+# Removing Farsi markup/comments is not allowed: Git also measures probe-only comments.
 version: 1
 
-# ── v3 در این spec versus snmp.yml (نگاشتِ رسمی، تصمیم G.4.1) ──────────────────
-# این فایل «spec» است و نامِ کلیدهایش را از configِ *generator* می‌گیرد؛ `snmp.yml`
-# اما configِ *runtime* است و `config/config.go` (نسخهٔ pin‌شده 0.26.0) این نام‌ها را
-# می‌خواهد. پس هنگام ساختِ snmp.yml سه نام نگاشت می‌شود (کدِ نگاشت:
-# AUTH_KEY_MAP / AUTH_VALUE_MAP در tools/build_snmp_yml.py):
+# ── v3 in this spec versus snmp.yml (official mapping, decision G.4.1) ────────────────────
+# This file is "spec" and takes the name of its keys from the config of *generator*; `snmp.yml`
+# But config is *runtime* and `config/config.go` (pinned version 0.26.0) has these names
+# wants So, when creating snmp.yml, three names are mapped (mapping code:
+# AUTH_KEY_MAP / AUTH_VALUE_MAP in tools/build_snmp_yml.py):
 #   auth_passphrase  → password
 #   priv_passphrase  → priv_password
-#   priv_protocol: AES128 → AES      (ConfigureSNMP فقط DES/AES/AES192/… را match می‌کند)
-# نامِ متغیرهای محیطی (`SNMP_V3_*`) هیچ‌جا عوض نمی‌شود. عمداً این‌جا را هم مثل runtime
-# نمی‌نویسیم: شکلِ کلیدها باید همان چیزی بماند که اگر روزی `generator` رسمی با MIBهای
-# vendor در دسترس شد، مستقیم بخواندش. سند: docs/snmp-exporter-setup.md §۴.۳ و §۸
+#   priv_protocol: AES128 → AES (ConfigureSNMP only matches DES/AES/AES192/…)
+# The name of the environment variables (`SNMP_V3_*`) is not changed anywhere. Deliberately like runtime here
+# We do not write: the shape of the keys should remain the same as if one day the official ``generator'' with MIBs
+# vendor became available, read it directly. Document: docs/snmp-exporter-setup.md §4.3 and §8
 auths:
-  # نام‌ها با قرارداد فاز G یکی‌اند: printer['exporter_auth'] == f"public_{snmp_version}"
+  # The names are the same as the phase G contract: printer['exporter_auth'] == f"public_{snmp_version}"
   public_v1:
     community: public
     version: 1
@@ -41,7 +49,7 @@ auths:
     version: 2
   secure_v3:
     version: 3
-    # placeholder؛ مقدار واقعی از env خوانده می‌شود و هرگز commit نمی‌شود
+    # place holder The actual value is read from env and never committed
     username: "${SNMP_V3_USERNAME}"
     security_level: authPriv
     auth_protocol: SHA
@@ -51,699 +59,699 @@ auths:
 
 modules:
   # ─────────────────────────────────────────────────────────────────────────
-  # printer_std — استاندارد: prtMIB (RFC 3805) + system — تقریباً همهٔ دستگاه‌ها
-  # 24 OID (ماتریس §۳) · گیت: tools/check_oid_coverage.py
+  # printer_std — standard: prtMIB (RFC 3805) + system — almost all devices
+  # 24 OID (matrix §3) · Git: tools/check_oid_coverage.py
   # ─────────────────────────────────────────────────────────────────────────
   printer_std:
     walk:
-      # جداول اندیس‌دار. `subtree` = طولانی‌ترین پیشوند مشترکِ سطرهایش (گیت می‌سنجد).
+      # Indexed tables. `subtree' = the longest common prefix of its rows (measured by git).
       - name: supplies_table
         subtree: 1.3.6.1.2.1.43.11.1.1
         lookups:
-          # index → description، از ردیفِ همان جدول در ماتریس (بدون OID تازه)
+          # index → description, from the row of the same table in the matrix (without new OID)
           - row_index: 1
             label_oid: 1.3.6.1.2.1.43.11.1.1.6.1.1     # toner_name_1
           - row_index: 2
             label_oid: 1.3.6.1.2.1.43.11.1.1.6.1.2     # toner_name_2
-        metrics:                            # 7 سطرِ ماتریس با یک walk
+        metrics:                            # 7 rows of the matrix with a walk
           - oid: 1.3.6.1.2.1.43.11.1.1.6
             name: standard
-            # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-            source: core/collectors/cartridge_discovery.py:62
+            # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+            source: core/collectors/cartridge_discovery.py:75
           - oid: 1.3.6.1.2.1.43.11.1.1.6.1.1
             name: toner_name_1
             type: DisplayString
-            source: core/oid/catalog.py:28
+            source: core/oid/catalog.py:39
           - oid: 1.3.6.1.2.1.43.11.1.1.6.1.2
             name: toner_name_2
             type: DisplayString
-            source: core/oid/catalog.py:31
+            source: core/oid/catalog.py:42
           - oid: 1.3.6.1.2.1.43.11.1.1.8.1.1
             name: toner_max_1
             type: gauge
-            ignore_values: ["-2", "-3"]   # منطق کد: hp.py:258,260 · brother.py:182-183 (+برادر NC: brother.py:13)
-            source: core/oid/catalog.py:29
+            ignore_values: ["-2", "-3"]   # Code logic: hp.py:271,273 · brother.py:196-197 (+NC brother: brother.py:25)
+            source: core/oid/catalog.py:40
           - oid: 1.3.6.1.2.1.43.11.1.1.8.1.2
             name: toner_max_2
             type: gauge
-            ignore_values: ["-2", "-3"]   # منطق کد: hp.py:258,260 · brother.py:182-183 (+برادر NC: brother.py:13)
-            source: core/oid/catalog.py:32
+            ignore_values: ["-2", "-3"]   # Code logic: hp.py:271,273 · brother.py:196-197 (+NC brother: brother.py:25)
+            source: core/oid/catalog.py:43
           - oid: 1.3.6.1.2.1.43.11.1.1.9.1.1
             name: toner_remain_1
             type: gauge
-            ignore_values: ["-2", "-3"]   # منطق کد: hp.py:258,260 · brother.py:182-183 (+برادر NC: brother.py:13)
-            source: core/oid/catalog.py:30
+            ignore_values: ["-2", "-3"]   # Code logic: hp.py:271,273 · brother.py:196-197 (+NC brother: brother.py:25)
+            source: core/oid/catalog.py:41
           - oid: 1.3.6.1.2.1.43.11.1.1.9.1.2
             name: toner_remain_2
             type: gauge
-            ignore_values: ["-2", "-3"]   # منطق کد: hp.py:258,260 · brother.py:182-183 (+برادر NC: brother.py:13)
-            source: core/oid/catalog.py:33
+            ignore_values: ["-2", "-3"]   # Code logic: hp.py:271,273 · brother.py:196-197 (+NC brother: brother.py:25)
+            source: core/oid/catalog.py:44
       - name: tray_table
         subtree: 1.3.6.1.2.1.43.8.2.1
         lookups:
-          # index → description، از ردیفِ همان جدول در ماتریس (بدون OID تازه)
+          # index → description, from the row of the same table in the matrix (without new OID)
           - row_index: 1
             label_oid: 1.3.6.1.2.1.43.8.2.1.13.1.1     # tray1_name
           - row_index: 2
             label_oid: 1.3.6.1.2.1.43.8.2.1.13.1.2     # tray2_name
-        metrics:                            # 6 سطرِ ماتریس با یک walk
+        metrics:                            # 6 rows of the matrix with a walk
           - oid: 1.3.6.1.2.1.43.8.2.1.9.1.1
             name: tray1_cap
             type: gauge
-            ignore_values: ["-2", "-3"]   # منطق کد: hp.py:258,260 · brother.py:182-183 (+برادر NC: brother.py:13)
-            source: core/oid/catalog.py:35
+            ignore_values: ["-2", "-3"]   # Code logic: hp.py:271,273 · brother.py:196-197 (+NC brother: brother.py:25)
+            source: core/oid/catalog.py:46
           - oid: 1.3.6.1.2.1.43.8.2.1.9.1.2
             name: tray2_cap
             type: gauge
-            ignore_values: ["-2", "-3"]   # منطق کد: hp.py:258,260 · brother.py:182-183 (+برادر NC: brother.py:13)
-            source: core/oid/catalog.py:38
+            ignore_values: ["-2", "-3"]   # Code logic: hp.py:271,273 · brother.py:196-197 (+NC brother: brother.py:25)
+            source: core/oid/catalog.py:49
           - oid: 1.3.6.1.2.1.43.8.2.1.10.1.1
             name: tray1_level
             type: gauge
-            ignore_values: ["-2", "-3"]   # منطق کد: hp.py:258,260 · brother.py:182-183 (+برادر NC: brother.py:13)
-            source: core/oid/catalog.py:36
+            ignore_values: ["-2", "-3"]   # Code logic: hp.py:271,273 · brother.py:196-197 (+NC brother: brother.py:25)
+            source: core/oid/catalog.py:47
           - oid: 1.3.6.1.2.1.43.8.2.1.10.1.2
             name: tray2_level
             type: gauge
-            ignore_values: ["-2", "-3"]   # منطق کد: hp.py:258,260 · brother.py:182-183 (+برادر NC: brother.py:13)
-            source: core/oid/catalog.py:39
+            ignore_values: ["-2", "-3"]   # Code logic: hp.py:271,273 · brother.py:196-197 (+NC brother: brother.py:25)
+            source: core/oid/catalog.py:50
           - oid: 1.3.6.1.2.1.43.8.2.1.13.1.1
             name: tray1_name
             type: DisplayString
-            source: core/oid/catalog.py:34
+            source: core/oid/catalog.py:45
           - oid: 1.3.6.1.2.1.43.8.2.1.13.1.2
             name: tray2_name
             type: DisplayString
-            source: core/oid/catalog.py:37
+            source: core/oid/catalog.py:48
     get:
-      # ثابت‌ها (بدون اندیس) — 11 سطر
+      # Constants (without index) — 11 lines
       - oid: 1.3.6.1.2.1.1.1.0
         name: sys_descr
         type: DisplayString
-        source: core/oid/catalog.py:8
+        source: core/oid/catalog.py:19
       - oid: 1.3.6.1.2.1.1.2.0
         name: sys_object_id
         type: DisplayString
-        source: core/oid/catalog.py:11
+        source: core/oid/catalog.py:22
       - oid: 1.3.6.1.2.1.1.3.0
         name: sys_uptime
         type: gauge
-        source: core/oid/catalog.py:9
+        source: core/oid/catalog.py:20
       - oid: 1.3.6.1.2.1.1.5.0
         name: sys_hostname
         type: DisplayString
-        source: core/oid/catalog.py:10
+        source: core/oid/catalog.py:21
       - oid: 1.3.6.1.2.1.43.5.1.1.16.1
         name: model_mib
         type: DisplayString
-        source: core/oid/catalog.py:24
+        source: core/oid/catalog.py:35
       - oid: 1.3.6.1.2.1.43.5.1.1.17.1
         name: serial_mib
         type: DisplayString
-        source: core/oid/catalog.py:25
+        source: core/oid/catalog.py:36
       - oid: 1.3.6.1.2.1.43.6.1.1.3.1.1
         name: cover_status
         type: gauge
-        source: core/oid/catalog.py:40
+        source: core/oid/catalog.py:51
       - oid: 1.3.6.1.2.1.43.10.2.1.4.1.1
         name: bro_total
         type: counter
-        source: core/oid/catalog.py:90
+        source: core/oid/catalog.py:101
       - oid: 1.3.6.1.2.1.43.10.2.1.4.1.2
         name: bro_color
         type: counter
-        source: core/oid/catalog.py:91
+        source: core/oid/catalog.py:102
       - oid: 1.3.6.1.2.1.43.10.2.1.4.1.3
         name: bw_std
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        source: core/collectors/canon.py:203
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        source: core/collectors/canon.py:218
       - oid: 1.3.6.1.2.1.43.10.2.1.5.1.1
         name: bro_bw
         type: counter
-        source: core/oid/catalog.py:92
-    # ── probe-only: در این فایل **فعال نیست** (مسیر polling این‌ها را نمی‌خواند) ──
-    # 1.3.6.1.2.1.43.11.1.1  ← tools/diagnose_printer.py:27
-    # توجه: این یتیم، خودِ `subtree` جدول supplies بالاست (سطرِ walk در `HP`
-    # و `Brother` هم همین شکل را دارد) ⇒ پوشش داده شده، فقط ردیفِ مستقل نیست.
+        source: core/oid/catalog.py:103
+    # ── probe-only: **not active** in this file (the polling path does not read these) ──
+    # 1.3.6.1.2.1.43.11.1.1  ← tools/diagnose_printer.py:37
+    # Note: This orphan is the `subtree' of the above supplies table (walk line in `HP'
+    # and `Brother' has the same form) ⇒ Covered, not just independent row.
 
   # ─────────────────────────────────────────────────────────────────────────
   # printer_hp — HP — enterprise 11
-  # 14 OID (ماتریس §۳) · گیت: tools/check_oid_coverage.py
+  # 14 OID (matrix §3) · Git: tools/check_oid_coverage.py
   # ─────────────────────────────────────────────────────────────────────────
   printer_hp:
     walk:
-      # جداول اندیس‌دار. `subtree` = طولانی‌ترین پیشوند مشترکِ سطرهایش (گیت می‌سنجد).
+      # Indexed tables. `subtree' = the longest common prefix of its rows (measured by git).
       - name: hp_cartridge_tree
         subtree: 1.3.6.1.4.1.11.2.3.9.4.2.1.1.6
-        metrics:                            # 1 سطرِ ماتریس با یک walk
+        metrics:                            # 1 row of the matrix with a walk
           - oid: 1.3.6.1.4.1.11.2.3.9.4.2.1.1.6
             name: candidate_subtrees_hp
-            # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-            source: core/collectors/cartridge_discovery.py:65
+            # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+            source: core/collectors/cartridge_discovery.py:78
       - name: hp_supplies_columns
         subtree: 1.3.6.1.4.1.11.2.3.9.4.2.1.4
-        metrics:                            # 3 سطرِ ماتریس با یک walk
+        metrics:                            # 3 rows of the matrix with a walk
           - oid: 1.3.6.1.4.1.11.2.3.9.4.2.1.4
             name: candidate_subtrees_hp_2
-            # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-            source: core/collectors/cartridge_discovery.py:66
+            # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+            source: core/collectors/cartridge_discovery.py:79
           - oid: 1.3.6.1.4.1.11.2.3.9.4.2.1.4.1.2.1.5.5.1.1
             name: general_oids
-            # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-            ignore_values: ["-2", "-3"]   # منطق کد: hp.py:258,260 · brother.py:182-183 (+برادر NC: brother.py:13)
-            source: core/enhanced_collector.py:229
+            # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+            ignore_values: ["-2", "-3"]   # Code logic: hp.py:271,273 · brother.py:196-197 (+NC brother: brother.py:25)
+            source: core/enhanced_collector.py:243
           - oid: 1.3.6.1.4.1.11.2.3.9.4.2.1.4.1.2.4.1.2.1.5.5.1.1
             name: hp_npcl_pct_oid
-            # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-            ignore_values: ["-2", "-3"]   # منطق کد: hp.py:258,260 · brother.py:182-183 (+برادر NC: brother.py:13)
-            source: core/enhanced_collector.py:39
+            # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+            ignore_values: ["-2", "-3"]   # Code logic: hp.py:271,273 · brother.py:196-197 (+NC brother: brother.py:25)
+            source: core/enhanced_collector.py:53
     get:
-      # ثابت‌ها (بدون اندیس) — 10 سطر
+      # Constants (without index) — 10 lines
       - oid: 1.3.6.1.4.1.11.2.3.9.1.1.3.1.1.1.1.2.0
         name: hp_model
         type: DisplayString
-        source: core/oid/catalog.py:76
+        source: core/oid/catalog.py:87
       - oid: 1.3.6.1.4.1.11.2.3.9.1.1.3.1.1.1.1.3.0
         name: hp_serial
         type: DisplayString
-        source: core/oid/catalog.py:77
+        source: core/oid/catalog.py:88
       - oid: 1.3.6.1.4.1.11.2.3.9.1.1.3.1.1.1.1.7.0
         name: hp_firmware
         type: DisplayString
-        source: core/oid/catalog.py:78
+        source: core/oid/catalog.py:89
       - oid: 1.3.6.1.4.1.11.2.3.9.1.1.7.0
         name: general_oids_2
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        ignore_values: ["-2", "-3"]   # منطق کد: hp.py:258,260 · brother.py:182-183 (+برادر NC: brother.py:13)
-        source: core/enhanced_collector.py:231
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        ignore_values: ["-2", "-3"]   # Code logic: hp.py:271,273 · brother.py:196-197 (+NC brother: brother.py:25)
+        source: core/enhanced_collector.py:245
       - oid: 1.3.6.1.4.1.11.2.3.9.6.1.1.3.1
         name: hp_scan_color
         type: counter
-        source: core/oid/catalog.py:82
+        source: core/oid/catalog.py:93
       - oid: 1.3.6.1.4.1.11.2.3.9.6.1.1.5.1
         name: hp_print_color
         type: counter
-        source: core/oid/catalog.py:81
+        source: core/oid/catalog.py:92
       - oid: 1.3.6.1.4.1.11.2.3.9.6.1.1.6.1
         name: hp_copy_color
         type: counter
-        source: core/oid/catalog.py:79
+        source: core/oid/catalog.py:90
       - oid: 1.3.6.1.4.1.11.2.3.9.6.1.1.9.1
         name: hp_copy_mono
         type: counter
-        source: core/oid/catalog.py:80
+        source: core/oid/catalog.py:91
       - oid: 1.3.6.1.4.1.11.2.3.9.6.1.1.10.1
         name: hp_scan_mono
         type: counter
-        source: core/oid/catalog.py:83
+        source: core/oid/catalog.py:94
       - oid: 1.3.6.1.4.1.11.2.3.9.6.1.1.11.1
         name: hp_fax
         type: counter
-        source: core/oid/catalog.py:84
+        source: core/oid/catalog.py:95
 
   # ─────────────────────────────────────────────────────────────────────────
-  # printer_canon — Canon — enterprise 1602 (شمارنده‌های LBP/MF)
-  # 16 OID (ماتریس §۳) · گیت: tools/check_oid_coverage.py
+  # printer_canon — Canon — enterprise 1602 (LBP/MF counters)
+  # 16 OID (matrix §3) · Git: tools/check_oid_coverage.py
   # ─────────────────────────────────────────────────────────────────────────
   printer_canon:
     get:
-      # ثابت‌ها (بدون اندیس) — 16 سطر
+      # Constants (without index) — 16 lines
       - oid: 1.3.6.1.4.1.1602.1.1.1.1.0
         name: canon_model
         type: DisplayString
-        source: core/oid/catalog.py:65
+        source: core/oid/catalog.py:76
       - oid: 1.3.6.1.4.1.1602.1.1.1.4.0
         name: canon_firmware
         type: DisplayString
-        source: core/oid/catalog.py:67
+        source: core/oid/catalog.py:78
       - oid: 1.3.6.1.4.1.1602.1.2.1.1.1.1.1
         name: canon_alternate_oids
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        ignore_values: ["-2", "-3"]   # منطق کد: hp.py:258,260 · brother.py:182-183 (+برادر NC: brother.py:13)
-        source: core/enhanced_collector.py:60
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        ignore_values: ["-2", "-3"]   # Code logic: hp.py:271,273 · brother.py:196-197 (+NC brother: brother.py:25)
+        source: core/enhanced_collector.py:74
       - oid: 1.3.6.1.4.1.1602.1.2.1.1.1.2.1
         name: canon_alternate_oids_2
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        ignore_values: ["-2", "-3"]   # منطق کد: hp.py:258,260 · brother.py:182-183 (+برادر NC: brother.py:13)
-        source: core/enhanced_collector.py:61
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        ignore_values: ["-2", "-3"]   # Code logic: hp.py:271,273 · brother.py:196-197 (+NC brother: brother.py:25)
+        source: core/enhanced_collector.py:75
       - oid: 1.3.6.1.4.1.1602.1.2.1.4.0
         name: canon_serial
         type: DisplayString
-        source: core/oid/catalog.py:66
+        source: core/oid/catalog.py:77
       - oid: 1.3.6.1.4.1.1602.1.11.1.1.1.3.1
         name: canon_lbp_total
         type: counter
-        source: core/oid/catalog.py:73
+        source: core/oid/catalog.py:84
       - oid: 1.3.6.1.4.1.1602.1.11.1.1.1.3.3
         name: alt_lbp_total
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        source: core/collectors/canon.py:267
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        source: core/collectors/canon.py:280
       - oid: 1.3.6.1.4.1.1602.1.11.1.1.1.3.4
         name: canon_lbp_color
         type: counter
-        source: core/oid/catalog.py:74
+        source: core/oid/catalog.py:85
       - oid: 1.3.6.1.4.1.1602.1.11.2.1.1.3.1
         name: canon_total
         type: counter
-        source: core/oid/catalog.py:68
+        source: core/oid/catalog.py:79
       - oid: 1.3.6.1.4.1.1602.1.11.2.1.1.3.6
         name: canon_copy
         type: counter
-        source: core/oid/catalog.py:70
+        source: core/oid/catalog.py:81
       - oid: 1.3.6.1.4.1.1602.1.11.2.1.1.3.9
         name: canon_print
         type: counter
-        source: core/oid/catalog.py:71
+        source: core/oid/catalog.py:82
       - oid: 1.3.6.1.4.1.1602.1.11.2.1.1.3.12
         name: canon_scan
         type: counter
-        source: core/oid/catalog.py:72
+        source: core/oid/catalog.py:83
       - oid: 1.3.6.1.4.1.1602.1.11.2.2.1.3.1
         name: alt_total
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        source: core/collectors/canon.py:216
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        source: core/collectors/canon.py:231
       - oid: 1.3.6.1.4.1.1602.1.11.2.2.1.3.6
         name: alt_copy
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        source: core/collectors/canon.py:217
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        source: core/collectors/canon.py:232
       - oid: 1.3.6.1.4.1.1602.1.11.2.2.1.3.9
         name: alt_print
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        source: core/collectors/canon.py:218
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        source: core/collectors/canon.py:233
       - oid: 1.3.6.1.4.1.1602.1.11.2.2.1.3.12
         name: alt_scan
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        source: core/collectors/canon.py:219
-    # future: 1.3.6.1.4.1.1602.1.2.1 (device subtree) — اگر collector نیاز داشت،
-    # یک walk جای دو getِ `canon_alternate_*` را می‌گیرد. فعلاً فقط کامنت (تصمیم فاز G)
-    # و در ماتریس هم ردیف مستقلی نیست، چون کد این پایه را به‌تنهایی نمی‌خواند.
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        source: core/collectors/canon.py:234
+    # future: 1.3.6.1.4.1.1602.1.2.1 (device subtree) — if the collector needs it,
+    # A walk takes the place of two `canon_alternate_*' get. For now, only comments (decision of phase G)
+    # And there is no independent row in the matrix either, because the code does not read this base alone.
 
   # ─────────────────────────────────────────────────────────────────────────
   # printer_brother — Brother — enterprise 2435
-  # 9 OID (ماتریس §۳) · گیت: tools/check_oid_coverage.py
+  # 9 OID (matrix §3) · Git: tools/check_oid_coverage.py
   # ─────────────────────────────────────────────────────────────────────────
   printer_brother:
     walk:
-      # جداول اندیس‌دار. `subtree` = طولانی‌ترین پیشوند مشترکِ سطرهایش (گیت می‌سنجد).
+      # Indexed tables. `subtree' = the longest common prefix of its rows (measured by git).
       - name: bro_cartridge_tree
         subtree: 1.3.6.1.4.1.2435.2.3.9.4.2.1
-        metrics:                            # 5 سطرِ ماتریس با یک walk
+        metrics:                            # 5 rows of the matrix with a walk
           - oid: 1.3.6.1.4.1.2435.2.3.9.4.2.1.1.6
             name: candidate_subtrees_brother
-            # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-            source: core/collectors/cartridge_discovery.py:69
+            # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+            source: core/collectors/cartridge_discovery.py:82
           - oid: 1.3.6.1.4.1.2435.2.3.9.4.2.1.5
             name: candidate_subtrees_brother_2
-            # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-            source: core/collectors/cartridge_discovery.py:70
+            # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+            source: core/collectors/cartridge_discovery.py:83
           - oid: 1.3.6.1.4.1.2435.2.3.9.4.2.1.5.1.1.6.0
             name: val_val
-            # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-            source: core/collectors/cartridge_id.py:305
+            # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+            source: core/collectors/cartridge_id.py:317
           - oid: 1.3.6.1.4.1.2435.2.3.9.4.2.1.5.5.1.1
             name: brother_black
-            # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-            ignore_values: ["-2", "-3"]   # منطق کد: hp.py:258,260 · brother.py:182-183 (+برادر NC: brother.py:13)
-            source: core/collectors/brother.py:169
+            # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+            ignore_values: ["-2", "-3"]   # Code logic: hp.py:271,273 · brother.py:196-197 (+NC brother: brother.py:25)
+            source: core/collectors/brother.py:185
           - oid: 1.3.6.1.4.1.2435.2.3.9.4.2.1.5.5.1.2
             name: brother_drum_oid
-            # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-            ignore_values: ["-2", "-3"]   # منطق کد: hp.py:258,260 · brother.py:182-183 (+برادر NC: brother.py:13)
-            source: core/enhanced_collector.py:66
+            # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+            ignore_values: ["-2", "-3"]   # Code logic: hp.py:271,273 · brother.py:196-197 (+NC brother: brother.py:25)
+            source: core/enhanced_collector.py:80
     get:
-      # ثابت‌ها (بدون اندیس) — 4 سطر
+      # Constants (without index) — 4 lines
       - oid: 1.3.6.1.4.1.2435.2.3.9.1.1.1.1.3.0
         name: bro_firmware_alt
         type: DisplayString
-        source: core/oid/catalog.py:89
+        source: core/oid/catalog.py:100
       - oid: 1.3.6.1.4.1.2435.2.4.3.99.3.1.6.1.2.1
         name: bro_model
         type: DisplayString
-        source: core/oid/catalog.py:86
+        source: core/oid/catalog.py:97
       - oid: 1.3.6.1.4.1.2435.2.4.3.99.3.1.6.1.2.3
         name: bro_serial
         type: DisplayString
-        source: core/oid/catalog.py:87
+        source: core/oid/catalog.py:98
       - oid: 1.3.6.1.4.1.2435.2.4.3.1240.6.5.0
         name: bro_firmware
         type: DisplayString
-        source: core/oid/catalog.py:88
-    # ── probe-only: در این فایل **فعال نیست** (مسیر polling این‌ها را نمی‌خواند) ──
-    # 1.3.6.1.4.1.2435.2.3.9.1.1.3.1.1.1.1.2.0  ← web/routes/discover.py:45
-    # 1.3.6.1.4.1.2435.2.3.9.4.2.1.5.4.5.10.0  ← tools/diagnose_printer.py:112
-    # 1.3.6.1.4.1.2435.2.3.9.4.2.1.5.4.5.11.0  ← tools/diagnose_printer.py:113
-    # 1.3.6.1.4.1.2435.2.3.9.4.2.1.5.4.5.12.0  ← tools/diagnose_printer.py:114
-    # 1.3.6.1.4.1.2435.2.3.9.4.2.1.5.4.5.13.0  ← tools/diagnose_printer.py:115
-    # 1.3.6.1.4.1.2435.2.3.9.4.2.1.5.4.5.14.0  ← tools/diagnose_printer.py:116
-    # 1.3.6.1.4.1.2435.2.3.9.4.2.1.5.5.8.0  ← tools/diagnose_printer.py:110
-    # 1.3.6.1.4.1.2435.2.3.9.4.2.1.5.5.10.0  ← tools/diagnose_printer.py:111
-    # ۷ کاندیدای brInfo/brToner در tools/diagnose_printer.py:110-116 و
-    # web/routes/discover.py:45 «امتحان‌شدنی»‌اند؛ کامنتِ خودِ کد: «هرکدام پاسخ
-    # بدهد نگاشت دقیقش را در کالکتور می‌گذاریم». وقتی به کاتالوگ رسیدند،
-    # ماتریس خودکار آن‌ها را می‌گیرد و گیت، افزودن اینجا را یادآوری می‌کند.
+        source: core/oid/catalog.py:99
+    # ── probe-only: **not active** in this file (the polling path does not read these) ──
+    # 1.3.6.1.4.1.2435.2.3.9.1.1.3.1.1.1.1.2.0  ← web/routes/discover.py:59
+    # 1.3.6.1.4.1.2435.2.3.9.4.2.1.5.4.5.10.0  ← tools/diagnose_printer.py:124
+    # 1.3.6.1.4.1.2435.2.3.9.4.2.1.5.4.5.11.0  ← tools/diagnose_printer.py:125
+    # 1.3.6.1.4.1.2435.2.3.9.4.2.1.5.4.5.12.0  ← tools/diagnose_printer.py:126
+    # 1.3.6.1.4.1.2435.2.3.9.4.2.1.5.4.5.13.0  ← tools/diagnose_printer.py:127
+    # 1.3.6.1.4.1.2435.2.3.9.4.2.1.5.4.5.14.0  ← tools/diagnose_printer.py:128
+    # 1.3.6.1.4.1.2435.2.3.9.4.2.1.5.5.8.0  ← tools/diagnose_printer.py:122
+    # 1.3.6.1.4.1.2435.2.3.9.4.2.1.5.5.10.0  ← tools/diagnose_printer.py:123
+    # 7 brInfo/brToner candidates in tools/diagnose_printer.py:122-128 and
+    # web/routes/discover.py:59 are "testable"; Code's own comment: "Each answer
+    # We will put the exact map in the collector. When they got to the catalog,
+    # Automatrix will take them and Git will remind you to add them here.
 
   # ─────────────────────────────────────────────────────────────────────────
-  # printer_toshiba — Toshiba/e-Studio — enterprise 1129 (نقشهٔ کامل core/snmp/oid_map.py)
-  # 63 OID (ماتریس §۳) · گیت: tools/check_oid_coverage.py
+  # printer_toshiba — Toshiba/e-Studio — enterprise 1129 (full map core/snmp/oid_map.py)
+  # 63 OID (matrix §3) · Git: tools/check_oid_coverage.py
   # ─────────────────────────────────────────────────────────────────────────
   printer_toshiba:
     walk:
-      # جداول اندیس‌دار. `subtree` = طولانی‌ترین پیشوند مشترکِ سطرهایش (گیت می‌سنجد).
+      # Indexed tables. `subtree' = the longest common prefix of its rows (measured by git).
       - name: tsh_tray_table
         subtree: 1.3.6.1.4.1.1129.2.3.50.1.3.5.1.1
-        metrics:                            # 12 سطرِ ماتریس با یک walk
+        metrics:                            # 12 rows of matrix with one walk
           - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.5.1.1.3.1.1
             name: tray1_status
-            # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-            source: core/snmp/oid_map.py:57
+            # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+            source: core/snmp/oid_map.py:67
           - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.5.1.1.3.1.2
             name: tray2_status
-            # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-            source: core/snmp/oid_map.py:58
+            # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+            source: core/snmp/oid_map.py:68
           - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.5.1.1.3.1.3
             name: tray3_status
-            # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-            source: core/snmp/oid_map.py:59
+            # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+            source: core/snmp/oid_map.py:69
           - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.5.1.1.3.1.6
             name: tray6_status
-            # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-            source: core/snmp/oid_map.py:60
+            # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+            source: core/snmp/oid_map.py:70
           - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.5.1.1.4.1.1
             name: tsh_t1_size
             type: gauge
-            source: core/oid/catalog.py:58
+            source: core/oid/catalog.py:69
           - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.5.1.1.4.1.2
             name: tsh_t2_size
             type: gauge
-            source: core/oid/catalog.py:59
+            source: core/oid/catalog.py:70
           - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.5.1.1.4.1.3
             name: tray3_size
-            # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-            source: core/snmp/oid_map.py:55
+            # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+            source: core/snmp/oid_map.py:65
           - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.5.1.1.4.1.6
             name: tray6_size
-            # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-            source: core/snmp/oid_map.py:56
+            # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+            source: core/snmp/oid_map.py:66
           - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.5.1.1.5.1.1
             name: tsh_t1_level
             type: gauge
-            ignore_values: ["-2", "-3"]   # منطق کد: hp.py:258,260 · brother.py:182-183 (+برادر NC: brother.py:13)
-            source: core/oid/catalog.py:56
+            ignore_values: ["-2", "-3"]   # Code logic: hp.py:271,273 · brother.py:196-197 (+NC brother: brother.py:25)
+            source: core/oid/catalog.py:67
           - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.5.1.1.5.1.2
             name: tsh_t2_level
             type: gauge
-            ignore_values: ["-2", "-3"]   # منطق کد: hp.py:258,260 · brother.py:182-183 (+برادر NC: brother.py:13)
-            source: core/oid/catalog.py:57
+            ignore_values: ["-2", "-3"]   # Code logic: hp.py:271,273 · brother.py:196-197 (+NC brother: brother.py:25)
+            source: core/oid/catalog.py:68
           - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.5.1.1.5.1.3
             name: tray3_level
-            # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-            ignore_values: ["-2", "-3"]   # منطق کد: hp.py:258,260 · brother.py:182-183 (+برادر NC: brother.py:13)
-            source: core/snmp/oid_map.py:51
+            # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+            ignore_values: ["-2", "-3"]   # Code logic: hp.py:271,273 · brother.py:196-197 (+NC brother: brother.py:25)
+            source: core/snmp/oid_map.py:61
           - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.5.1.1.5.1.6
             name: tray6_level
-            # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-            ignore_values: ["-2", "-3"]   # منطق کد: hp.py:258,260 · brother.py:182-183 (+برادر NC: brother.py:13)
-            source: core/snmp/oid_map.py:52
+            # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+            ignore_values: ["-2", "-3"]   # Code logic: hp.py:271,273 · brother.py:196-197 (+NC brother: brother.py:25)
+            source: core/snmp/oid_map.py:62
       - name: tsh_supply_status_table
         subtree: 1.3.6.1.4.1.1129.2.3.50.1.3.21.8.1.3.1
-        metrics:                            # 4 سطرِ ماتریس با یک walk
+        metrics:                            # 4 rows of the matrix with a walk
           - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.8.1.3.1.1
             name: tsh_cyan_st
             type: gauge
-            ignore_values: ["-2", "-3"]   # منطق کد: hp.py:258,260 · brother.py:182-183 (+برادر NC: brother.py:13)
-            source: core/oid/catalog.py:60
+            ignore_values: ["-2", "-3"]   # Code logic: hp.py:271,273 · brother.py:196-197 (+NC brother: brother.py:25)
+            source: core/oid/catalog.py:71
           - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.8.1.3.1.2
             name: tsh_mag_st
             type: gauge
-            ignore_values: ["-2", "-3"]   # منطق کد: hp.py:258,260 · brother.py:182-183 (+برادر NC: brother.py:13)
-            source: core/oid/catalog.py:61
+            ignore_values: ["-2", "-3"]   # Code logic: hp.py:271,273 · brother.py:196-197 (+NC brother: brother.py:25)
+            source: core/oid/catalog.py:72
           - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.8.1.3.1.3
             name: tsh_yel_st
             type: gauge
-            ignore_values: ["-2", "-3"]   # منطق کد: hp.py:258,260 · brother.py:182-183 (+برادر NC: brother.py:13)
-            source: core/oid/catalog.py:62
+            ignore_values: ["-2", "-3"]   # Code logic: hp.py:271,273 · brother.py:196-197 (+NC brother: brother.py:25)
+            source: core/oid/catalog.py:73
           - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.8.1.3.1.4
             name: tsh_blk_st
             type: gauge
-            ignore_values: ["-2", "-3"]   # منطق کد: hp.py:258,260 · brother.py:182-183 (+برادر NC: brother.py:13)
-            source: core/oid/catalog.py:63
+            ignore_values: ["-2", "-3"]   # Code logic: hp.py:271,273 · brother.py:196-197 (+NC brother: brother.py:25)
+            source: core/oid/catalog.py:74
     get:
-      # ثابت‌ها (بدون اندیس) — 47 سطر
+      # Constants (without index) — 47 lines
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.2.3.1.3.1.1
         name: tsh_model
         type: DisplayString
-        source: core/oid/catalog.py:42
+        source: core/oid/catalog.py:53
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.2.3.1.4.1.1
         name: tsh_firmware
         type: DisplayString
-        source: core/oid/catalog.py:44
+        source: core/oid/catalog.py:55
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.2.3.1.11.1.1
         name: uptime
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        source: core/snmp/oid_map.py:11
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        source: core/snmp/oid_map.py:21
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.2.4.1.8.1.1
         name: tsh_serial
         type: DisplayString
-        source: core/oid/catalog.py:43
+        source: core/oid/catalog.py:54
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.15.2.1.7.1.1
         name: alert1_code
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        source: core/snmp/oid_map.py:72
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        source: core/snmp/oid_map.py:82
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.15.2.1.7.1.2
         name: alert2_code
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        source: core/snmp/oid_map.py:73
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        source: core/snmp/oid_map.py:83
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.15.2.1.7.1.3
         name: alert3_code
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        source: core/snmp/oid_map.py:74
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        source: core/snmp/oid_map.py:84
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.15.2.1.8.1.1
         name: alert1_msg
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        source: core/snmp/oid_map.py:69
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        source: core/snmp/oid_map.py:79
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.15.2.1.8.1.2
         name: alert2_msg
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        source: core/snmp/oid_map.py:70
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        source: core/snmp/oid_map.py:80
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.15.2.1.8.1.3
         name: alert3_msg
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        source: core/snmp/oid_map.py:71
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        source: core/snmp/oid_map.py:81
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.2.1.1
         name: tsh_color
         type: counter
-        source: core/oid/catalog.py:46
+        source: core/oid/catalog.py:57
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.2.1.2
         name: tsh_twin
         type: counter
-        source: core/oid/catalog.py:52
+        source: core/oid/catalog.py:63
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.2.1.3
         name: tsh_bw
         type: counter
-        source: core/oid/catalog.py:47
+        source: core/oid/catalog.py:58
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.2.1.4
         name: tsh_total
         type: counter
-        source: core/oid/catalog.py:45
+        source: core/oid/catalog.py:56
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.3.1.1
         name: tsh_print_fc
         type: counter
-        source: core/oid/catalog.py:50
+        source: core/oid/catalog.py:61
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.3.1.3
         name: tsh_print_bw
         type: counter
-        source: core/oid/catalog.py:51
+        source: core/oid/catalog.py:62
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.4.1.1
         name: tsh_copy_fc
         type: counter
-        source: core/oid/catalog.py:48
+        source: core/oid/catalog.py:59
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.4.1.3
         name: tsh_copy_bw
         type: counter
-        source: core/oid/catalog.py:49
+        source: core/oid/catalog.py:60
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.7.1.4
         name: tsh_fax
         type: counter
-        source: core/oid/catalog.py:53
+        source: core/oid/catalog.py:64
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.8.1.1
         name: scan_net_fc
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        source: core/snmp/oid_map.py:47
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        source: core/snmp/oid_map.py:57
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.8.1.3
         name: scan_net_bw
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        source: core/snmp/oid_map.py:48
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        source: core/snmp/oid_map.py:58
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.9.1.1
         name: tsh_scan_fc
         type: counter
-        source: core/oid/catalog.py:54
+        source: core/oid/catalog.py:65
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.9.1.3
         name: tsh_scan_bw
         type: counter
-        source: core/oid/catalog.py:55
+        source: core/oid/catalog.py:66
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.11.1.4
         name: print_list
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        source: core/snmp/oid_map.py:21
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        source: core/snmp/oid_map.py:31
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.207.1.1
         name: oids_a3_fc
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        source: core/snmp/oid_map.py:34
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        source: core/snmp/oid_map.py:44
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.207.1.3
         name: oids_a3_bw
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        source: core/snmp/oid_map.py:35
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        source: core/snmp/oid_map.py:45
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.207.1.4
         name: a3_total
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        source: core/snmp/oid_map.py:33
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        source: core/snmp/oid_map.py:43
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.208.1.1
         name: oids_a4_fc
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        source: core/snmp/oid_map.py:31
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        source: core/snmp/oid_map.py:41
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.208.1.3
         name: oids_a4_bw
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        source: core/snmp/oid_map.py:32
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        source: core/snmp/oid_map.py:42
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.208.1.4
         name: a4_total
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        source: core/snmp/oid_map.py:30
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        source: core/snmp/oid_map.py:40
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.209.1.1
         name: a4r_fc
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        source: core/snmp/oid_map.py:37
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        source: core/snmp/oid_map.py:47
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.209.1.3
         name: a4r_bw
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        source: core/snmp/oid_map.py:38
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        source: core/snmp/oid_map.py:48
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.209.1.4
         name: a4r_total
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        source: core/snmp/oid_map.py:36
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        source: core/snmp/oid_map.py:46
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.210.1.1
         name: oids_a5_fc
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        source: core/snmp/oid_map.py:40
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        source: core/snmp/oid_map.py:50
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.210.1.3
         name: oids_a5_bw
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        source: core/snmp/oid_map.py:41
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        source: core/snmp/oid_map.py:51
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.210.1.4
         name: a5_total
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        source: core/snmp/oid_map.py:39
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        source: core/snmp/oid_map.py:49
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.227.1.1
         name: oids_b4_fc
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        source: core/snmp/oid_map.py:43
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        source: core/snmp/oid_map.py:53
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.227.1.3
         name: oids_b4_bw
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        source: core/snmp/oid_map.py:44
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        source: core/snmp/oid_map.py:54
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.227.1.4
         name: b4_total
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        source: core/snmp/oid_map.py:42
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        source: core/snmp/oid_map.py:52
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.8.1.2.1.1
         name: toner_cyan_usage
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        ignore_values: ["-2", "-3"]   # منطق کد: hp.py:258,260 · brother.py:182-183 (+برادر NC: brother.py:13)
-        source: core/snmp/oid_map.py:61
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        ignore_values: ["-2", "-3"]   # Code logic: hp.py:271,273 · brother.py:196-197 (+NC brother: brother.py:25)
+        source: core/snmp/oid_map.py:71
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.8.1.2.1.2
         name: toner_magenta_usage
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        ignore_values: ["-2", "-3"]   # منطق کد: hp.py:258,260 · brother.py:182-183 (+برادر NC: brother.py:13)
-        source: core/snmp/oid_map.py:62
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        ignore_values: ["-2", "-3"]   # Code logic: hp.py:271,273 · brother.py:196-197 (+NC brother: brother.py:25)
+        source: core/snmp/oid_map.py:72
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.8.1.2.1.3
         name: toner_yellow_usage
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        ignore_values: ["-2", "-3"]   # منطق کد: hp.py:258,260 · brother.py:182-183 (+برادر NC: brother.py:13)
-        source: core/snmp/oid_map.py:63
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        ignore_values: ["-2", "-3"]   # Code logic: hp.py:271,273 · brother.py:196-197 (+NC brother: brother.py:25)
+        source: core/snmp/oid_map.py:73
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.8.1.2.1.4
         name: toner_black_usage
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        ignore_values: ["-2", "-3"]   # منطق کد: hp.py:258,260 · brother.py:182-183 (+برادر NC: brother.py:13)
-        source: core/snmp/oid_map.py:64
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        ignore_values: ["-2", "-3"]   # Code logic: hp.py:271,273 · brother.py:196-197 (+NC brother: brother.py:25)
+        source: core/snmp/oid_map.py:74
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.8.1.5.1.1
         name: toner_magenta_status
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        ignore_values: ["-2", "-3"]   # منطق کد: hp.py:258,260 · brother.py:182-183 (+برادر NC: brother.py:13)
-        source: core/snmp/oid_map.py:65
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        ignore_values: ["-2", "-3"]   # Code logic: hp.py:271,273 · brother.py:196-197 (+NC brother: brother.py:25)
+        source: core/snmp/oid_map.py:75
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.8.1.5.1.2
         name: toner_cyan_status
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        ignore_values: ["-2", "-3"]   # منطق کد: hp.py:258,260 · brother.py:182-183 (+برادر NC: brother.py:13)
-        source: core/snmp/oid_map.py:66
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        ignore_values: ["-2", "-3"]   # Code logic: hp.py:271,273 · brother.py:196-197 (+NC brother: brother.py:25)
+        source: core/snmp/oid_map.py:76
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.8.1.5.1.3
         name: toner_yellow_status
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        ignore_values: ["-2", "-3"]   # منطق کد: hp.py:258,260 · brother.py:182-183 (+برادر NC: brother.py:13)
-        source: core/snmp/oid_map.py:67
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        ignore_values: ["-2", "-3"]   # Code logic: hp.py:271,273 · brother.py:196-197 (+NC brother: brother.py:25)
+        source: core/snmp/oid_map.py:77
       - oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.8.1.5.1.4
         name: toner_black_status
-        # type: در کد ثبت نشده — در snmp.yml از parserِ همان collector گرفته می‌شود
-        ignore_values: ["-2", "-3"]   # منطق کد: hp.py:258,260 · brother.py:182-183 (+برادر NC: brother.py:13)
-        source: core/snmp/oid_map.py:68
-    # ── probe-only: در این فایل **فعال نیست** (مسیر polling این‌ها را نمی‌خواند) ──
-    # 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1  ← tools/diagnose_printer.py:285
-    # پایهٔ walk برای کاوش ردیف‌های toner؛ در polling مصرف‌کننده ندارد.
+        # type: not registered in the code — in snmp.yml it is taken from the parser of the same collector
+        ignore_values: ["-2", "-3"]   # Code logic: hp.py:271,273 · brother.py:196-197 (+NC brother: brother.py:25)
+        source: core/snmp/oid_map.py:78
+    # ── probe-only: **not active** in this file (the polling path does not read these) ──
+    # 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1  ← tools/diagnose_printer.py:299
+    # walk base for exploring toner rows; There is no user polling.
 
   # ─────────────────────────────────────────────────────────────────────────
-  # sensor_ecs100g — سنسور دما/رطوبت ECS100G — enterprise 47206
-  # 10 OID (ماتریس §۳) · گیت: tools/check_oid_coverage.py
+  # sensor_ecs100g — temperature/humidity sensor ECS100G — enterprise 47206
+  # 10 OID (matrix §3) · Git: tools/check_oid_coverage.py
   # ─────────────────────────────────────────────────────────────────────────
   sensor_ecs100g:
     get:
-      # ثابت‌ها (بدون اندیس) — 10 سطر
+      # Constants (without index) — 10 lines
       - oid: 1.3.6.1.4.1.47206.1.0
         name: sensor_model
         type: DisplayString
-        source: core/oid/catalog.py:13
+        source: core/oid/catalog.py:24
       - oid: 1.3.6.1.4.1.47206.2.0
         name: sensor_serial
         type: DisplayString
-        source: core/oid/catalog.py:14
+        source: core/oid/catalog.py:25
       - oid: 1.3.6.1.4.1.47206.110.1.1.0
         name: sensor_temp1_st
         type: gauge
-        source: core/oid/catalog.py:16
+        source: core/oid/catalog.py:27
       - oid: 1.3.6.1.4.1.47206.110.1.2.0
         name: sensor_temp1
         type: gauge
-        source: core/oid/catalog.py:15
+        source: core/oid/catalog.py:26
       - oid: 1.3.6.1.4.1.47206.110.2.1.0
         name: sensor_temp2_st
         type: gauge
-        source: core/oid/catalog.py:18
+        source: core/oid/catalog.py:29
       - oid: 1.3.6.1.4.1.47206.110.2.2.0
         name: sensor_temp2
         type: gauge
-        source: core/oid/catalog.py:17
+        source: core/oid/catalog.py:28
       - oid: 1.3.6.1.4.1.47206.111.1.1.0
         name: sensor_hum1_st
         type: gauge
-        source: core/oid/catalog.py:20
+        source: core/oid/catalog.py:31
       - oid: 1.3.6.1.4.1.47206.111.1.2.0
         name: sensor_hum1
         type: gauge
-        source: core/oid/catalog.py:19
+        source: core/oid/catalog.py:30
       - oid: 1.3.6.1.4.1.47206.111.2.1.0
         name: sensor_hum2_st
         type: gauge
-        source: core/oid/catalog.py:22
+        source: core/oid/catalog.py:33
       - oid: 1.3.6.1.4.1.47206.111.2.2.0
         name: sensor_hum2
         type: gauge
-        source: core/oid/catalog.py:21
+        source: core/oid/catalog.py:32
 
 # ───────────────────────────────────────────────────────────────────────────────
-# یادداشت‌های طراحی که در کد «سابقه» دارند ولی هنوز OID نشده‌اند:
-#   • printer_canon: # future: 1.3.6.1.4.1.1602.1.2.1 (device subtree) — اگر collector
-#     نیاز داشت، یک walk جای ۲ تا get را می‌گیرد. فعلاً فقط کامنت (تصمیم فاز G).
-#   • sensor_ecs100g: پایه‌های `1.3.6.1.4.1.47206.110` و `.111` در
-#     core/collectors/sensor.py:55-57 به‌صورت f-string با متغیر حلقه ساخته می‌شوند
-#     (`110.{port}.2.0`) ⇒ در ماتریس «OID ثابت» شمرده نمی‌شوند؛ اگر walk شود، ۸ get
-#     به ۲ درخواست کاهش می‌یابد — تصمیمش با گام snmp.yml، چون اول باید کد بخواندش.
-# Generated-from: docs/oid-matrix.md · 136 OID یکتا
-# این فایل 136 سطرِ ماتریس را پوشش می‌دهد.
+# Design notes that have a "history" in the code but have not yet been OIDed:
+#   • printer_canon: # future: 1.3.6.1.4.1.1602.1.2.1 (device subtree) — if collector
+#     needed, a walk takes the place of 2 get. Only comments for now (decision phase G).
+#   • sensor_ecs100g: bases `1.3.6.1.4.1.47206.110` and `.111` in
+#     core/collectors/sensor.py:70-71 are made as f-string with loop variable
+#     (`110.{port}.2.0`) ⇒ are not counted in the "fixed OID" matrix; If walk, 8 get
+#     It reduces to 2 requests - it is decided by the snmp.yml step, because the code has to read it first.
+# Generated-from: docs/oid-matrix.md · 136 unique OIDs
+# This file covers 136 rows of the matrix.

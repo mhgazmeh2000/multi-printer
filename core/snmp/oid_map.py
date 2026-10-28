@@ -1,5 +1,15 @@
+# =============================================================================
+# @file:         core/snmp/oid_map.py
+# @brief:        Map of Toshiba e-STUDIO proprietary OIDs.
+# @details:      Responsibilities: Provide the constant OID table used by the Toshiba collector.
+#                Main API: none (no public functions or classes)
+#                Side effects: none at import time
+# @dependencies: stdlib only
+# @notes:        None.
+# =============================================================================
+
 """
-نقشه OIDهای اختصاصی Toshiba e-STUDIO
+Toshiba e-STUDIO proprietary OIDs map
 """
 
 OID_BASE = "1.3.6.1.4.1.1129.2.3.50"
@@ -19,14 +29,14 @@ OIDS = {
     "print_twin":          f"{OID_BASE}.1.3.21.6.1.2.1.2",
     "print_fax":           f"{OID_BASE}.1.3.21.6.1.7.1.4",
     "print_list":          f"{OID_BASE}.1.3.21.6.1.11.1.4",
-    # ─── شمارنده‌های سایز کاغذ Toshiba ───────────────────────────────────
-    # هشدار: این OIDها به نام‌های کاغذ نیستند! معنی واقعی:
-    # branch 207 (a3_*): کل چاپ روی کاغذ بزرگ (ALL large paper: A3+B4+...)
-    # branch 208 (a4_*): کل چاپ روی کاغذ کوچک (ALL small paper: A4+A4R+A5+...)
-    # branch 209 (a4r_*): زیر-شمارنده Printer job روی کاغذ بزرگ
-    # branch 210 (a5_*): زیر-شمارنده Printer job روی کاغذ کوچک
-    # branch 227 (b4_*): زیر-شمارنده ناشناخته (در total_raw محاسبه نشود)
-    # رابطه: a4_total + a3_total == print_total (تأیید شده)
+    # Toshiba paper size counters
+    # Warning: These OIDs are not paper names! Real meaning:
+    # branch 207 (a3_*): ALL large paper: A3+B4+...)
+    # branch 208 (a4_*): all printing on small paper (ALL small paper: A4+A4R+A5+...)
+    # branch 209 (a4r_*): Printer job sub-counter on large paper
+    # branch 210 (a5_*): Printer job sub-counter on small paper
+    # branch 227 (b4_*): unknown sub-counter (do not count in total_raw)
+    # Relationship: a4_total + a3_total == print_total (confirmed)
     "a4_total":            f"{OID_BASE}.1.3.21.6.1.208.1.4",  # ALL small paper
     "a4_fc":               f"{OID_BASE}.1.3.21.6.1.208.1.1",
     "a4_bw":               f"{OID_BASE}.1.3.21.6.1.208.1.3",
@@ -81,4 +91,3 @@ PAPER_SIZE_MAP = {
 }
 
 TONER_STATUS = {3:"ok", 4:"ok", 5:"low", 6:"low", 7:"critical", 8:"empty", 9:"critical"}
-TONER_LEVEL  = {3:85,   4:70,   5:30,   6:20,   7:10,          8:0,      9:5}

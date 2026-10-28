@@ -1,24 +1,34 @@
 # -*- coding: utf-8 -*-
-"""
-تستِ `_hp_toner_key` (TD-016 — رفعِ باگِ تطبیقِ زیررشته در مسیرِ SNMPِ HP).
+# =============================================================================
+# @file:         tests/test_hp_toner_key.py
+# @brief:        Tests for the HP toner-key matching rule (TD-016).
+# @details:      Responsibilities: Verify word-boundary colour matching and mirror consistency.
+#                Main API: 4 test functions
+#                Side effects: none at import time
+# @dependencies: internal: core.collectors.exporter_adapter, core.collectors.hp | external: pytest
+# @notes:        None.
+# =============================================================================
 
-چرا این باگ اهمیت دارد (سنجهٔ G.5 آن را بیرون داد): کلیدِ رنگِ کارتریج از
-`prtMarkerSuppliesDescription` با «آیا kw در نام هست؟» درمی‌آمد و کلیدهای تک‌حرفی
-`k/c/m/y` هر نامی را قرض می‌گرفتند. اعدادِ واقعیِ قبل از رفع:
+"""
+`_hp_toner_key' test (TD-016 — Fix substring matching bug in HP SNMP path).
+
+Why this bug matters (the G.5 benchmark released it): The cartridge color key from
+`prtMarkerSuppliesDescription` with "Is kw in the name?" Door and single letter keys
+``k/c/m/y'' borrowed any name. Actual numbers before fixing:
 
     'Imaging Drum' → magenta      'CF470A Imaging Drum' → cyan
     'Fuser Kit' → black           'Maintenance Kit' → black
 
-و اثرش در `collect_hp`: `has_color_toner=True` کاذب ⇒ برای پرینتر تک‌رنگی که OIDِ شمارندهٔ
-رنگ ندارد، `full_color=None` و `black_white=None` (به‌جای `black_white=total`) و نمایش
-درام/فیوزر به‌عنوان «تونر magenta» در UI. مسیرِ وبِ همان فایل (`_key` در
-`_scrape_hp_toners`) از قبل مرزِ کلمه داشت؛ این تست دو مسیر را به یک قاعده قفل می‌کند.
+and its effect in `collect_hp`: `has_color_toner=True` is false ⇒ for monochrome printer whose counter OID
+no color, `full_color=None` and `black_white=None` (instead of `black_white=total`) and display
+Drum/fuser as "magenta toner" in UI. The web path of the same file (`_key` in
+`_scrape_hp_toners`) already had a word boundary; This test locks two paths to the same rule.
 
-دو نکتهٔ صریح:
-  • هیچ دادهٔ دستگاه واقعی اینجا خوانده نمی‌شود؛ ورودی، رشته‌های نامِ کارتریج‌اند که
-    در سطرهایِ واقعیِ MIB («CF470A Imaging Drum», «W110A Black», …) دیده می‌شوند.
-  • آینهٔ exporter (`core/collectors/exporter_adapter.py`) همین تابع را import می‌کند،
-    پس رفعِ این‌جا خودکار در آن مسیر هم اعمال می‌شود — و تستِ §۲ پایین همین را می‌سنجد.
+Two clear points:
+  • No real device data is read here; The input is the cartridge name strings
+    They appear in the actual MIB lines ("CF470A Imaging Drum", "W110A Black",...).
+  • Exporter mirror (`core/collectors/exporter_adapter.py`) imports the same function,
+    So the fix here automatically applies to that path as well — and the test in §2 below measures the same.
 """
 
 from __future__ import annotations
@@ -31,7 +41,7 @@ from core.collectors.hp import _hp_toner_key
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# (نامِ کارتریج/مصرفی، کلیدِ انتظار)
+# (cartridge/consumable name, waiting key)
 CASES = [
     ("Black Cartridge HP CE505A", "black"),
     ("W110A Black", "black"),
@@ -41,7 +51,7 @@ CASES = [
     ("Toner C", "cyan"),
     ("Magenta Cartridge HP CF033A", "magenta"),
     ("Yellow Cartridge HP CF032A", "yellow"),
-    # مواردِ باگ‌زده — باید هیچ رنگی نگیرند
+    # Bugged items - should not take any color
     ("Imaging Drum", None),
     ("CF470A Imaging Drum", None),
     ("Fuser Kit", None),
@@ -56,17 +66,18 @@ CASES = [
 
 @pytest.mark.parametrize("name,expected", CASES)
 def test_color_keys_use_word_boundaries(name, expected):
+    """Verifies color keys use word boundaries."""
     assert _hp_toner_key(name) == expected
 
 
 def test_no_false_color_on_drum_or_fuser_names():
-    """رگرسیونِ صریحِ TD-016 (هرکدام یک حرفِ کلیدِ تک‌حرفی را در خود داشتند)."""
+    """Explicit regressions of TD-016 (each containing a single letter keyword)."""
     for bad in ("Imaging Drum", "CF470A Imaging Drum", "Fuser Kit", "Document Feeder Kit"):
         assert _hp_toner_key(bad) is None, bad
 
 
 def test_rule_matches_the_web_helper():
-    """دو مسیرِ HP یک قاعده دارند: `_key()` داخل `_scrape_hp_toners` هم مرزِ کلمه است."""
+    """The two HP paths have the same rule: `_key()` inside `_scrape_hp_toners` is a word boundary."""
     src = (ROOT / "core" / "collectors" / "hp.py").read_text(encoding="utf-8")
     body = src[src.index("def _scrape_hp_toners"):src.index("_HP_TONER_COLOR_MAP =")]
     assert 're.search(r"\\b%s\\b" % color, n)' in body, "قاعدهٔ مسیرِ وب عوض شده — هم‌راستا کنید"
@@ -76,7 +87,7 @@ def test_rule_matches_the_web_helper():
 
 
 def test_exporter_mirror_uses_the_fixed_rule():
-    """آینهٔ exporter هم دیگر درام را magenta نمی‌کند (کلیدِ `toner_2` مثلِ collect_hp)."""
+    """The mirror exporter no longer makes the drum magenta (the `toner_2` key is the same as collect_hp)."""
     from core.collectors.exporter_adapter import _toners
 
     metrics = {
@@ -90,7 +101,7 @@ def test_exporter_mirror_uses_the_fixed_rule():
     toners = _toners("hp", metrics)
     assert set(toners) == {"black", "toner_2"}, sorted(toners)
     assert toners["toner_2"]["level"] == 50 and toners["toner_2"]["name"] == "CF470A Imaging Drum"
-    # و مهم‌تر: «تونر رنگی» دارد حساب نمی‌شود، پس شاخهٔ رنگِ collect_hp فعال نمی‌ماند
+    # And more important: "color toner" is not counted, so the color branch of collect_hp does not remain active
     from core.collectors.exporter_adapter import _counters_hp
 
     counters = _counters_hp(dict(metrics, bro_total=[({}, 500.0)]), toners)

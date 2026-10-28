@@ -1,50 +1,62 @@
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tests/test_cartridge_change_timezone.py
+# @brief:        Tests that cartridge-change event timestamps use the shared UTC clock.
+# @details:      Responsibilities: Check timestamp correctness for branded and generic branches.
+#                Main API: _TimestampAssertions, BrandedBranchTimestampTests,
+#                GenericBranchTimestampTests, ModuleTimeSourceGuardTests,
+#                GuardAcceptsValidFormsTests, GuardRejectsInvalidFormsTests
+#                Side effects: file I/O
+# @dependencies: internal: core.cartridge_change_engine, core.time_utils
+# @notes:        Can be run directly as a script.
+# =============================================================================
+
 """
-تست‌های زمان رویداد کارتریج (فاز D — کار D.6؛ گارد مقاوم — فاز E.0، کار E.0.14).
+Cartridge Event Time Tests (Phase D — Task D.6; Resilient Guard — Phase E.0, Task E.0.14).
 
-زمینه: `core/cartridge_change_engine.py` دو مبنای زمانی متفاوت تولید می‌کرد:
-  • خط ۲۷۲ (مسیرِ زنده، مشترکِ هر دو مسیر شواهد): ساعت محلی + پسوند جعلی `Z`
-    ⇒ برای سرور با `TZ=Asia/Tehran` کج‌فهمی ۳:۳۰ ساعت (اثبات‌شده: انحراف ۲۱۰ دقیقه).
-  • خط ۳۰۶ (داخل بلوک غیرقابل‌دسترس ۲۹۵–۳۲۸): UTC واقعی بود ولی `datetime.utcnow()`
-    از پایتون ۳.۱۲ deprecated است.
+Context: `core/cartridge_change_engine.py` was producing two different time bases:
+  • Line 272 (live path, common to both evidence paths): local time + fake suffix `Z'
+    ⇒ For server with `TZ=Asia/Tehran', you have a 3:30 hour deviation (proven: 210 minutes deviation).
+  • Line 306 (inside unreachable block 295–328): UTC was real, but `datetime.utcnow()`
+    It is deprecated from Python 3.12.
 
-تست‌ها:
-  ۱) مسیر شواهد chip_id («برنددار»): timestamp باید UTC واقعی باشد.
-  ۲) مسیر شواهد شمارنده/سطح/عمر («غیربرند»): همان ادعاها.
-  ۳) گارد ایستای AST روی خودِ ماژول: هیچ `utcnow()`، هیچ `now().astimezone()`، و هر
-     فراخوانی `datetime.now(...)` باید **یک منطقه‌ی زمانی UTC معتبر** بگیرد.
-     از فاز E.3 سخت‌گیرتر هم شده: ماژول هیچ فراخوانی مستقیم `now` ندارد و **هر دو**
-     نقطهٔ تولید timestamp از `core.time_utils.utc_now_iso()` (فرمت استاندارد
-     `…T…ffffffZ`) می‌آیند — گارد `audit_shared_clock_usage`.
+Tests:
+  1) evidence path chip_id ("branded"): timestamp must be real UTC.
+  2) counter/level/lifetime (“off-brand”) evidence pathway: same claims.
+  3) AST static guard on the module itself: no `utcnow()`, no `now().astimezone()`, and any
+     Calling `datetime.now(...)` must take **a valid UTC timezone**.
+     It is more strict than phase E.3: the module does not have any direct call ``now'' and **both**
+     Timestamp generation point from `core.time_utils.utc_now_iso()` (standard format
+     `…T…ffffffZ`) are coming — `audit_shared_clock_usage` guard.
 
-**مستقل از TZ (گام E.0.3-pre):** تست‌های ۱ و ۲ هیچ skip ندارند و در هر TZ اجرا
-می‌شوند. ادعای اصلی آن‌ها این است: رشته‌ی تولیدشده را با قالب `...Z` تجزیه کن،
-نتیجه باید با UTCِ همین لحظه کمتر از ۱۰ ثانیه اختلاف داشته باشد. این ادعا باگِ
-قدیمی (ساعت محلی + پسوند جعلی `Z`) را در هر TZ با offset غیرصفر می‌گیرد، چون در
-آن حالت اختلاف با UTC برابر کلِ offset (مثلاً ۲۱۰ دقیقه) می‌شود. تنها حالتی که
-«محلی» و «UTC» عملاً یک چیزند `TZ=UTC` است (offset صفر ⇒ تفکیک‌ناپذیر به‌ذات)، و
-همان حالت را گارد ایستای تست ۳ پوشش می‌دهد.
+**Independent of TZ (step E.0.3-pre):** Tests 1 and 2 have no skip and are executed in each TZ
+they become Their main claim is: Parse the generated string with `...Z' format,
+The result should be less than 10 seconds different from the UTC of this moment. This claim is a bug
+It takes the old (local time + bogus suffix `Z`) in each TZ with non-zero offset, as in
+The difference with UTC is equal to the total offset (for example, 210 minutes). The only mode that
+"Local" and "UTC" are practically the same thing `TZ=UTC' (zero offset ⇒ intrinsically inseparable), and
+The same situation is covered by the static guard test 3.
 
-**گارد مقاوم به فرم‌ها (E.0.14):** گارد دیگر روی *شکل نوشتاری* قفل نمی‌کند؛ فرم‌های
-گوناگونِ «UTC صریح» را می‌پذیرد و فقط فرم‌های **نادرست** را می‌گیرد:
+**Forms Resistant Guard (E.0.14):** Guard no longer locks on *written form*; forms
+Accepts the ``explicit UTC'' variant and only takes **incorrect** forms:
 
-    پذیرفته می‌شود:
+    It is accepted:
       datetime.now(timezone.utc)        datetime.now(tz=timezone.utc)
       datetime.now(UTC)                 datetime.now(tz=UTC)
       datetime.now(ZoneInfo("UTC"))     datetime.now(tz=ZoneInfo("UTC"))
-      datetime.now(datetime.timezone.utc)   # import datetime به‌جای from … import
-      و همان‌ها با نام مستعار import (مثل `import datetime as dt` یا `timezone as tz2`)
-    رد می‌شود:
-      datetime.now()                    # naive ⇒ ۳:۳۰ خطا
-      datetime.now(timezone(timedelta(hours=3, minutes=30)))   # تهران، نه UTC
+      datetime.now(datetime.timezone.utc) # import datetime instead of from... import
+      And the same ones with the nickname import (like `import datetime as dt` or `timezone as tz2`)
+    Rejected:
+      datetime.now() # naive ⇒ 3:30 error
+      datetime.now(timezone(timedelta(hours=3, minutes=30))) # Tehran, not UTC
       datetime.datetime.utcnow()        # deprecated + naive
-      datetime.now()  در ادامه .astimezone()  ⇒ برچسب محلی با Z
-      datetime.now().replace(tzinfo=timezone.utc)  # «برچسب زدن» به مقدار محلی
+      datetime.now() followed by.astimezone() ⇒ Local label with Z
+      datetime.now().replace(tzinfo=timezone.utc) # "tag" to local value
 
-  همچنین فراخوانی‌هایی که **ربطی به datetime ندارند** (مثل `store.now()` یا تابعی به
-  نام `now` که خودِ ماژول تعریف کرده) نادیده گرفته می‌شوند تا گارد مثبت کاذب ندهد.
+  Also, calls that **have nothing to do with datetime** (such as `store.now()' or a function like
+  ``now'' name defined by the module itself) are ignored to avoid false positive guard.
 
-اجرا:
+Execution:
     python -m pytest tests/test_cartridge_change_timezone.py -q          # TZ=UTC
     TZ=Asia/Tehran python -m pytest tests/test_cartridge_change_timezone.py -q
 """
@@ -58,23 +70,23 @@ from core.time_utils import ISO_Z_FORMAT, ISO_Z_LENGTH, parse_utc, to_utc_z
 
 MODULE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            os.pardir, "core", "cartridge_change_engine.py")
-# فاز E.3: فرمت قطعی پروژه — همیشه UTC با پسوند Z و **۶ رقم میکروثانیه**
-# (طول ثابت ۲۷). پیش‌تر این فایل روی «ثانیه‌دقت بدون میکروثانیه» قفل بود و همین
-# باعث می‌شد تست با نویسندهٔ جدید (utc_now_iso) قرمز بماند.
+# Phase E.3: Definitive project format — always UTC with suffix Z and **6 microsecond digits**
+# (fixed length 27). Previously, this file was locked on "accuracy seconds without microseconds" and that's it
+# It was causing the test with the new author (utc_now_iso) to stay red.
 TS_FORMAT = ISO_Z_FORMAT
 
-#: نام‌های رشته‌ای که به‌عنوان منطقه‌ی زمانی UTC پذیرفته می‌شوند.
+#: string names that are accepted as UTC time zone.
 UTC_ZONE_NAMES = frozenset({"UTC", "utc", "Etc/UTC", "Etc/GMT", "GMT", "Z"})
 
 
 # ─────────────────────────────────────────────────────────────
-# گارد AST (تابع خالص و آزمون‌پذیر)
+# AST guard (pure and testable function)
 # ─────────────────────────────────────────────────────────────
 
 def _import_aliases(tree):
-    """نام‌های به‌کاررفته در ماژول را برای datetime/timezone/UTC/ZoneInfo استخراج می‌کند.
+    """Extracts the names used in the module for datetime/timezone/UTC/ZoneInfo.
 
-    خروجی: dict با کلیدهای modules / classes / timezones / utc_names / zoneinfo_names.
+    Output: dict with keys modules / classes / timezones / utc_names / zoneinfo_names.
     """
     modules, classes, timezones, utc_names, zoneinfo_names = set(), set(), set(), set(), set()
     for node in ast.walk(tree):
@@ -95,7 +107,7 @@ def _import_aliases(tree):
                     utc_names.add(bound)
                 elif mod in ("zoneinfo", "backports.zoneinfo") and alias.name == "ZoneInfo":
                     zoneinfo_names.add(bound)
-    classes.add("datetime")            # نام متعارف کلاس، حتی اگر import در ماژول نباشد
+    classes.add("datetime")            # Conventional class name, even if import is not in the module
     timezones.add("timezone")
     utc_names.add("UTC")
     zoneinfo_names.add("ZoneInfo")
@@ -104,7 +116,7 @@ def _import_aliases(tree):
 
 
 def _is_utc_timezone_expr(node, names):
-    """آیا این عبارت، یک منطقه‌ی زمانی UTC است؟ توضیح رشته‌ای یا None."""
+    """Is this expression a UTC time zone? Description String or None."""
     # ZoneInfo("UTC") / ZoneInfo(key="UTC")
     if isinstance(node, ast.Call):
         f = node.func
@@ -118,7 +130,7 @@ def _is_utc_timezone_expr(node, names):
                 return f'ZoneInfo({args[0].value!r})'
         return None
 
-    # UTC (با هر نام مستعار)
+    # UTC (any alias)
     if isinstance(node, ast.Name):
         return "UTC" if node.id in names["utc_names"] else None
 
@@ -134,7 +146,7 @@ def _is_utc_timezone_expr(node, names):
 
 
 def _is_datetime_like(node, names, local_defs):
-    """آیا این عبارت «کلاس/شیء datetime» است که `.now()` رویش معنادار است؟"""
+    """Is it a ``datetime class/object'' expression that `.now()' makes sense?"""
     if isinstance(node, ast.Name):
         return node.id in names["classes"] and node.id not in local_defs
     if isinstance(node, ast.Attribute) and node.attr == "datetime":
@@ -143,12 +155,12 @@ def _is_datetime_like(node, names, local_defs):
 
 
 def audit_now_calls(source):
-    """گارد ایستا روی یک ماژول: هر `now`/`utcnow`/`astimezone` مشکوک را پیدا می‌کند.
+    """Static guard on a module: Finds any suspicious `now`/`utcnow`/`astimezone`.
 
-    خروجی: dict با کلیدهای
-      accepted : [(lineno, توضیح فرم)]  — فراخوانی‌های now با UTC صریح
-      problems : [پیام]                — فرم‌های نادرست
-      skipped  : [(lineno, نام)]       — فراخوانی‌هایی که ربطی به datetime ندارند
+    Output: dict with keys
+      accepted: [(lineno, form description)] — now calls with explicit UTC
+      problems: [message] — Incorrect forms
+      skipped: [(lineno, name)] — calls that have nothing to do with datetime
     """
     tree = ast.parse(source)
     names = _import_aliases(tree)
@@ -157,13 +169,13 @@ def audit_now_calls(source):
     accepted, problems, skipped = [], [], []
 
     def _checkable_now(call):
-        """(قابل‌بررسی؟, توضیح) برای یک Call که func.attr/id آن «now» است."""
+        """(checkable?, explanation) for a Call whose func.attr/id is "now"."""
         f = call.func
         if isinstance(f, ast.Attribute) and f.attr == "now":
             if _is_datetime_like(f.value, names, local_defs):
                 return True
             if isinstance(f.value, ast.Name) and f.value.id not in local_defs:
-                # مثل self.now()/store.now() ⇒ ربطی به datetime ندارد
+                # Like self.now()/store.now() ⇒ It has nothing to do with datetime
                 if f.value.id in ("self", "cls") or f.value.id[:1].islower():
                     return False
         return isinstance(f, ast.Name) and f.id == "now" and "now" not in local_defs
@@ -231,16 +243,16 @@ def audit_now_calls(source):
 
 
 def audit_shared_clock_usage(source):
-    """گارد ایستا (E.3): «الآن» این ماژول باید فقط از هِلپر مرکزی زمان بیاید.
+    """Static Guard (E.3): "Now" this module should only come from the central time helper.
 
-    خروجی:
-      imports    : bool — آیا `utc_now_iso` از `core.time_utils` import شده است؟
-      call_lines : [int] — خطوط فراخوانی `utc_now_iso(...)`
+    Output:
+      imports: bool — Is `utc_now_iso` imported from `core.time_utils`?
+      call_lines: [int] — Call lines of `utc_now_iso(...)`
 
-    چرا لازم شد؟ تا فاز E.2 این گارد روی خودِ `datetime.now(timezone.utc)` در دو
-    خط تولید timestamp قفل بود؛ از E.3 هر دو خط به `utc_now_iso()` رسیدند. گارد
-    جدید همان تضمین را حفظ می‌کند (هر دو نقطهٔ تولید timestamp از یک منبع واحد و
-    استاندارد) و در عین حال شکل نوشتاری را قفل نمی‌کند.
+    Why was it necessary? Until phase E.2 of this guard on `datetime.now(timezone.utc)` itself in two
+    The timestamp production line was locked; From E.3 both lines reached `utc_now_iso()`. guard
+    New maintains the same guarantee (both timestamp generation points from a single source and
+    standard) and at the same time does not lock the written form.
     """
     tree = ast.parse(source)
     imports = []
@@ -257,7 +269,7 @@ def audit_shared_clock_usage(source):
 
 
 def _branded_scenario():
-    """مسیر شواهد chip_id (کارتریج برنددار) — رویداد CONFIRMED می‌دهد."""
+    """The chip_id evidence path (branded cartridge) — gives the CONFIRMED event."""
     prev = {
         "printer_ip": "10.0.0.10",
         "brand": "hp",
@@ -275,7 +287,7 @@ def _branded_scenario():
     return prev, {**prev, "chip_id": "HP-BBB-222", "serial": "SER-200"}
 
 def _generic_scenario():
-    """مسیر شواهد شمارنده/سطح/عمر (کارتریج غیربرند) — رویداد POSSIBLE می‌دهد."""
+    """counter/level/life evidence path (unbranded cartridge) — gives POSSIBLE event."""
     prev = {
         "printer_ip": "10.0.0.11",
         "brand": "generic",
@@ -288,15 +300,16 @@ def _generic_scenario():
     return prev, {**prev, "supply_counter": 100, "remaining_level": 100, "supply_life": 99}
 
 class _TimestampAssertions(unittest.TestCase):
-    """ادعاهای مشترک دو مسیر شواهد."""
+    """Common claims of two lines of evidence."""
 
     def assert_event_timestamp_is_utc(self, result, now_utc=None):
+        """Helper: assert event timestamp is utc."""
         event = result.get("event") or {}
         ts = event.get("timestamp") or result.get("timestamp")
         self.assertTrue(ts, "رویداد باید timestamp داشته باشد")
         self.assertTrue(ts.endswith("Z"), f"timestamp باید با Z تمام شود: {ts!r}")
-        # فاز E.3: فرمت استاندارد پروژه — ۶ رقم میکروثانیه و طول ثابت ۲۷
-        # (هم‌چیدمانی واژه‌به‌واژه‌ای با ترتیب زمانی ⇒ مقایسه‌ی رشته‌ای امن).
+        # Phase E.3: Project standard format — 6 microsecond digits and fixed length 27
+        # (Word-to-word arrangement with chronological order ⇒ safe string comparison).
         self.assertEqual(ISO_Z_LENGTH, len(ts),
                          f"طول timestamp باید {ISO_Z_LENGTH} باشد ({ts!r})")
         try:
@@ -304,7 +317,7 @@ class _TimestampAssertions(unittest.TestCase):
         except ValueError as exc:
             self.fail(f"timestamp با فرمت استاندارد پروژه {ISO_Z_FORMAT} نمی‌خواند: "
                       f"{ts!r} ({exc})")
-        # رفت‌وبرگشت با تنها سریال‌ساز پروژه باید بی‌تغییر بماند (قرارداد E.3).
+        # Roundtrip with the project's only serializer should remain unchanged (contract E.3).
         self.assertEqual(ts, to_utc_z(parse_utc(ts)),
                          f"timestamp با هِلپر مرکزی زمان سازگار نیست: {ts!r}")
         ref = now_utc or datetime.now(timezone.utc)
@@ -315,9 +328,10 @@ class _TimestampAssertions(unittest.TestCase):
 
 
 class BrandedBranchTimestampTests(_TimestampAssertions):
-    """تست ۱ — مسیر شواهد chip_id."""
+    """Test 1 — path of chip_id evidence."""
 
     def test_branded_branch_writes_real_utc(self):
+        """Verifies branded branch writes real utc."""
         prev, curr = _branded_scenario()
         result = evaluate_cartridge_change(prev, curr, reboot_detected=False, poll_gap_ok=True)
         self.assertTrue(result["should_emit"])
@@ -326,9 +340,10 @@ class BrandedBranchTimestampTests(_TimestampAssertions):
 
 
 class GenericBranchTimestampTests(_TimestampAssertions):
-    """تست ۲ — مسیر شواهد شمارنده/سطح/عمر (بدون chip_id)."""
+    """Test 2 — counter/level/life evidence path (no chip_id)."""
 
     def test_generic_branch_writes_real_utc(self):
+        """Verifies generic branch writes real utc."""
         prev, curr = _generic_scenario()
         result = evaluate_cartridge_change(prev, curr, reboot_detected=False, poll_gap_ok=True)
         self.assertTrue(result["should_emit"])
@@ -338,36 +353,38 @@ class GenericBranchTimestampTests(_TimestampAssertions):
 
 class ModuleTimeSourceGuardTests(unittest.TestCase):
     """
-    تست ۳ — گارد ایستا (AST) روی `core/cartridge_change_engine.py`.
+    Test 3 — Static guard (AST) on `core/cartridge_change_engine.py`.
 
-    سه بررسی:
-      ۱) هیچ `utcnow()` نباشد (deprecated + naive)؛
-      ۲) هیچ `now(...).astimezone(...)` یا `now().replace(tzinfo=…)` نباشد؛
-      ۳) هر `datetime.now(...)` یک منطقه‌ی زمانی **صریح UTC** بگیرد — با پذیرش همه‌ی
-         فرم‌های معتبر (positional/keyword، نام مستعار import، `ZoneInfo("UTC")`).
-      ۴) هر دو خطِ تولید timestamp (۲۷۲ زنده، ۳۰۶ داخل کد مرده) در همان مجموعه باشند
-         تا حتی کد مرده هم قفل بماند.
+    Three reviews:
+      1) no `utcnow()' (deprecated + naive);
+      2) no `now(...).astimezone(...)` or `now().replace(tzinfo=...)`;
+      3) Each `datetime.now(...)` takes an **explicit UTC** time zone — accepting all
+         Valid forms (positional/keyword, import alias, `ZoneInfo("UTC")`).
+      4) Both timestamp production lines (272 live, 306 inside dead code) should be in the same collection
+         so that even the dead code remains locked.
     """
 
     @classmethod
     def setUpClass(cls):
+        """Prepare the fixtures shared by all tests in this class."""
         with open(MODULE_PATH, encoding="utf-8") as fh:
             cls.source = fh.read()
         cls.report = audit_now_calls(cls.source)
         cls.clock = audit_shared_clock_usage(cls.source)
 
     def test_no_deprecated_utcnow_and_no_relabelling(self):
+        """Verifies no deprecated utcnow and no relabelling."""
         bad = [p for p in self.report["problems"]
                if "utcnow()" in p or "astimezone" in p or "replace(tzinfo" in p]
         self.assertEqual([], bad, "فرم‌های زمانی نادرست در ماژول: " + " | ".join(bad))
 
     def test_every_now_call_has_explicit_utc(self):
-        """هیچ `datetime.now(...)` بی‌قید و بندی در ماژول نمانده باشد.
+        """No ``datetime.now(...)'' is left in the module.
 
-        از E.3 این ماژول هیچ فراخوانی مستقیم `now` ندارد: «الآن» از
-        `core.time_utils.utc_now_iso()` می‌آید (تست بعدی). اگر روزی کسی مستقیم
-        `datetime.now(...)` اضافه کند، این تست او را متوقف می‌کند تا تصمیم آگاهانه
-        باشد: یا از هِلپر مرکزی استفاده کند، یا این گارد را با دلیل به‌روز کند.
+        As of E.3 this module has no direct `now' calls: ``now'' from
+        Here comes `core.time_utils.utc_now_iso()` (next test). If one day someone straight
+        add `datetime.now(...)`, this test stops him from making an informed decision
+        be: either use the central helper, or update this guard with reason.
         """
         self.assertEqual([], self.report["problems"],
                          "مشکل در فراخوانی‌های now: " + " | ".join(self.report["problems"]))
@@ -376,21 +393,27 @@ class ModuleTimeSourceGuardTests(unittest.TestCase):
                          f"فراخوانی‌های مستقیم now: {self.report['accepted']}")
 
     def test_both_timestamp_lines_are_locked(self):
-        """هر دو نقطهٔ تولید timestamp (زنده و کد مرده) از منبع واحد پروفایل‌شده."""
+        """The timestamp generation point is read from the single source (utc_now_iso).
+
+        Originally this asserted two call sites, one of which was an unreachable duplicate
+        block after `return result`. That block was removed as dead code (CLEANUP), so the
+        threshold now requires the one live call site.
+        """
         self.assertTrue(self.clock["imports"],
                         "`utc_now_iso` باید از core.time_utils import شده باشد")
         self.assertGreaterEqual(
-            len(self.clock["call_lines"]), 2,
-            "هر دو خط تولید timestamp باید از utc_now_iso استفاده کنند؛ "
+            len(self.clock["call_lines"]), 1,
+            "خط تولید timestamp باید از utc_now_iso استفاده کند؛ "
             f"خطوط فعلی: {self.clock['call_lines']}")
 
     def test_no_local_now_left_in_source(self):
+        """Verifies no local now left in source."""
         self.assertNotIn("datetime.now()", self.source.replace(" ", ""),
                          "`datetime.now()` بدون آرگومان در ماژول مانده است")
 
 
 class GuardAcceptsValidFormsTests(unittest.TestCase):
-    """گارد فرم‌های معتبر UTC را می‌پذیرد (بدون مثبت/منفی کاذب) — E.0.14."""
+    """Guard accepts valid UTC forms (no false positives/negatives) — E.0.14."""
 
     VALID_SNIPPETS = {
         "positional timezone.utc": "from datetime import datetime, timezone\nt = datetime.now(timezone.utc)",
@@ -406,6 +429,7 @@ class GuardAcceptsValidFormsTests(unittest.TestCase):
     }
 
     def test_valid_forms_are_accepted_without_problems(self):
+        """Verifies valid forms are accepted without problems."""
         for label, src in self.VALID_SNIPPETS.items():
             with self.subTest(form=label):
                 rep = audit_now_calls(src)
@@ -413,6 +437,7 @@ class GuardAcceptsValidFormsTests(unittest.TestCase):
                 self.assertEqual(1, len(rep["accepted"]), f"فرم «{label}» پذیرفته نشد")
 
     def test_unrelated_now_calls_are_skipped(self):
+        """Verifies unrelated now calls are skipped."""
         src = ("class Store:\n"
                "    def now(self):\n"
                "        return 1\n"
@@ -425,7 +450,7 @@ class GuardAcceptsValidFormsTests(unittest.TestCase):
 
 
 class GuardRejectsInvalidFormsTests(unittest.TestCase):
-    """گارد فرم‌های نادرست را می‌گیرد — E.0.14."""
+    """Guard takes incorrect forms — E.0.14."""
 
     INVALID_SNIPPETS = {
         "naive now()": ("from datetime import datetime\nt = datetime.now()", "بدون آرگومان"),
@@ -441,10 +466,11 @@ class GuardRejectsInvalidFormsTests(unittest.TestCase):
         "calculated offset": ("from datetime import datetime, timezone, timedelta\n"
                               "t = datetime.now(timezone.utc) + timedelta(hours=3)\n"
                               "u = datetime.now(timezone.utc)",
-                              None),  # این یکی باید **پذیرفته** شود (UTC صریح است)
+                              None),  # This one should be **accepted** (UTC is explicit)
     }
 
     def test_invalid_forms_are_reported(self):
+        """Verifies invalid forms are reported."""
         for label, (src, needle) in self.INVALID_SNIPPETS.items():
             if needle is None:
                 continue
@@ -455,13 +481,14 @@ class GuardRejectsInvalidFormsTests(unittest.TestCase):
                                 f"پیام گارد برای «{label}» گویا نیست: {rep['problems']}")
 
     def test_utc_plus_timedelta_is_still_accepted(self):
+        """Verifies utc plus timedelta is still accepted."""
         src = self.INVALID_SNIPPETS["calculated offset"][0]
         rep = audit_now_calls(src)
         self.assertEqual([], rep["problems"],
                          "گارد فرمی را رد کرد که خودش UTC صریح می‌گیرد: " + str(rep["problems"]))
 
     def test_guard_would_have_caught_the_historical_d6_bug(self):
-        """بازتولید باگ واقعیِ قبل از D.6 (خطوط ۲۷۲ و ۳۰۶ همان ماژول)."""
+        """Reproducing the actual bug before D.6 (lines 272 and 306 of the same module)."""
         buggy = (
             "from datetime import datetime\n"
             "def live_branch():\n"

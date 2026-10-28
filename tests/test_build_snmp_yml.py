@@ -1,18 +1,29 @@
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tests/test_build_snmp_yml.py
+# @brief:        Tests for tools/build_snmp_yml.py (step G.4.1).
+# @details:      Responsibilities: Check deterministic regeneration, --check behaviour and spec-
+#                versus-file consistency.
+#                Main API: 13 test functions
+#                Side effects: runs external processes, file I/O
+# @dependencies: external: pytest, yaml
+# @notes:        None.
+# =============================================================================
+
 """
-تست‌های `tools/build_snmp_yml.py` (گام G.4.1).
+`tools/build_snmp_yml.py' tests (step G.4.1).
 
-سه چیزی که اینجا تثبیت می‌شود، همان چیزی است که «دستی‌بودنِ» snmp.yml را از
-«سلیقه‌ای‌بودن» جدا می‌کند:
+The three things that are established here are what make snmp.yml "manual".
+"Tastefulness" separates:
 
-  ۱) **deterministic/idempotent** — دو اجرای پیاپی باید بایت‌به‌بایت یکی باشد و
-     بازتولید روی فایلِ commit‌شده هیچ diffی نسازد (`--check` ⇒ rc 0). بدون این،
-     هر بازتولید یعنی تغییرِ بی‌دلیلِ ۸۵۳ خط.
-  ۲) **نگاشتِ v3** — AUTH_KEY_MAP/AUTH_VALUE_MAP باید دقیقاً همان سه نام را عوض کند؛
-     نه بیشتر: spec عمداً شکلِ configِ *generator* را نگه می‌دارد و این تصمیم در
-     کامنتِ بالای `auths:` ثبت شده است.
-  ۳) **صفر اختراع و صفر شبکه** — ابزار فقط OIDهای spec را می‌نویسد و هیچ کدِ
-     دانلود/شبکه‌ای ندارد (قاعدهٔ فاز G).
+  1) **deterministic/idempotent** — two consecutive executions must be identical byte for byte and
+     Reproduce no diff on the committed file (`--check' ⇒ rc 0). without this,
+     Each reproduction means changing 853 lines for no reason.
+  2) **v3 mapping** — AUTH_KEY_MAP/AUTH_VALUE_MAP should change the exact same three names;
+     No more: the spec intentionally keeps the *generator* config form, and this decision in
+     The comment above `auths:` has been registered.
+  3) **zero invention and zero network** — the tool only writes spec OIDs and no code
+     No download/network (phase G rule).
 """
 
 from __future__ import annotations
@@ -33,6 +44,7 @@ SNMP_YML = ROOT / "monitoring" / "snmp.yml"
 
 
 def _tool():
+    """Helper: tool."""
     spec = importlib.util.spec_from_file_location("build_snmp_yml", TOOL)
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
@@ -41,11 +53,13 @@ def _tool():
 
 
 def _run(*args: str) -> subprocess.CompletedProcess:
+    """Helper: run."""
     return subprocess.run([sys.executable, str(TOOL), *args], capture_output=True, text=True)
 
 
-# ── ۱) خروجیِ باثبات ────────────────────────────────────────────────────────
+# ── 1) Stable output
 def test_regeneration_is_deterministic_and_idempotent(tmp_path):
+    """Verifies regeneration is deterministic and idempotent."""
     a, b = tmp_path / "a.yml", tmp_path / "b.yml"
     for out in (a, b):
         p = _run("--out", str(out))
@@ -57,12 +71,14 @@ def test_regeneration_is_deterministic_and_idempotent(tmp_path):
 
 
 def test_check_mode_passes_on_the_committed_file():
+    """Verifies check mode passes on the committed file."""
     p = _run("--check")
     assert p.returncode == 0, (p.stdout + p.stderr)[:2000]
     assert "136" in p.stdout, "پیام باید شمارشِ پوشش را بگوید"
 
 
 def test_check_mode_fails_on_a_stale_file(tmp_path):
+    """Verifies check mode fails on a stale file."""
     stale = tmp_path / "snmp.yml"
     stale.write_text(SNMP_YML.read_text(encoding="utf-8") + "\n# stale\n", encoding="utf-8")
     p = _run("--check", "--out", str(stale))
@@ -72,11 +88,11 @@ def test_check_mode_fails_on_a_stale_file(tmp_path):
 
 
 def test_check_mode_fails_when_spec_gained_a_row(tmp_path):
-    """اگر ردیفی به spec اضافه شود، فایل کهنه است و ابزار باید بگوید (نه سکوت)."""
+    """If a line is added to the spec, the file is out of date and the tool should say (not be silent)."""
     spec = yaml.safe_load(GENERATOR.read_text(encoding="utf-8"))
     spec["modules"]["sensor_ecs100g"]["get"].append(
         {"oid": "1.3.6.1.4.1.47206.999.0", "name": "brand_new_row", "type": "gauge",
-         "source": "core/oid/catalog.py:1"})
+         "source": "core/oid/catalog.py:12"})
     fake_spec = tmp_path / "generator.yml"
     fake_spec.write_text(yaml.safe_dump(spec, allow_unicode=True, sort_keys=False), encoding="utf-8")
     out = tmp_path / "snmp.yml"
@@ -88,6 +104,7 @@ def test_check_mode_fails_when_spec_gained_a_row(tmp_path):
 
 
 def test_report_numbers_are_the_published_counts():
+    """Verifies report numbers are the published counts."""
     mod = _tool()
     p = _run("--report")
     assert p.returncode == 0, p.stdout + p.stderr
@@ -104,8 +121,9 @@ def test_report_numbers_are_the_published_counts():
     assert len(re.findall(r"^ *# type inferred", text, re.M)) == 60
 
 
-# ── ۲) نگاشتِ auth ──────────────────────────────────────────────────────────
+# ── 2) auth mapping
 def test_auth_mapping_translates_exactly_the_documented_three_names():
+    """Verifies auth mapping translates exactly the documented three names."""
     mod = _tool()
     assert mod.AUTH_KEY_MAP == {"auth_passphrase": "password", "priv_passphrase": "priv_password"}
     assert mod.AUTH_VALUE_MAP == {("priv_protocol", "AES128"): "AES"}
@@ -117,7 +135,7 @@ def test_auth_mapping_translates_exactly_the_documented_three_names():
             rk = mod.AUTH_KEY_MAP.get(k, k)
             want[rk] = mod.AUTH_VALUE_MAP.get((rk, v), v)
         assert doc["auths"][name] == want, f"auths.{name}: نگاشتِ ابزار با فایل یکی نیست"
-    # spec عمداً شکلِ generator را نگه داشته (تصمیمِ G.4.1)، پس کلیدِ runtime در spec نیست
+    # The spec deliberately kept the generator form (decision G.4.1), so the runtime key is not in the spec.
     v3 = gen["auths"]["secure_v3"]
     assert v3["auth_passphrase"] == "${SNMP_V3_AUTH_PASSPHRASE}" and v3["priv_passphrase"] == "${SNMP_V3_PRIV_PASSPHRASE}"
     assert v3["priv_protocol"] == "AES128"
@@ -125,17 +143,19 @@ def test_auth_mapping_translates_exactly_the_documented_three_names():
 
 
 def test_generator_yml_documents_the_v3_mapping_above_auths():
+    """Verifies generator yml documents the v 3 mapping above auths."""
     text = GENERATOR.read_text(encoding="utf-8")
     head, sep, _rest = text.partition("auths:")
     assert sep, "بلوک auths پیدا نشد"
     for needle in ("auth_passphrase  → password", "priv_passphrase  → priv_password",
                    "AES128 → AES", "tools/build_snmp_yml.py"):
         assert needle in head, f"کامنتِ نگاشتِ v3 بالای auths نیست: {needle}"
-    assert "نامِ متغیرهای محیطی" in head, "اینکه SNMP_V3_* عوض نمی‌شود ثبت نشده"
+    assert "name of the environment variables" in head, "The fact that SNMP_V3_* is not changed is not recorded"
 
 
-# ── ۳) صفر اختراع، صفر شبکه ─────────────────────────────────────────────────
+# ── 3) Zero invention, zero network
 def test_tool_writes_only_spec_oids():
+    """Verifies tool writes only spec oids."""
     mod = _tool()
     gen = yaml.safe_load(GENERATOR.read_text(encoding="utf-8"))
     spec_oids = {str(r["oid"]) for _m, r, _g in mod.spec_rows(gen)}
@@ -147,6 +167,7 @@ def test_tool_writes_only_spec_oids():
 
 
 def test_tool_source_contains_no_download_or_network_code():
+    """Verifies tool source contains no download or network code."""
     src = TOOL.read_text(encoding="utf-8")
     for banned in ("urllib", "requests", "httpx", "socket", "subprocess", "curl ", "wget ",
                    "Invoke-WebRequest", "http://", "https://"):
@@ -154,6 +175,7 @@ def test_tool_source_contains_no_download_or_network_code():
 
 
 def test_inference_table_covers_exactly_the_untyped_spec_rows():
+    """Verifies inference table covers exactly the untyped spec rows."""
     mod = _tool()
     gen = yaml.safe_load(GENERATOR.read_text(encoding="utf-8"))
     untyped = {(m, r["name"]) for m, r, _g in mod.spec_rows(gen) if r.get("type") is None}
@@ -162,7 +184,7 @@ def test_inference_table_covers_exactly_the_untyped_spec_rows():
 
 
 def test_missing_inference_rule_fails_loudly():
-    """بدون این، یک ردیفِ type‌ندارده به `None` یا یک حدسِ بی‌شاهد تبدیل می‌شد."""
+    """Without this, a row with no type would be ``None'' or an unwitnessed guess."""
     mod = _tool()
     key = sorted(mod.INFER)[0]
     saved = mod.INFER.pop(key)
@@ -175,6 +197,7 @@ def test_missing_inference_rule_fails_loudly():
 
 
 def test_unused_inference_rule_fails_loudly():
+    """Verifies unused inference rule fails loudly."""
     mod = _tool()
     mod.INFER[("printer_std", "sys_descr")] = ("gauge", "unused rule")
     try:
@@ -186,6 +209,7 @@ def test_unused_inference_rule_fails_loudly():
 
 
 def test_output_path_defaults_inside_the_repo():
+    """Verifies output path defaults inside the repo."""
     mod = _tool()
     assert mod.DEFAULT_OUT == SNMP_YML
     assert mod.DEFAULT_SPEC == GENERATOR

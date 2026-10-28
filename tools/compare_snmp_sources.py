@@ -1,32 +1,44 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""compare_snmp_sources.py — مقایسهٔ «دو منبع» برای یک پرینتر (گام G.6).
+# =============================================================================
+# @file:         tools/compare_snmp_sources.py
+# @brief:        Compares two SNMP sources (exporter vs snapshot) for one printer (step G.6).
+# @details:      Responsibilities: Flatten both sources, compare shapes and tolerances, and render
+#                a report.
+#                Main API: flatten(), kind_of(), compare_shapes(), read_pdu_counts(),
+#                render_markdown(), InputError, load_exporter_metrics(), load_snapshot() (+1 more)
+#                Side effects: network I/O, file I/O
+# @dependencies: internal: core.collectors.exporter_adapter, core.exporter_client
+# @notes:        Can be run directly as a script.
+# =============================================================================
 
-دو طرفِ مقایسه:
-  ۱) خروجیِ snmp_exporter (متنِ exposition که از /snmp?target=… گرفته‌اید)
-  ۲) snapshotِ collectorِ legacy (JSONِ همان ساختاری که collect_hp/collect_canon برمی‌گرداند؛
-     خروجیِ `core.enhanced_collector.collect_enhanced` یا یک لاگِ snapshot در `logs.db`)
+"""compare_snmp_sources.py — Compare "two sources" for a printer (step G.6).
 
-چرا از «آینه» عبور می‌کند: واحدِ مقایسه باید *مفهوم* باشد نه *نامِ متریک*. متریکِ
-`hrPrinterTotal` در مقابلِ `counters.total` است، پس ابتدا capture با همان
-`core.collectors.exporter_adapter.exporter_to_collector_shape` (آینهٔ تست‌شده در G.5) به
-ساختارِ collector درمی‌آید و بعد *مسیرهایِ مشترکِ* دو ساختار سطر‌به‌سطر مقایسه می‌شوند.
-این‌طور مقایسه دقیقاً همان چیزی را می‌سنجد که روشن‌کردنِ `USE_SNMP_EXPORTER=1` تغییر
-می‌دهد — نه یک ترجمهٔ دستیِ تازه که خودش باگ داشته باشد.
+Two sides of the comparison:
+  1) The output of snmp_exporter (the exposition text you got from /snmp?target=…)
+  2) legacy collector snapshot (JSON of the same structure that collect_hp/collect_canon returns;
+     output of `core.enhanced_collector.collect_enhanced` or a snapshot log in `logs.db`)
 
-نکتهٔ G.6 (طبقِ دستورِ مالک): اینجا **هیچ عددی دربارهٔ PDU در repo ثبت نمی‌شود**. ابزار
-سنجه‌اش با fixtureهای مصنوعی است؛ عددِ واقعیِ PDU را خودِ مالک روی سرورش از همین گزارش
-می‌خواند.
+Why it passes "mirror": the unit of comparison should be the *concept*, not the *metric name*. metric
+`hrPrinterTotal` is opposite to `counters.total`, so first capture with the same
+`core.collectors.exporter_adapter.exporter_to_collector_shape` (mirror tested in G.5) to
+The collector structure is created and then the *common paths* of the two structures are compared line by line.
+This way the comparison measures exactly what turning on `USE_SNMP_EXPORTER=1` changes.
+gives — not a fresh manual translation that itself has bugs.
 
-کاربرد:
+Note G.6 (according to the owner's instructions): Here **no number about the PDU is recorded in the repo**. tools
+It is measured with artificial fixtures; The real number of PDU from the owner himself on his server from this report
+reads
+
+Application:
     python3 tools/compare_snmp_sources.py \\
         --exporter-capture /tmp/exp_hp.txt \\
         --snmp-snapshot /tmp/snap.json \\
         [--brand hp] [--tolerance 5] [--json /tmp/cmp.json] [--md /tmp/cmp.md]
 
-خروجیِ exit:
-    0 = اختلافِ معنادار نیست (هیچ سطرِ diff)   1 = اختلافِ معنادار هست
-    2 = ورودیِ ناقص/ناسازگار (فایل نیست، JSON خراب است، برند پشتیبانی‌نشده، صفرِ مسیرِ مشترک)
+exit output:
+    0 = no significant difference (no diff line) 1 = significant difference
+    2 = incomplete/inconsistent input (no file, broken JSON, unsupported brand, zero shared path)
 """
 from __future__ import annotations
 
@@ -45,29 +57,23 @@ from core.collectors.exporter_adapter import exporter_to_collector_shape  # noqa
 
 SUPPORTED_BRANDS = ("hp", "canon")
 
-# شمارشگرهایِ PDU که exporter در همان پاسخِ exposition می‌گذارد. هیچ‌کدام در snmp.yml
-# نبود؛ اگر capture شما آن‌ها را دارد (پیش‌فرضِ exporter) از همین‌جا خوانده می‌شود،
-# وگرنه گزارش صریحاً N/A می‌نویسد (و ما هم در repo عددی ثبت نمی‌کنیم).
-PDU_METRICS = ("snmp_scrape_packets_sent", "snmp_scrape_pdus_returned",
-               "snmp_scrape_duration_seconds")
-
-# فیلدهایِ ناپایدارِ *ساعتی* — حالتِ دستگاه را نمی‌سنجند، پس مقایسه نمی‌شوند (در گزارش
-# صریحاً فهرست می‌شوند تا چیزی پنهان نباشد؛ با --include-volatile دوباره فعال می‌شوند).
+# *Hourly* volatile fields — do not measure device state, so are not compared (in log
+# They are listed explicitly so that nothing is hidden; are re-enabled with --include-volatile).
 VOLATILE_PATHS = ("last_poll", "poll_ms")
 
-# کلیدهایی که «حالتِ دستگاه» نیستند (برچسبِ ما + ساعت‌ها)؛ برایِ گیتِ ورودی از شمارشِ مشترک
-# بیرون گذاشته می‌شوند و در جدولِ زیرِ «کاستیِ آینه» هم گیج‌کننده نبودن‌شان مهم است.
+# Keys that are not "device mode" (our tag + clocks); For the input gate of the common count
+# They are left out, and it is important that they are not confusing in the table below "mirror deficiency".
 IDENTITY_PATHS = ("brand", "ip", "name", "online")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ۱) صاف‌کردنِ ساختار → مسیرهایِ نقطه‌چین
+# 1) smoothing the structure → dotted lines
 # ─────────────────────────────────────────────────────────────────────────────
 def flatten(obj, prefix=""):
-    """dict/list را به {مسیر: مقدارِ اسکالر} تبدیل می‌کند (کاملاً قطعی، ترتیبِ کلید).
+    """Converts dict/list to {path: scalar value} (absolutely deterministic, key-ordered).
 
-    مقدارهایِ غیراسکالرِ باقی‌مانده (dict/list تهی) با لیبلِ «(empty)» نگه داشته می‌شوند تا
-    «کم» با «هستِ ولی تهی» اشتباه گرفته نشود.
+    The remaining non-scalar values (empty dict/list) are kept with the label "(empty)" until
+    "Less" should not be confused with "there is but nothing".
     """
     out = {}
     if isinstance(obj, dict):
@@ -83,6 +89,8 @@ def flatten(obj, prefix=""):
 
 
 def kind_of(value):
+    """Classify a value as bool, num, text, other or missing."""
+
     if isinstance(value, bool):
         return "bool"
     if isinstance(value, (int, float)) and not isinstance(value, bool):
@@ -93,15 +101,15 @@ def kind_of(value):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ۲) مقایسه
+# 2) Comparison
 # ─────────────────────────────────────────────────────────────────────────────
 def compare_shapes(exporter_shape, snapshot_shape, tolerance_pct, ignore=VOLATILE_PATHS):
-    """سطرهایِ مقایسه را می‌سازد. بازمی‌گرداند: (rows, summary).
+    """Creates comparison lines. Returns: (rows, summary).
 
-    verdictها:
-      ok      — برابر یا اختلافِ نسبی <= tolerance
-      diff    — اختلافِ نسبی > tolerance (یا رشتهٔ نابرابر)
-      missing — یک طرف مقدارِ واقعی ندارد (None / نبودنِ مسیر) → اختلافِ معنادار **نیست**
+    Verdicts:
+      ok — equal or relative difference <= tolerance
+      diff — relative difference > tolerance (or unequal string)
+      missing — one side does not have a real value (None / the absence of the path) → there is **not** a meaningful difference
     """
     e_flat = flatten(exporter_shape)
     s_flat = flatten(snapshot_shape)
@@ -157,8 +165,8 @@ def compare_shapes(exporter_shape, snapshot_shape, tolerance_pct, ignore=VOLATIL
         n_diff += verdict == "diff"
 
     common = sorted(set(e_flat) & set(s_flat))
-    # کلیدهایِ هویتی/ساعتی به‌خودی‌خود مشترک‌اند؛ «صفرِ مسیرِ مشترک» باید معنادارسنجیده شود،
-    # وگرنه snapshotِ بی‌ربط (که فقط brand درست دارد) از گیتِ ورودی رد می‌شود.
+    # Identity/time keys are shared by themselves; "Zero of the common path" should be meaningfully measured,
+    # Otherwise, the irrelevant snapshot (which only has the correct brand) will be rejected from the input gate.
     meaningful = [p2 for p2 in common if p2 not in IDENTITY_PATHS]
     summary = {"rows": len(rows), "common_paths": len(common),
                "meaningful_common_paths": len(meaningful), "ok": n_ok, "diff": n_diff,
@@ -169,7 +177,7 @@ def compare_shapes(exporter_shape, snapshot_shape, tolerance_pct, ignore=VOLATIL
 
 
 def _num(v):
-    """عدد را در JSON تمیز نگه می‌دارد (int اگر درست بود، وگرنه float؛ NaN/Inf → None)."""
+    """Keeps the number in clean JSON (int if true, float otherwise; NaN/Inf → None)."""
     if isinstance(v, bool):
         return v
     f = float(v)
@@ -181,13 +189,13 @@ def _num(v):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ۳) شمارشِ PDU
+# 3) PDU count
 # ─────────────────────────────────────────────────────────────────────────────
 def read_pdu_counts(metrics, snapshot_doc):
-    """شمارشگرهایِ exporter (جمع روی همهٔ moduleها) در برابرِ SNMP_PDU_COUNTِ snapshot.
+    """Exporter counters (total over all modules) against snapshot's SNMP_PDU_COUNT.
 
-    هیچ مقدارِ پیش‌فرضی اختراع نمی‌شود: هر کدام نبود، رشتهٔ "N/A" می‌ماند و در گزارش هم
-    همان‌طور نوشته می‌شود. `per_series` نگه داشته می‌شود تا «جمع‌کردن» قابلِ بازبینی باشد.
+    No default value is invented: if there were none, the string "N/A" remains, and so does the report
+    It is written the same way. `per_series' is kept so that the ``aggregation'' can be reviewed.
     """
     out = {"exporter": {"packets_sent": "N/A", "pdus_returned": "N/A"},
            "snapshot": "N/A", "per_series": {}, "source": {"snapshot": "N/A"}}
@@ -211,9 +219,11 @@ def read_pdu_counts(metrics, snapshot_doc):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ۴) گزارش‌ها
+# 4) Reports
 # ─────────────────────────────────────────────────────────────────────────────
 def render_markdown(rep):
+    """Render the comparison report as Markdown."""
+
     L = []
     L.append("# گزارشِ مقایسهٔ دو منبعِ SNMP (G.6)")
     L.append("")
@@ -265,13 +275,17 @@ def render_markdown(rep):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ۵) main
+# 5) main
 # ─────────────────────────────────────────────────────────────────────────────
 class InputError(Exception):
+    """Raised when an input file of the comparison tool is invalid."""
+
     pass
 
 
 def load_exporter_metrics(paths):
+    """Load exporter metric text from the given files."""
+
     texts = []
     for p in paths:
         path = pathlib.Path(p)
@@ -292,6 +306,8 @@ def load_exporter_metrics(paths):
 
 
 def load_snapshot(path, brand_override):
+    """Load the snapshot file that the exporter output is compared against."""
+
     p = pathlib.Path(path)
     if not p.is_file():
         raise InputError(f"snmp-snapshot پیدا نشد: {p}")
@@ -316,6 +332,8 @@ def load_snapshot(path, brand_override):
 
 
 def main(argv=None):
+    """Command-line entry point of the comparison tool."""
+
     ap = argparse.ArgumentParser(
         description="مقایسهٔ خروجیِ snmp_exporter با snapshotِ collectorِ legacy")
     ap.add_argument("--exporter-capture", action="append", required=True,
@@ -342,12 +360,12 @@ def main(argv=None):
         print(f"ورودیِ ناقص/ناسازگار: {exc}", file=sys.stderr)
         return 2
 
-    # ip/name در ساختارِ collector جا دارند ولی از SNMP نمی‌آیند؛ برای اینکه مقایسهٔ آن‌ها
-    # با خودِ snapshot بی‌معنی نشود، از همین snapshot برداشته می‌شوند (مگر --ip/--name).
+    # ip/name are included in the collector structure, but they do not come from SNMP; To compare them
+    # Don't mess with the snapshot itself, they are removed from this snapshot (except --ip/--name).
     ip = args.ip or snapshot_shape.get("ip") or args.exporter_capture[0]
     name = args.name if args.name is not None else snapshot_shape.get("name", "")
     exporter_shape = exporter_to_collector_shape(ip, brand, metrics, name=name)
-    if exporter_shape is None:          # عملی نیست؛ load_snapshot برند را سانس کرده
+    if exporter_shape is None:          # It is not practical; load_snapshot censored the brand
         print("آینه خروجیِ None داد (برند پشتیبانی‌نشده؟)", file=sys.stderr)
         return 2
 

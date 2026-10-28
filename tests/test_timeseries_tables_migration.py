@@ -22,7 +22,7 @@ from tests.migration_graph import migration_graph, migration_head
 
 class TimeseriesMigrationChainTests(unittest.TestCase):
     def test_migration_chain_has_head_0006_or_newer(self):
-        self.assertIn(migration_head(), ("0006", "0007"))
+        self.assertIn(migration_head(), ("0006", "0007", "0008"))
 
     def test_migration_0006_points_to_0005(self):
         graph = migration_graph()

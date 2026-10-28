@@ -1,11 +1,24 @@
+# =============================================================================
+# @file:         web/routes/export_bp.py
+# @brief:        Exports printer logs and status as CSV or Excel, with paper-size support.
+# @details:      Responsibilities: Build CSV and XLSX files from the log tables.
+#                Main API: export_logs(), export_excel()
+#                Side effects: defines HTTP routes
+# @dependencies: internal: core, core.database, core.time_utils, web.auth | external: flask,
+#                flask_login, openpyxl
+# @notes:        None.
+# =============================================================================
+
 """
-خروجی داده: CSV, Excel (لاگ و وضعیت پرینترها) – با پشتیبانی از paper_size
+Data output: CSV, Excel (printers log and status) – with paper_size support
 """
 import csv
 import io
 from datetime import datetime, timezone
+
 from flask import Blueprint, jsonify, request, make_response, send_file
 from flask_login import current_user
+
 from core import store
 from core.database import get_log, get_all_logs, get_reset_history
 from core.time_utils import (DEFAULT_DISPLAY_TZ, to_local_str, to_sort_key,
@@ -14,14 +27,14 @@ from web.auth import allowed_printer_ips, user_allowed_offices
 
 bp = Blueprint("export", __name__)
 
-# فاز E.3: داده‌ی ذخیره‌شده UTC با پسوند Z است (طول ثابت ۲۷). خروجی‌های CSV/Excel
-# باید ساعت محلی نشان دهند (قبلاً رشته‌ی naive محلی بود و بریدنِ [:19] بی‌خطر بود؛
-# حالا بدون تبدیل، UTC نمایش داده می‌شود و ردیف‌ها ۳:۳۰ جابه‌جا به‌نظر می‌رسند).
+# Phase E.3: Stored data is UTC with Z extension (fixed length 27). CSV/Excel outputs
+# They should show local time (previously the naive string was local and it was safe to cut [:19];
+# Now without the conversion, UTC is displayed and the rows appear shifted by 3:30).
 TZ_LABEL = DEFAULT_DISPLAY_TZ
 
 
 def _local_ts(value) -> str:
-    """timestamp ذخیره‌شده ⇒ رشته‌ی محلی برای خروجی؛ مقدار ناخوانا ⇒ دست‌نخورده."""
+    """saved timestamp ⇒ local string for output; Unread value ⇒ intact."""
     raw = str(value or "")
     if not raw:
         return ""
@@ -31,9 +44,11 @@ def _local_ts(value) -> str:
         return raw
 
 
-# ─── export لاگ با بازه تاریخ ───────────────────────────────────
+# Export log with date range
 @bp.route('/api/export/logs')
 def export_logs():
+    """Export the printer logs as a CSV file."""
+
     start     = request.args.get('start')
     end       = request.args.get('end')
     fmt       = request.args.get('format', 'csv').lower()
@@ -55,17 +70,18 @@ def export_logs():
 
 
 def _csv_logs(logs, start, end):
+    """Build a CSV export of the log rows for a date range."""
     output = io.StringIO()
     w = csv.writer(output)
     w.writerow([f'Timestamp ({TZ_LABEL})','Printer IP','Printer Name','Type','Message',
-                'Pages','Color','Code','Severity','Paper Size','Details'])   # ← اضافه شد
+                'Pages','Color','Code','Severity','Paper Size','Details'])   # → Added
     import json
     for ev in logs:
         w.writerow([
             _local_ts(ev.get('timestamp')), ev.get('printer_ip',''), ev.get('printer_name',''),
             ev.get('type',''), ev.get('message',''), ev.get('pages',''),
             ev.get('color',''), ev.get('code',''), ev.get('severity',''),
-            ev.get('paper_size',''),   # ← اضافه شد
+            ev.get('paper_size',''),   # → Added
             json.dumps({k:v for k,v in ev.items()
                         if k not in ('timestamp','printer_ip','printer_name',
                                      'type','message','pages','color','code','severity','paper_size')},
@@ -80,6 +96,7 @@ def _csv_logs(logs, start, end):
 
 
 def _excel_logs(logs, start, end):
+    """Build an Excel export of the log rows for a date range."""
     try:
         import openpyxl
         from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -91,7 +108,7 @@ def _excel_logs(logs, start, end):
     ws = wb.active; ws.title = "Logs"; ws.sheet_view.rightToLeft = True
     thin = Side(style='thin', color='2A3248')
     bdr  = Border(left=thin, right=thin, top=thin, bottom=thin)
-    headers = [f'زمان ({TZ_LABEL})','IP','نام دستگاه','نوع','پیام','صفحات','رنگ','کد','اهمیت','سایز کاغذ','جزئیات']   # ← اضافه شد
+    headers = [f'زمان ({TZ_LABEL})','IP','نام دستگاه','نوع','پیام','صفحات','رنگ','کد','اهمیت','سایز کاغذ','جزئیات']   # → Added
     for col, h in enumerate(headers, 1):
         cell = ws.cell(1, col, h)
         cell.font      = Font(bold=True, color='00D4FF', name='Arial', size=10)
@@ -107,7 +124,7 @@ def _excel_logs(logs, start, end):
             ev.get('printer_ip',''), ev.get('printer_name',''), ev.get('type',''),
             ev.get('message',''), ev.get('pages',''), ev.get('color',''), ev.get('code',''),
             sev.upper(),
-            ev.get('paper_size',''),   # ← اضافه شد
+            ev.get('paper_size',''),   # → Added
             json.dumps({k:v for k,v in ev.items()
                         if k not in ('timestamp','printer_ip','printer_name',
                                      'type','message','pages','color','code','severity','paper_size')},
@@ -131,9 +148,11 @@ def _excel_logs(logs, start, end):
                      mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 
-# ─── گزارش کامل Excel ───────────────────────────────────────────
+# Complete Excel report
 @bp.route('/api/export/excel')
 def export_excel():
+    """Export the printer logs and status as an Excel workbook."""
+
     try:
         import openpyxl
         from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -142,7 +161,7 @@ def export_excel():
     except ImportError:
         HAVE_OX = False
 
-    # ─── دریافت snapshot و اعمال فیلترهای دسترسی ─────────────────
+    # ─── receiving snapshot and applying access filters ──────────────────
     allowed_offices = user_allowed_offices(current_user)
     allowed_ips = allowed_printer_ips(current_user)
     with store.data_lock:
@@ -153,7 +172,7 @@ def export_excel():
         snap = [d for d in snap if d.get("ip") in allowed_ips]
         cfg = [p for p in cfg if p.get("ip") in allowed_ips]
 
-    # اگر openpyxl نصب نباشد، fallback به CSV
+    # If openpyxl is not installed, fallback to CSV
     if not HAVE_OX:
         return _csv_full_report(snap, cfg)
 
@@ -162,6 +181,7 @@ def export_excel():
     bdr  = Border(left=thin, right=thin, top=thin, bottom=thin)
 
     def hcell(ws, r, c, v, fg="00D4FF", bg="0E1018"):
+        """Write a styled header cell to an Excel worksheet."""
         cell = ws.cell(r, c, v)
         cell.font      = Font(bold=True, color=fg, name="Arial", size=10)
         cell.fill      = PatternFill("solid", start_color=bg)
@@ -170,6 +190,7 @@ def export_excel():
         return cell
 
     def dcell(ws, r, c, v, bg="141720", fg="E4E8F0"):
+        """Write a styled data cell to an Excel worksheet."""
         cell = ws.cell(r, c, v)
         cell.font      = Font(name="Arial", size=9, color=fg)
         cell.fill      = PatternFill("solid", start_color=bg)
@@ -179,10 +200,10 @@ def export_excel():
 
     ROWS = ["141720", "0E1018"]
 
-    # Sheet 1: Status (بدون تغییر)
+    # Sheet 1: Status (no change)
     ws1 = wb.active; ws1.title = "Printer Status"; ws1.sheet_view.rightToLeft = True
-    # ✅ فیکس برچسب: شاخه‌های Toshiba سایز دقیق نیستند؛ 207/208 دسته‌ی کامل
-    # کاغذ بزرگ/کوچک‌اند و 209/210/227 زیرشمارنده‌اند، نه «A4R/A5/B4».
+    # Fix the label: Toshiba plugs are not the exact size; 207/208 complete category
+    # Large/small paper and 209/210/227 sub-counters, not "A4R/A5/B4".
     H1  = ["IP","نام","آنلاین","مدل","سریال","Uptime","کل","رنگی","BW","Copy","Fax","Scan",
            "کوچک (A4/A5)","بزرگ (A3/B4)","چاپ رایانه·بزرگ","چاپ رایانه·کوچک","نامشخص(۲۲۷)","T1%","T2%","T3%",
            "Cyan%","Cyan Dots","Magenta%","M Dots","Yellow%","Y Dots","Black%","K Dots","هشدار"]
@@ -217,16 +238,16 @@ def export_excel():
     for i, w in enumerate(col_widths):
         ws1.column_dimensions[get_column_letter(i+1)].width = w
 
-    # Sheet 2: Job Log (با ستون سایز کاغذ)
+    # Sheet 2: Job Log (with paper size column)
     ws3 = wb.create_sheet("Job Log"); ws3.sheet_view.rightToLeft = True
-    H3  = [f"زمان ({TZ_LABEL})","IP","نام دستگاه","نوع رویداد","پیام","صفحات","رنگ","کد","اهمیت","سایز کاغذ"]   # ← اضافه شد
+    H3  = [f"زمان ({TZ_LABEL})","IP","نام دستگاه","نوع رویداد","پیام","صفحات","رنگ","کد","اهمیت","سایز کاغذ"]   # → Added
     for ci, h in enumerate(H3, 1): hcell(ws3, 1, ci, h)
     ws3.row_dimensions[1].height = 28
     all_ev = []
     for p in cfg:
         for e in get_log(p["ip"], limit=1000):
             all_ev.append((p["ip"], p["name"], e))
-    # فاز E.3: مرتب‌سازی زمانی واقعی (تجزیه‌ی مقدار)، نه مقایسه‌ی رشته‌ای.
+    # Phase E.3: Real-time sorting (value parsing), not string comparison.
     all_ev.sort(key=lambda x: to_sort_key(x[2].get("timestamp")), reverse=True)
     SEV = {"error":"FF3D3D","warning":"FFD740","success":"00E676","info":"7B86A0"}
     for ri, (pip, pname, e) in enumerate(all_ev, 2):
@@ -235,7 +256,7 @@ def export_excel():
         sev = e.get("severity") or "info"
         vals = [ts, pip, pname, e.get("type",""), e.get("message",""),
                 e.get("pages",""), e.get("color",""), e.get("code",""), sev.upper(),
-                e.get("paper_size","")]   # ← اضافه شد
+                e.get("paper_size","")]   # → Added
         for ci, v in enumerate(vals, 1): dcell(ws3, ri, ci, v, bg)
         ws3.cell(ri, 9).font = Font(name="Arial", size=9, bold=True,
                                     color=SEV.get(sev,"E4E8F0"))
@@ -275,6 +296,7 @@ def export_excel():
 
 
 def _csv_full_report(snap, cfg):
+    """Build a CSV export of the full report snapshot."""
     out = io.StringIO()
     w   = csv.writer(out)
     w.writerow(["Report", utc_now_iso()])

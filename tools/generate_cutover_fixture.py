@@ -1,23 +1,33 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-tools/generate_cutover_fixture.py — اسکریپت تولید دیتابیس مصنوعی SQLite برای تمرین Cutover (فاز F.4).
+# =============================================================================
+# @file:         tools/generate_cutover_fixture.py
+# @brief:        Generates a synthetic SQLite database for cutover practice (phase F).
+# @details:      Responsibilities: Create synthetic data according to the command-line options.
+#                Main API: generate_synthetic_db(), parse_args(), main()
+#                Side effects: database access, file I/O
+# @dependencies: stdlib only
+# @notes:        Can be run directly as a script.
+# =============================================================================
 
-ویژگی‌ها و قابلیت‌ها:
+"""
+tools/generate_cutover_fixture.py — Script to generate synthetic SQLite database for Cutover practice (phase F.4).
+
+Features and capabilities:
 -------------------
-۱. ایجاد فایل دیتابیس SQLite با ساختار و اسکیمای کامل برگرفته از logs.db
-۲. تولید حجم داده‌ی هدف (پیش‌فرض ۳۰ مگابایت، در بازه مجاز ۲۵ الی ۳۵ مگابایت)
-۳. توزیع حجم سطور بر مبنای درصدهای آماری پروداکشن:
-   - logs: ۵۰٪ (~۱۵ مگابایت)
-   - sensor_readings: ۱۷٪ (~۵ مگابایت)
-   - toner_snapshots_v2: ۱۳٪ (~۴ مگابایت)
-   - toner_history: ۱۰٪ (~۳ مگابایت)
-   - yield_samples: ۷٪ (~۲ مگابایت)
-   - سایر جداول تنظیمی و پیکربندی: ۳٪
-۴. تولید داده‌های واقع‌گرایانه (Realistic Synthetic Data):
-   - رشته‌های زمان ایزوی Naive بدون پسوند Z (مشابه دیتابیس واقعی پروداکشن)
-   - ۳۰ نشانی IP واقعی پرینترها
-   - سطوح تونر ۰ تا ۱۰۰، وضعیت‌ها، پیام‌ها، و details به صورت رشته معتبر JSON.
+1. Creating SQLite database file with complete structure and schema taken from logs.db
+2. Generating target data volume (default 30 MB, within the allowed range of 25 to 35 MB)
+3. Distribution of the volume of lines based on statistical percentages of production:
+   - logs: 50% (~15 MB)
+   - sensor_readings: 17% (~5 MB)
+   - toner_snapshots_v2: 13% (~4 MB)
+   - toner_history: 10% (~3 MB)
+   - yield_samples: 7% (~2 MB)
+   - Other regulatory and configuration tables: 3%
+4. Production of realistic synthetic data:
+   - Naive ISO time strings without Z extension (similar to real production database)
+   - 30 real IP addresses of printers
+   - Toner levels 0 to 100, states, messages, and details as valid JSON strings.
 """
 
 from __future__ import annotations
@@ -33,19 +43,6 @@ import sys
 DEFAULT_TARGET_SIZE_MB = 30.0
 DEFAULT_OUTPUT_PATH = "tests/fixtures/cutover_synthetic.db"
 DEFAULT_SCHEMA_SOURCE = "logs.db"
-
-TABLE_WEIGHTS = {
-    "logs": 0.50,               # ~15MB
-    "sensor_readings": 0.17,    # ~5MB
-    "toner_snapshots_v2": 0.13, # ~4MB
-    "toner_history": 0.10,      # ~3MB
-    "yield_samples": 0.07,      # ~2MB
-    "printer_counters": 0.01,
-    "cartridge_state": 0.01,
-    "cartridge_yield_profiles": 0.005,
-    "users": 0.005,
-    "security_events": 0.005,
-}
 
 SAMPLE_IPS = [".".join(["192", "168", "10", str(i)]) for i in range(1, 31)]
 SAMPLE_MODELS = [
@@ -66,10 +63,10 @@ def generate_synthetic_db(
     quiet: bool = False,
 ) -> int:
     """
-    تولید دیتابیس مصنوعی SQLite با حجم تقریبی size_mb بر مبنای اسکیمای schema_source.
+    Generating an artificial SQLite database with an approximate volume of size_mb based on the schema_source schema.
 
     Returns:
-        حجم فایل تولید شده به بایت.
+        Size of generated file in bytes.
     """
     out_file = pathlib.Path(output_path).resolve()
     out_file.parent.mkdir(parents=True, exist_ok=True)
@@ -77,14 +74,14 @@ def generate_synthetic_db(
     if out_file.exists():
         out_file.unlink()
 
-    # کپی اسکیمای اولیه از دیتابیس مرجع
+    # Copy the initial schema from the reference database
     shutil.copyfile(schema_source, out_file)
 
     conn = sqlite3.connect(str(out_file))
     conn.execute("PRAGMA synchronous = OFF")
     conn.execute("PRAGMA journal_mode = MEMORY")
 
-    # استخراج جداول برنامه و تخلیه آن‌ها
+    # Extracting program tables and unloading them
     tables = [
         r[0]
         for r in conn.execute(
@@ -94,8 +91,26 @@ def generate_synthetic_db(
     for tbl in tables:
         conn.execute(f'DELETE FROM "{tbl}"')
 
-    # هم‌راستایی اسکیمای جدول logs با پروداکشن واقعی (۱۸ ستون)
-    cur_cols = {r[1] for r in conn.execute('PRAGMA table_info("logs")').fetchall()}
+    # The meta table is not in production SQLite (10 tables), but the destination schema has 11 tables.
+    # Exactly the same DDL migration 0001.
+    if "meta" not in tables:
+        conn.execute(
+            "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)"
+        )
+
+    # Compression after dump: DELETE does not shrink the file, and if ``schema_source''
+    # If it is a real database (several hundred megabytes), the final file will be in the range of 25-35MB.
+    conn.commit()
+    conn.execute("VACUUM")
+
+    # Schema alignment of logs table with actual production (18 columns).
+    # ``table_xinfo'' (not ``table_info''): virtual *generated* columns like ``raw_delta''
+    # They are not seen in ``table_info'' and ``ADD COLUMN'' with ``duplicate column name''
+    # Fails — Actual error on production schema.
+    log_xinfo = conn.execute('PRAGMA table_xinfo("logs")').fetchall()
+    cur_cols = {r[1] for r in log_xinfo}
+    # hidden == 0 ⇒ normal and insertable column; 2/3 ⇒ generated and not insertable.
+    insertable_cols = [r[1] for r in log_xinfo if not r[6]]
     legacy_columns = [
         ("sheets", "INTEGER"),
         ("raw_counters", "TEXT"),
@@ -109,7 +124,7 @@ def generate_synthetic_db(
 
     conn.commit()
 
-    # محاسبه تعداد سطور بر مبنای ضریب حجم
+    # Calculation of the number of lines based on the volume factor
     scale_factor = size_mb / 30.0
 
     num_users = 15
@@ -124,7 +139,7 @@ def generate_synthetic_db(
     num_sensors = max(3000, int(41000 * scale_factor))
     num_logs = max(5000, int(61500 * scale_factor))
 
-    # ۱. جدول users
+    # 1. users table
     u_rows = [
         (
             i,
@@ -157,7 +172,7 @@ def generate_synthetic_db(
     ]
     conn.executemany("INSERT INTO users VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", u_rows)
 
-    # ۲. جدول printer_counters
+    # 2. printer_counters table
     pc_rows = [
         (
             ip,
@@ -186,7 +201,7 @@ def generate_synthetic_db(
     ]
     conn.executemany("INSERT INTO printer_counters VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", pc_rows)
 
-    # ۳. جدول cartridge_state
+    # 3. cartridge_state table
     cs_rows = [
         (
             ip,
@@ -226,7 +241,7 @@ def generate_synthetic_db(
     ]
     conn.executemany("INSERT INTO cartridge_state VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", cs_rows)
 
-    # ۴. جدول cartridge_yield_profiles
+    # 4. cartridge_yield_profiles table
     cyp_rows = [
         (
             f"cyp_{idx}_{c}",
@@ -245,7 +260,7 @@ def generate_synthetic_db(
     ]
     conn.executemany("INSERT INTO cartridge_yield_profiles VALUES (?,?,?,?,?,?,?,?,?,?)", cyp_rows)
 
-    # ۵. جدول meta
+    # 5. Meta table
     conn.execute(
         "INSERT INTO meta VALUES (?,?,?)",
         ("timezone_cutover_at", "2026-10-03T06:35:11+00:00", "2026-10-03T06:35:11+00:00"),
@@ -255,7 +270,7 @@ def generate_synthetic_db(
         ("synthetic_seed", "42", "2026-10-07T12:00:00.000000"),
     )
 
-    # ۶. جدول security_events
+    # 6. security_events table
     se_rows = [
         (
             i,
@@ -275,7 +290,7 @@ def generate_synthetic_db(
     ]
     conn.executemany("INSERT INTO security_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", se_rows)
 
-    # ۷. جدول yield_samples
+    # 7. yield_samples table
     ys_rows = [
         (
             i,
@@ -302,7 +317,7 @@ def generate_synthetic_db(
     ]
     conn.executemany("INSERT INTO yield_samples VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ys_rows)
 
-    # ۸. جدول toner_history
+    # 8. toner_history table
     th_rows = [
         (
             i,
@@ -317,7 +332,7 @@ def generate_synthetic_db(
     ]
     conn.executemany("INSERT INTO toner_history VALUES (?,?,?,?,?,?,?)", th_rows)
 
-    # ۹. جدول toner_snapshots_v2
+    # 9. table toner_snapshots_v2
     ts_rows = [
         (
             i,
@@ -341,7 +356,7 @@ def generate_synthetic_db(
     ]
     conn.executemany("INSERT INTO toner_snapshots_v2 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ts_rows)
 
-    # ۱۰. جدول sensor_readings
+    # 10. sensor_readings table
     sr_rows = [
         (
             i,
@@ -357,9 +372,10 @@ def generate_synthetic_db(
     ]
     conn.executemany("INSERT INTO sensor_readings VALUES (?,?,?,?,?,?,?,?)", sr_rows)
 
-    # ۱۱. جدول logs (شامل ۱۸ ستون هم‌راستا با production)
-    log_rows = [
-        (
+    # 11. logs table (including 18 columns in line with production)
+    def _log_row(i: int) -> tuple:
+        """Build one synthetic logs row for the cutover fixture."""
+        return (
             i,
             SAMPLE_IPS[i % len(SAMPLE_IPS)],
             SAMPLE_MODELS[i % len(SAMPLE_MODELS)],
@@ -379,12 +395,52 @@ def generate_synthetic_db(
             "UNKNOWN",  # event_type (legacy, 100% 'UNKNOWN')
             "unknown",  # duplex_mode (legacy, 100% 'unknown')
         )
-        for i in range(1, num_logs + 1)
+
+    # Insert column-oriented, not ``VALUES'' without column index: on the production schema that
+    # ``raw_delta'' is *generated* in that column, direct insertion in that column gives error.
+    log_column_order = [
+        "id", "printer_ip", "printer_name", "timestamp", "type", "message", "pages",
+        "color", "code", "severity", "paper_size", "username", "details",
+        "sheets", "raw_counters", "raw_delta", "event_type", "duplex_mode",
     ]
-    conn.executemany(
-        "INSERT INTO logs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        log_rows,
-    )
+    insertable = set(insertable_cols)
+    keep = [i for i, name in enumerate(log_column_order) if name in insertable]
+    cols_sql = ", ".join(f'"{log_column_order[i]}"' for i in keep)
+    placeholders = ",".join("?" for _ in keep)
+
+    def _insert_logs(rows: list) -> None:
+        """Insert the synthetic log rows into the fixture database."""
+        conn.executemany(
+            f"INSERT INTO logs ({cols_sql}) VALUES ({placeholders})",
+            [tuple(row[i] for i in keep) for row in rows],
+        )
+
+    _insert_logs([_log_row(i) for i in range(1, num_logs + 1)])
+
+    # Set the final size to "Target size": line count is based on estimates and not on the schema
+    # Actual production (columns wider than the reference database) outside the allowed range of 25-35MB
+    # hits; So the two sides are corrected to maintain the contract of the tool itself.
+    target_bytes = int(size_mb * 1024 * 1024)
+    band_bytes = max(1, int(size_mb * 0.10 * 1024 * 1024))     # ±10% ⇒ 27–33MB for 30
+    for _ in range(8):
+        conn.commit()
+        conn.execute("VACUUM")
+        current = os.path.getsize(str(out_file))
+        n_logs = conn.execute("SELECT COUNT(*) FROM logs").fetchone()[0]
+        bytes_per_row = max(1, current // max(1, n_logs))
+        if current > target_bytes + band_bytes:
+            cut = max(1, min(n_logs - 1, (current - target_bytes - band_bytes) // bytes_per_row))
+            conn.execute(
+                "DELETE FROM logs WHERE id IN (SELECT id FROM logs ORDER BY id DESC LIMIT ?)",
+                (cut,),
+            )
+            continue
+        if current < target_bytes - band_bytes:
+            highest = conn.execute("SELECT COALESCE(MAX(id), 0) FROM logs").fetchone()[0]
+            want = max(500, min(20000, (target_bytes - band_bytes - current) // bytes_per_row))
+            _insert_logs([_log_row(i) for i in range(highest + 1, highest + 1 + want)])
+            continue
+        break
 
     conn.commit()
     conn.close()
@@ -418,6 +474,8 @@ def generate_synthetic_db(
 
 
 def parse_args(argv=None):
+    """Parse the command-line arguments of the fixture generator."""
+
     parser = argparse.ArgumentParser(
         prog="generate_cutover_fixture.py",
         description="تولید دیتابیس مصنوعی SQLite برای تمرین Cutover (فاز F.4).",
@@ -452,6 +510,8 @@ def parse_args(argv=None):
 
 
 def main(argv=None) -> int:
+    """Generate the synthetic cutover database."""
+
     args = parse_args(argv)
     if not (20.0 <= args.size_mb <= 35.0):
         print(f"✗ حجم دیتابیس درخواستی ({args.size_mb} MB) باید در بازه ۲۰ تا ۳۵ مگابایت باشد.", file=sys.stderr)

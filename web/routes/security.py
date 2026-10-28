@@ -1,7 +1,18 @@
+# =============================================================================
+# @file:         web/routes/security.py
+# @brief:        Admin-only endpoints that display security events and statistics.
+# @details:      Responsibilities: Return security events, stats and render the security page.
+#                Main API: api_security_events(), api_security_stats(), security_page()
+#                Side effects: defines HTTP routes
+# @dependencies: internal: core.security_audit, core.time_utils, web.auth | external: flask
+# @notes:        None.
+# =============================================================================
+
 """
-Endpoint های نمایش لاگ‌های امنیتی (فقط برای admin).
+Endpoints to display security logs (only for admin).
 """
 
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -10,12 +21,11 @@ from flask import Blueprint, jsonify, request, render_template
 from web.auth import admin_required
 from core.security_audit import get_recent_events, SecurityEvent, _db_conn
 from core.time_utils import to_utc_z
-import json
 
-#: E.6.7 (TD-004): مسیر خطای `api_security_stats` با `log.exception` صدا می‌زد در
-#: حالی که این نام در ماژول تعریف نبود ⇒ خودِ handler خطا، `NameError` می‌داد و
-#: پاسخ JSON برنامه‌ریزی‌شده (و رکورد لاگ) هرگز تولید نمی‌شد. نام، همان قرارداد
-#: سایر routeهاست.
+#: E.6.7 (TD-004): Error path `api_security_stats` was calling with `log.exception` in
+#: While this name was not in the definition module ⇒ the handler itself gave an error, ``NameError'' and
+#: The scheduled JSON response (and log record) was never generated. Name, same contract
+#: Other routes.
 log = logging.getLogger("PrinterMonitor")
 
 EVENT_TYPE_LABELS = {
@@ -39,6 +49,7 @@ EVENT_TYPE_LABELS = {
 
 
 def _localize_event(event):
+    """Add a localized label to a security event."""
     event["event_type_fa"] = EVENT_TYPE_LABELS.get(event.get("event_type"), event.get("event_type", "—"))
     raw = event.get("details")
     try:
@@ -61,12 +72,12 @@ bp = Blueprint("security_audit", __name__)
 @admin_required
 def api_security_events():
     """
-    لیست رویدادهای امنیتی اخیر (فقط admin).
+    List of recent security events (admin only).
     Query params:
-      - limit: حداکثر تعداد (پیش‌فرض 100، حداکثر 1000)
-      - event_type: فیلتر بر اساس نوع رویداد (failed_login، ...)
-      - severity: فیلتر بر اساس شدت (info، warning، critical)
-      - user_id: فقط رویدادهای یک کاربر
+      - limit: maximum number (default 100, maximum 1000)
+      - event_type: filter based on event type (failed_login,...)
+      - severity: filter based on severity (info, warning, critical)
+      - user_id: only single user events
     """
     limit = request.args.get("limit", type=int) or 100
     limit = max(1, min(limit, 1000))
@@ -90,9 +101,9 @@ def api_security_events():
 @bp.route("/api/security/stats", methods=["GET"])
 @admin_required
 def api_security_stats():
-    """آمار خلاصه رویدادهای امنیتی اخیر."""
+    """Summary statistics of recent security events."""
     try:
-        # فاز E.3: cutoffها هم‌فرمت با داده‌ی ذخیره‌شده (UTC/Z) ساخته می‌شوند.
+        # Phase E.3: cutoffs are made in the same format as the stored data (UTC/Z).
         now_utc = datetime.now(timezone.utc)
         cutoff_24h = to_utc_z(now_utc - timedelta(hours=24))
         cutoff_7d = to_utc_z(now_utc - timedelta(days=7))
@@ -146,5 +157,5 @@ def api_security_stats():
 @bp.route("/security", methods=["GET"])
 @admin_required
 def security_page():
-    """صفحه امنیت"""
+    """Security page"""
     return render_template("security.html", load_dashboard_scripts=False)

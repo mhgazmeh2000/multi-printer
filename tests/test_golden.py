@@ -1,23 +1,33 @@
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tests/test_golden.py
+# @brief:        Golden tests: compare live collector output with recorded fixtures.
+# @details:      Responsibilities: Replay each fixture and compare the output byte for byte.
+#                Main API: 3 test functions
+#                Side effects: none at import time
+# @dependencies: internal: core, tests.golden_harness | external: pytest
+# @notes:        None.
+# =============================================================================
+
 """
-تست‌های golden (کار ۱ فاز C).
+golden tests (work 1 phase C).
 
-هر fixture در ``tests/fixtures/golden/*.json`` یک بار و **مستقل** بازپخش می‌شود و
-هر چهار بخش آن assert می‌شود:
+Each fixture in ``tests/fixtures/golden/*.json'' is replayed once **independently** and
+All four parts are asserted:
 
-    input            → ورودی کامل (args + prev + db_seed، یا printer/phases)
+    input → complete input (args + prev + db_seed, or printer/phases)
     expected         → return_value + events + new_prev
-    db_state_after   → ردیف‌های logs/printer_counters/cartridge_state/yield_samples/toner_snapshots_v2
-    snmp_call_sequence → توالی دقیق OIDهای خوانده‌شده (و http_calls)
+    db_state_after → rows logs/printer_counters/cartridge_state/yield_samples/toner_snapshots_v2
+    snmp_call_sequence → exact sequence of read OIDs (and http_calls)
 
-مشخصات:
-  • کاملاً hermetic: هیچ سوکت/شبکه/ساعت واقعی در مسیر نیست (FakeSnmpTransport + frozen_time).
-  • سریع: هر تست چند صد میلی‌ثانیه (بدون timeout/retry شبکه).
-  • پاک‌سازی: DB موقت در ``tmp_path`` ساخته و بعد از تست حذف می‌شود.
+Specifications:
+  • Completely hermetic: no real socket/network/clock in the path (FakeSnmpTransport + frozen_time).
+  • Fast: each test is a few hundred milliseconds (no network timeout/retry).
+  • Cleanup: The temporary DB is created in ``tmp_path'' and deleted after the test.
 
-اجرا:
+Execution:
     python -m pytest tests/test_golden.py -q
-    python -m pytest tests/ -q            # کل مجموعه (۲۱۰ تست قبلی + این‌ها)
+    python -m pytest tests/ -q # The whole set (210 previous tests + these)
 """
 from __future__ import annotations
 
@@ -32,14 +42,14 @@ from tests.golden_harness import (
     replay_enhanced, seed_db,
 )
 
-# این فایل فقط با pytest اجرا میشود (CI: مسیر ۲۱ تستی).
-# load_tests خالی ⇒ تحت `python -m unittest discover` صفر تست از این فایل
-# برداشته میشود (تستها به سبک تابعی pytest هستند) و شمارش دوباره رخ نمیدهد.
-pytestmark = [pytest.mark.pytest_only, pytest.mark.sqlite_only]  # golden = fixture بایت‌به‌بایتِ SQLite (docs/phase-e-plan.md §۵.۳)
+# This file is only run with pytest (CI: 21 test path).
+# empty load_tests ⇒ under `python -m unittest discover` zero tests from this file
+# is removed (the tests are in pytest function style) and counting does not occur again.
+pytestmark = [pytest.mark.pytest_only, pytest.mark.sqlite_only]  # golden = SQLite byte byte fixture (docs/phase-e-plan.md §5.3)
 
 
-def load_tests(loader, tests, pattern):  # noqa: ARG001 - امضای پروتکل unittest
-    """پروتکل unittest: این فایل با unittest کشف/اجرا نمیشود."""
+def load_tests(loader, tests, pattern):  # noqa: ARG001 - unittest protocol signature
+    """Unittest protocol: This file is not detected/executed by unittest."""
     return unittest.TestSuite()
 
 
@@ -49,11 +59,12 @@ ENHANCED_FIXTURES = [p for p in FIXTURES if p.stem.startswith("enhanced_")]
 
 
 def _load(path):
+    """Helper: load."""
     return json.loads(path.read_text(encoding="utf-8"))
 
 
 def test_fixture_inventory():
-    """۱۰ fixture طلایی باید موجود باشند (۵ شمارنده + ۵ سناریوی collect_enhanced)."""
+    """10 gold fixtures must be available (5 counters + 5 collect_enhanced scenarios)."""
     assert len(FIXTURES) == 10, f"expected 10 golden fixtures, found {len(FIXTURES)}"
     assert len(COUNTERS_FIXTURES) == 5
     assert len(ENHANCED_FIXTURES) == 5
@@ -61,7 +72,7 @@ def test_fixture_inventory():
 
 @pytest.mark.parametrize("path", COUNTERS_FIXTURES, ids=[p.stem for p in COUNTERS_FIXTURES])
 def test_golden_counters_event(path, tmp_path):
-    """بازپخش مستقل هر گام ``_counters_event`` با تفاضل صفر در هر ۴ بخش."""
+    """Independent playback of each ``_counters_event'' step with zero difference in all 4 sections."""
     fixture = _load(path)
     with isolated_db(str(tmp_path)), frozen_time():
         seed_db(fixture["input"]["db_seed"])
@@ -81,7 +92,7 @@ def test_golden_counters_event(path, tmp_path):
 
 @pytest.mark.parametrize("path", ENHANCED_FIXTURES, ids=[p.stem for p in ENHANCED_FIXTURES])
 def test_golden_collect_enhanced(path, tmp_path):
-    """بازپخش مستقل هر سناریوی ``collect_enhanced`` (همه‌ی فازها) با تفاضل صفر."""
+    """Independent replay of each ``collect_enhanced'' scenario (all phases) with zero difference."""
     fixture = _load(path)
     with isolated_db(str(tmp_path)):
         observed = replay_enhanced(fixture)

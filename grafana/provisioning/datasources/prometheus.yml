@@ -1,3 +1,11 @@
+# =============================================================================
+# @file:         grafana/provisioning/datasources/prometheus.yml
+# @brief:        Grafana provisioning file that registers the Prometheus data source.
+# @details:      Responsibilities: Declare the Prometheus data source used by the PrintGuard dashboards.
+# @dependencies: Grafana >= 9 provisioning, Prometheus scraping /metrics
+# @notes:        None.
+# =============================================================================
+
 # Grafana datasource provisioning
 # Copy this to /etc/grafana/provisioning/datasources/ or your Grafana data dir
 # Adjust 'url' to your printer server address

@@ -1,3 +1,11 @@
+{#
+  @file:         web/templates/dashboard.html
+  @brief:        Main dashboard page: printer overview, manual and bulk tabs, group management and modals.
+  @details:      Responsibilities: Render the dashboard structure; data is filled in by dashboard.js.
+  @dependencies: template base.html
+  @notes:        None.
+#}
+
 {% extends "base.html" %}
 
 {% block title %}Multi Printer Monitoring{% endblock %}
@@ -38,7 +46,7 @@
     <button class="btn btn-cyan" onclick="triggerPoll()" title="Pull دستی" aria-label="اجرای دستی Pull">⟳</button>
     {% endif %}
 
-    <!-- منوی بیشتر -->
+    <!-- More menu -->
     <div class="topbar-more" id="topbar-more">
       <button class="btn-icon topbar-more-btn" onclick="toggleTopbarMenu()" title="تنظیمات و منو" aria-label="تنظیمات و منو" aria-haspopup="true" aria-expanded="false" aria-controls="topbar-dropdown">
         <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
@@ -121,7 +129,7 @@
 
   <!-- ── SIDEBAR ── -->
   <aside class="sidebar" id="sidebar" aria-label="ناوبری گروه‌ها">
-    <!-- نمای کلی -->
+    <!-- Overview -->
     <div class="sb-overview sb-item active" data-tab="overview" role="button" tabindex="0" aria-current="page" onclick="switchTab('overview',this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click()}">
       <span class="sb-ov-icon">🖥</span>
       <span class="sb-ov-label">نمای کلی</span>
@@ -130,7 +138,7 @@
 
     <div class="sb-divider"></div>
 
-    <!-- گروه‌های دفاتر — با JS پر می‌شوند -->
+    <!-- Office groups — filled with JS -->
     <div id="sidebar-groups"></div>
   </aside>
 
@@ -148,7 +156,7 @@
       <div class="access-grid" id="access-grid"></div>
     </div>
 
-    <!-- بخش نمودار مصرف روزانه -->
+    <!-- Daily consumption chart section -->
     {% if current_user.can_access_module('printers') %}
     <div class="section" style="margin-top:14px">
       <div class="section-title">📊 نمودار مصرف روزانه (۳۰ روز اخیر)</div>
@@ -179,11 +187,11 @@
           <button class="filter-btn" onclick="filterLog('CARTRIDGE_CHANGED',this,'global-log')">🔄 کارتریج</button>
         </div>
         <span class="log-count" id="global-log-count" aria-live="polite"></span>
-        <!-- فیلدهای بازه زمانی -->
+        <!-- Time range fields -->
         <input type="datetime-local" id="log-start" class="form-input" style="width:auto; font-family:var(--mono); font-size:11px;" title="شروع بازه">
         <input type="datetime-local" id="log-end" class="form-input" style="width:auto; font-family:var(--mono); font-size:11px;" title="پایان بازه">
         <button class="btn btn-cyan" onclick="applyDateFilter(null)">🔍 اعمال فیلتر</button>
-        
+
         <div class="dropdown" id="global-export-dropdown">
           <button class="btn btn-yellow dropdown-toggle" onclick="toggleDropdown('global-export-dropdown')">📥 خروجی گزارش‌ها ▼</button>
           <div class="dropdown-menu">
@@ -216,7 +224,7 @@
       <div class="modal-tab" onclick="switchAddTab('discover',this)">🔍 کشف خودکار</div>
       <div class="modal-tab" onclick="switchAddTab('groups',this)">📁 گروه‌ها</div>
     </div>
-    <!-- تب دستی -->
+    <!-- hand fever -->
     <div class="modal-pane active" id="pane-single">
       <div class="form-group">
         <label for="add-ip" class="form-label">آدرس IP</label>
@@ -244,7 +252,7 @@
         <button class="btn" style="color: #ff0000;border-color: #ff0000;" onclick="closeModal()">انصراف</button>
       </div>
     </div>
-    <!-- تب تجمعی -->
+    <!-- Cumulative fever -->
     <div class="modal-pane" id="pane-bulk">
       <div class="form-group">
         <label for="add-community-bulk" class="form-label">Community SNMP (برای همه)</label>
@@ -269,9 +277,9 @@
         <button class="btn" style="color: #ff0000;border-color: #ff0000;" onclick="closeModal()">انصراف</button>
       </div>
     </div>
-    <!-- تب کشف خودکار -->
+    <!-- Autodiscover tab -->
     <div class="modal-pane" id="pane-discover">
-      <!-- محتوای قبلی ... -->
+      <!-- Previous content... -->
       <div class="form-group">
         <label for="add-community-discover" class="form-label">Community SNMP</label>
         <input class="form-input" id="add-community-discover" placeholder="public" value="public" type="text">
@@ -293,7 +301,7 @@
         <button class="btn" style="color: #ff0000;border-color: #ff0000;" onclick="closeModal()">انصراف</button>
       </div>
     </div>
-    <!-- تب مدیریت گروه‌ها -->
+    <!-- Groups management tab -->
     <div class="modal-pane" id="pane-groups">
       <div style="display:flex; flex-direction:column; gap:12px">
 
@@ -301,28 +309,28 @@
           <b>گروه چیست؟</b> گروه برای دسته‌بندی ساده پرینترها استفاده می‌شود. این نما ساده‌سازی شده تا سریع‌تر گروه جدید بسازید و پرینترها را اختصاص دهید.
         </div>
 
-        <!-- ساخت گروه جدید (ساده) -->
+        <!-- Create a new group (simple) -->
         <div style="border:1px solid var(--border); border-radius:12px; padding:12px; background:var(--bg2)">
           <label for="new-group-name" class="form-label" style="margin-bottom:8px">۱️⃣ ایجاد گروه جدید</label>
           <div style="display:flex; gap:8px; align-items:center">
             <input type="text" id="new-group-name" class="form-input" placeholder="نام گروه (مثلاً: مالی، اتاق سرور)..." style="flex:1; min-width:140px" maxlength="60">
-            <!-- نگه داشتن کنترل‌های پیشرفته اما پنهان برای سازگاری JS -->
-            
+            <!-- Keeping advanced but hidden controls for JS compatibility -->
+
             <button class="btn btn-green" onclick="addNewGroupToSystem()" style="min-width:84px">＋ ایجاد</button>
           </div>
         </div>
 
-        <!-- تخصیص سریع پرینترها -->
+        <!-- Quick assignment of printers -->
         <div>
           <label for="group-mgr-filter" class="form-label">۲️⃣ تخصیص سریع پرینترها</label>
           <input type="text" id="group-mgr-filter" class="form-input" placeholder="🔍 فیلتر پرینتر (نام یا IP)..." oninput="renderGroupManagerList()" style="margin-bottom:8px">
           <div id="group-manager-list" style="max-height:170px; overflow-y:auto; border:1px solid var(--border); border-radius:8px; padding:8px; background:var(--bg3)">
-            <!-- لیست پرینترها با JS پر می‌شود -->
+            <!-- The list of printers is populated with JS -->
           </div>
           <div style="font-size:12px;color:var(--text3);margin-top:6px">برای اختصاص: پرینتر(ها) را انتخاب کرده، سپس از منوی ویرایش پرینتر گروه را انتخاب کنید یا از دکمه‌های سریع استفاده کنید.</div>
         </div>
 
-        <!-- پیکربندی یکپارچه زیرشبکه و گروه‌های سفارشی -->
+        <!-- Integrated configuration of subnets and custom groups -->
         <div style="border-top:1px dashed var(--border); padding-top:10px; margin-top:10px;">
           <label class="form-label">پیکربندی زیر شبکه و گروه های سفارشی</label>
           <div id="office-subnets-editor" style="display:flex;flex-direction:column;gap:6px; max-height:200px; overflow:auto; border:1px solid var(--border); border-radius:8px; padding:6px; background:var(--bg3)">
@@ -370,7 +378,7 @@
   </div>
 </div>
 
-<!-- MODAL EDIT PRINTER (ویرایش اطلاعات و گروه) -->
+<!-- MODAL EDIT PRINTER (edit information and group) -->
 <div class="modal-overlay" id="modal-edit-printer">
   <div class="modal" style="width:450px">
     <h3>⚙️ ویرایش اطلاعات دستگاه</h3>
@@ -403,7 +411,7 @@
 
 <!-- TOAST -->
 <div id="toast"></div>
- 
+
 <!-- TONER RESET MODAL -->
 <div class="modal-overlay" id="modal-toner-reset" style="display:none" onclick="if(event.target===this) closeTonerResetModal()">
   <div class="modal" style="width:420px">
@@ -423,12 +431,12 @@
   </div>
 </div>
 
-<!-- MODAL IMPORT DATABASE (بارگذاری دیتا) -->
+<!-- MODAL IMPORT DATABASE (data loading) -->
 <div class="modal-overlay" id="modal-import-db">
   <div class="modal" style="width:min(760px, 94vw); max-height:90vh; overflow-y:auto">
     <h3>📥 بارگذاری داده از فایل .db</h3>
-    
-    <!-- مرحله ۱: انتخاب فایل -->
+
+    <!-- Step 1: Select the file -->
     <div id="import-step-1">
       <div class="form-group">
         <label for="import-db-file" class="form-label">فایل دیتابیس (logs.db)</label>
@@ -440,7 +448,7 @@
       </div>
     </div>
 
-    <!-- مرحله ۲: فیلتر و تایید -->
+    <!-- Step 2: Filter and confirm -->
     <div id="import-step-2" style="display:none">
       <div id="import-summary" class="section-title" style="margin-bottom:10px; font-size:12px">خلاصه داده‌های یافت شده</div>
       <div class="ctr-grid" style="grid-template-columns: 1fr 1fr; margin-bottom:15px">
@@ -457,7 +465,7 @@
       <div class="form-group">
         <label class="form-label">چه داده‌هایی وارد شوند؟</label>
         <div id="import-table-list" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;border:1px solid var(--border);border-radius:8px;padding:10px;background:var(--bg3)">
-          <!-- چک‌باکس جدول‌ها با JS پر می‌شوند -->
+          <!-- Checkbox tables are filled with JS -->
         </div>
         <div style="font-size:10px;color:var(--text3);margin-top:6px;line-height:1.7">
           پیشنهاد: برای انتقال کامل تاریخچه، «لاگ‌ها»، «شمارنده‌ها»، «تاریخچه تونر» و بخش‌های Yield Engine را انتخاب کنید.
@@ -471,7 +479,7 @@
           <button class="btn btn-sm" type="button" onclick="setImportPrintersChecked(false)">لغو همه</button>
         </div>
         <div id="import-printer-list" style="max-height:150px; overflow-y:auto; border:1px solid var(--border); border-radius:8px; padding:10px; background:var(--bg3)">
-          <!-- چک‌باکس‌ها با JS پر می‌شوند -->
+          <!-- Checkboxes are populated with JS -->
         </div>
       </div>
 
@@ -509,12 +517,12 @@
     </div>
   </div>
 </div>
-<!-- MODAL CLEAR LOGS (پاکسازی هوشمند لاگ) -->
+<!-- MODAL CLEAR LOGS -->
 <div class="modal-overlay" id="modal-clear-logs">
   <div class="modal" style="width:400px">
     <h3>🗑 پاکسازی رویدادها</h3>
     <p style="font-size:12px; color:var(--text2); margin-bottom:15px">نوع رویدادهایی که قصد حذف آن‌ها را دارید انتخاب کنید:</p>
-    
+
     <input type="hidden" id="clear-logs-ip">
     <div id="clear-logs-types" style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:20px">
       <label class="users-choice-item" style="min-height:auto; padding:8px 12px">
@@ -548,7 +556,7 @@
   </div>
 </div>
 
-<!-- CONFIRMATION MODAL (تایید حذف / اقدام خطرناک) -->
+<!-- CONFIRMATION MODAL -->
 <div class="modal-overlay" id="confirm-modal-overlay">
   <div class="modal" style="width:420px">
     <h3 id="confirm-modal-title">تایید عمل</h3>

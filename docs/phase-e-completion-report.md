@@ -1,4 +1,4 @@
-# گزارش کامل‌شدن فاز E — زیرساخت PostgreSQL
+# Phase E completion report — PostgreSQL infrastructure
 
 > مرجع نهایی فاز E.0 → E.7. سند کار: [`phase-e-plan.md`](phase-e-plan.md) · تصمیم‌ها:
 > [`phase-e-decisions.md`](phase-e-decisions.md) · بدهی: [`tech-debt.md`](tech-debt.md) ·
@@ -8,7 +8,7 @@
 
 ---
 
-## ۱. سرجمع
+## 1. Summary
 
 | مورد | مقدار (سنجیده‌شده در همین session) |
 |---|---|
@@ -29,7 +29,7 @@
 
 ---
 
-## ۲. زیربخش‌به‌زیربخش
+## 2. Sub-section by sub-section
 
 | گام | چه چیزی نشست | کامیت(ها) |
 |---|---|---|
@@ -44,7 +44,7 @@
 
 ---
 
-## ۳. اعدادی که تصمیم‌ها را توجیه می‌کنند (فقط خروجیِ همان session)
+## 3. Numbers that justify the decisions (only from the output of the same session)
 
 | سنجه | قبل | بعد | منبع |
 |---|---|---|---|
@@ -61,7 +61,7 @@
 
 ---
 
-## ۴. بدهی فنی: وضعیت ۱۵ ردیف
+## 4. Technical debt: status of 15 items
 
 `docs/tech-debt.md` (TD-001…TD-015، جدول ۷ستونه — ۱۵ ردیف، همه ۸ pipe). خلاصهٔ تصمیم‌محور:
 
@@ -81,7 +81,7 @@
 
 ---
 
-## ۵. آنچه فاز F تحویل می‌گیرد (بدون زمان‌بندی)
+## 5. What phase F inherits (no schedule)
 
 1. `tools/migrate_sqlite_to_pg.py` — کپی واقعی SQLite → PG با dry-run/checksum/گزارش؛
    گام‌های ۴ و ۶ runbook امروز با برچسب «فاز F» بازند.
@@ -94,7 +94,7 @@
 
 ---
 
-## ۶. سنجهٔ «صفر عبور از مرز» در پایان فاز E
+## 6. "Zero boundary crossing" criterion at the end of phase E
 
 ```
 md5sum logs.db                      → e29d40630c45fc1d392c9a11d60b8de2   (باید ثابت بماند)
@@ -113,7 +113,7 @@ git remote -v                       → هیچ pushی؛ شاخهٔ phase-c رو�
 
 ---
 
-## ۷. سه جملهٔ پایانی
+## 7. Three closing sentences
 
 فاز E **بدون تغییر منطق دامنه** تمام شد: writer/readerهای `core/` و routeهای `web/` همان
 رفتار قبلی را دارند و فقط «لایهٔ اتصال» و «قرارداد زمان» دوسوکول شدند. هر عدد در این گزارش

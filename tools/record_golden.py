@@ -1,25 +1,36 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tools/record_golden.py
+# @brief:        Records golden fixtures (work 1, phase C) and checks them.
+# @details:      Responsibilities: Generate fixtures from the golden scenarios or verify them with
+#                --check.
+#                Main API: record_counters(), record_enhanced(), check_fixtures(), main()
+#                Side effects: none at import time
+# @dependencies: internal: core, core.enhanced_collector, tests.golden_harness,
+#                tests.golden_profiles, tests.golden_scenarios
+# @notes:        Can be run directly as a script.
+# =============================================================================
+
 """
-ضبط fixtureهای طلایی (کار ۱ فاز C).
+Recording of golden fixtures (work 1 phase C).
 
-اجرا:
-    python tools/record_golden.py --only counters            # ضبط ۵ گام شمارنده‌ها
-    python tools/record_golden.py --only enhanced            # ضبط ۵ سناریوی collect_enhanced
-    python tools/record_golden.py --only all --check         # ضبط + بازپخش و مقایسه‌ی تفاضل-صفر
+Execution:
+    python tools/record_golden.py --only counters # Record 5 step counters
+    python tools/record_golden.py --only enhanced # Record 5 collect_enhanced scenarios
+    python tools/record_golden.py --only all --check # record + playback and zero-difference comparison
 
-حالت‌ها:
-  • پیش‌فرض (hermetic): SNMP از طریق FakeSnmpTransport (بدون سوکت) پاسخ می‌دهد.
-  • ``--with-simulator``: شبیه‌ساز UDP محلی (tools/mock_snmp_device.py) بالا می‌آید و
-    ضبط از روی همان پروفایل انجام می‌شود؛ برای اعتبارسنجی «هم‌خوانی پروفایل با
-    رفتار واقعی پروتکل» مفید است، ولی برای تست‌های روزمره لازم نیست.
+Modes:
+  • Default (hermetic): SNMP responds via FakeSnmpTransport (no socket).
+  • ``--with-simulator'': the local UDP simulator (tools/mock_snmp_device.py) is loaded and
+    Recording is done from the same profile; To validate "profile match with
+    "Actual behavior of the protocol" is useful, but not necessary for everyday testing.
 
-هیچ منطق دامنه‌ای تغییر نمی‌کند: فقط ورودی‌ها ثابت و خروجی‌ها ثبت می‌شوند.
+No domain logic changes: only inputs are fixed and outputs are recorded.
 """
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 import tempfile
@@ -37,8 +48,10 @@ from tests.golden_scenarios import COUNTERS_IP, build_counters_call, counters_st
 from core import store  # noqa: E402
 
 
-# ─── ضبط: شمارنده‌ها (۵ گام ترتیبی، یک DB) ─────────────────────────────────
+# ─── Recording: counters (5 sequential steps, one DB)
 def record_counters(verbose=True):
+    """Record the counter golden fixtures."""
+
     results = []
     with tempfile.TemporaryDirectory(prefix="pg-golden-") as tmp:
         with isolated_db(tmp), frozen_time():
@@ -56,8 +69,8 @@ def record_counters(verbose=True):
                     "input": {
                         "ip": COUNTERS_IP,
                         "args": args,
-                        "prev": prev_before,          # ورودی خام (عمداً نرمال‌نشده)
-                        "db_seed": db_seed,           # وضعیت DB در آن لحظه (خام، با id)
+                        "prev": prev_before,          # Raw input (deliberately unnormalized)
+                        "db_seed": db_seed,           # DB status at that moment (raw, with id)
                     },
                     "expected": {
                         "return_value": ret,
@@ -74,8 +87,10 @@ def record_counters(verbose=True):
     return results
 
 
-# ─── ضبط: collect_enhanced (۵ سناریو، هر کدام DB جدا) ───────────────────────
+# ─── Record: collect_enhanced (5 scenarios, each separate DB) ──────────────────────
 def record_enhanced(verbose=True):
+    """Record the enhanced-collector golden fixtures."""
+
     import copy
 
     from tests.golden_harness import FakeHttp, clear_module_caches
@@ -91,7 +106,7 @@ def record_enhanced(verbose=True):
             with isolated_db(tmp), frozen_time(), transport.installed(), http.installed():
                 steps = []
                 for phase in sc["phases"]:
-                    # پروفایل هر فاز (سناریوی Toshiba: فاز ۱ آفلاین، فاز ۲ آنلاین)
+                    # Profile of each phase (Toshiba scenario: phase 1 offline, phase 2 online)
                     transport.devices = copy.deepcopy(phase.get("devices") or {})
                     clear_module_caches()
                     transport.calls.clear()
@@ -115,7 +130,7 @@ def record_enhanced(verbose=True):
                     "http_responses": [list(x) for x in sc.get("http", ())],
                 },
                 "expected": {"steps": steps},
-                "frozen_now": FROZEN_ISO,   # لحظهٔ قفل‌شده از هارنس (E.0.3)
+                "frozen_now": FROZEN_ISO,   # Locked moment of harness (E.0.3)
             }
             path = write_fixture(sc["name"], json_safe(fixture))
             results.append((path, fixture))
@@ -125,9 +140,9 @@ def record_enhanced(verbose=True):
     return results
 
 
-# ─── بازپخش و مقایسه ───────────────────────────────────────────────────────
+# Replay and compare
 def check_fixtures(fixtures, verbose=True):
-    """بازپخش hermetic هر fixture و مقایسه‌ی تفاضل-صفر."""
+    """Hermetic playback of each fixture and zero-difference comparison."""
     failures = 0
     for path, fixture in fixtures:
         kind = fixture["kind"]
@@ -147,7 +162,7 @@ def check_fixtures(fixtures, verbose=True):
                     "snmp_call_sequence": json_safe(fixture["snmp_call_sequence"]),
                 }
             else:
-                with isolated_db(tmp):          # DB موقت — هرگز روی logs.db مخزن اجرا نشود
+                with isolated_db(tmp):          # Temporary DB — Never run on repository logs.db
                     observed = replay_enhanced(fixture)
                 expected = json_safe({"steps": fixture["expected"]["steps"]})
 
@@ -161,6 +176,8 @@ def check_fixtures(fixtures, verbose=True):
 
 
 def main():
+    """Command-line entry point: record or check the golden fixtures."""
+
     ap = argparse.ArgumentParser(description="ضبط/بررسی fixtureهای طلایی PrintGuard")
     ap.add_argument("--only", choices=["counters", "enhanced", "all"], default="all")
     ap.add_argument("--check", action="store_true", help="پس از ضبط، بازپخش و مقایسه کن")

@@ -1,20 +1,35 @@
+# =============================================================================
+# @file:         core/enhanced_collector.py
+# @brief:        Advanced collector that walks supply and tray tables with alternative OIDs.
+# @details:      Responsibilities: Detect SNMP version and printer type, and walk supply and
+#                input-tray tables.
+#                Main API: detect_snmp_version(), try_alternative_oids(), walk_supplies_table(),
+#                walk_input_trays(), detect_printer_type_from_supplies(), collect_enhanced()
+#                Side effects: network I/O, file I/O
+# @dependencies: internal: config.settings, core, core.collectors.base, core.collectors.brother,
+#                core.collectors.canon, core.collectors.cartridge_discovery,
+#                core.collectors.cartridge_id, core.collectors.hp, core.collectors.sensor,
+#                core.collectors.toshiba, core.database, core.oid.scanner, core.snmp.oid_map,
+#                core.snmp.protocol, core.time_utils, core.yield_engine
+# @notes:        None.
+# =============================================================================
+
 # core/enhanced_collector.py
 
 """
-جمع‌آوری پیشرفته داده‌ها با استفاده از روش‌های test_toner.py:
-- Walk کامل جدول prtMarkerSuppliesTable
-- Walk جدول prtInputTable (سینی‌ها)
-- OIDهای جایگزین برای HP, Canon, Brother
-- تشخیص خودکار نسخه SNMP
-- ذخیره اطلاعات دقیق تونر در دیتابیس
-- ثبت لاگ در toner_report.txt
+Advanced data collection using test_toner.py methods:
+- Walk full table prtMarkerSuppliesTable
+- Walk table prtInputTable (trays)
+- Alternate OIDs for HP, Canon, Brother
+- Automatic detection of SNMP version
+- Storing detailed toner information in the database
+- Record log in toner_report.txt
 """
 
-import time
 import logging
-import threading
+import time
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional
 
 from config.settings import VALIDATION_LOG_FILE, TONER_ALERT_THRESHOLDS
 from core.snmp.protocol import snmp_get_with_fallback, _detect_snmp_version
@@ -26,16 +41,15 @@ from core.time_utils import to_utc_z, utc_now_iso
 
 log = logging.getLogger("PrinterMonitor")
 
-import os
 
-# ─── تنظیمات ─────────────────────────────────────────────────────
-ENHANCED_TIMEOUT = 3.0   # timeout برای هر OID
-ENHANCED_MAX_SUPPLIES = 15  # حداکثر تعداد مواد مصرفی برای walk
-DEFAULT_CARTRIDGE_YIELD = 2000  # صفحات تقریبی برای برآورد تونر هنگامی که سنسور در دسترس نیست
+# Settings
+ENHANCED_TIMEOUT = 3.0   # timeout for each OID
+ENHANCED_MAX_SUPPLIES = 15  # The maximum number of consumables for walk
+DEFAULT_CARTRIDGE_YIELD = 2000  # Approximate pages for toner estimation when sensor is not available
 
-# OIDهای جایگزین برای HP
-# نکته: نام کارتریج روی دستگاه دقیقاً همین رشته‌هاست (مثلاً «Black Cartridge CF287X»)؛
-# فقط CF287A بودنِ نقشه باعث می‌شد مدل‌های X/Y — و کل E52645 (CF289*) — هیچ‌وقت match نشوند.
+# Alternate OIDs for HP
+# Note: the name of the cartridge on the device is exactly these strings (for example, "Black Cartridge CF287X");
+# Being only CF287A on the map meant that the X/Y models — and the entire E52645 (CF289*) — would never match.
 _HP_NPCL_PCT_OID = "1.3.6.1.4.1.11.2.3.9.4.2.1.4.1.2.4.1.2.1.5.5.1.1"
 HP_ALTERNATE_OIDS = {
     "CE505A": [_HP_NPCL_PCT_OID],
@@ -55,18 +69,18 @@ HP_ALTERNATE_OIDS = {
     "W9008MC": [_HP_NPCL_PCT_OID],
 }
 
-# OIDهای جایگزین برای Canon
+# Alternative OIDs for Canon
 CANON_ALTERNATE_OIDS = [
     "1.3.6.1.4.1.1602.1.2.1.1.1.1.1",
     "1.3.6.1.4.1.1602.1.2.1.1.1.2.1",
 ]
 
-# OID تونر Brother
+# Brother toner OID
 BROTHER_TONER_OID = "1.3.6.1.4.1.2435.2.3.9.4.2.1.5.5.1.1"
 BROTHER_DRUM_OID = "1.3.6.1.4.1.2435.2.3.9.4.2.1.5.5.1.2"
 
 
-# ─── الگوهای تشخیص رنگ تونر (دقیق‌تر) ─────────────────────────────
+# Toner color detection patterns (more accurate)
 import re as _re
 _TONER_COLOR_PATTERNS = {
     "black": _re.compile(r'\b(black|bk)\b', _re.IGNORECASE),
@@ -76,7 +90,7 @@ _TONER_COLOR_PATTERNS = {
 }
 
 def _detect_toner_color(name: str) -> Optional[str]:
-    """✅ باگ #8: تشخیص دقیق رنگ تونر با regex (جلوگیری از match اشتباه)"""
+    """Bug #8: accurate toner color detection with regex (preventing wrong match)"""
     if not name:
         return None
     for color, pattern in _TONER_COLOR_PATTERNS.items():
@@ -85,12 +99,12 @@ def _detect_toner_color(name: str) -> Optional[str]:
     return None
 
 
-# ─── برند خودشفابخش از هویت واقعی دستگاه (sysDescr/sysObjectID) ─────────────
-# مورد واقعی: روی 172.16.25.43 در printers.json برند «canon» مانده بود ولی بعد از
-# جابه‌جایی DHCP یک Brother MFC-8510DN روی همان IP نشست؛ نتیجه: منطق تونر Canon
-# (کد گسسته + اسکریپ Remote UI) بیهوده روی Brother اجرا می‌شد و هیچ تونری نمایش
-# داده نمی‌شد. با این لایه، اگر هویت SNMP دستگاه با برند ذخیره‌شده ناسازگار باشد،
-# برند به‌صورت خودکار اصلاح و در printers.json ماندگار می‌شود (+ رویداد لاگ).
+# ─── Self-healing brand of real device identity (sysDescr/sysObjectID) ──────────────
+# Actual case: "canon" brand was left on 172.16.25.43 in printers.json, but after
+# DHCP relocation of a Brother MFC-8510DN sat on the same IP; Result: Canon toner logic
+# (discrete code + Remote UI script) ran for nothing on Brother and no toner displayed
+# was not given With this layer, if the SNMP identity of the device is inconsistent with the stored brand,
+# The brand is automatically modified and persisted in printers.json (+ event log).
 _SYS_VENDOR_HINTS = (
     ("toshiba", "toshiba"),
     ("brother", "brother"),
@@ -118,7 +132,7 @@ _SYS_OBJECTID_HINTS = (
 
 
 def _vendor_hint_from_identity(sys_desc: str = "", sys_object_id: str = "") -> Optional[str]:
-    """از sysDescr (و در صورت خالی‌بودن، sysObjectID) برند واقعی دستگاه را حدس می‌زند."""
+    """From sysDescr (and sysObjectID if empty) guesses the actual brand of the device."""
     ls = (sys_desc or "").lower()
     for token, hint in _SYS_VENDOR_HINTS:
         if token in ls:
@@ -131,10 +145,10 @@ def _vendor_hint_from_identity(sys_desc: str = "", sys_object_id: str = "") -> O
 
 
 def _toner_level_missing(toners: Dict) -> bool:
-    """آیا برای هیچ «تونرِ» واقعی عدد داریم؟ (درام/OPC شمرده نمی‌شوند)
+    """Do we have numbers for any actual "toners"? (Drum/OPC are not counted)
 
-    نکته: در rum Brother ممکن است درصد درام سالم باشد ولی تونر unknown؛
-    شرط ساده‌ی «هیچ raw_level نیست» در آن حالت به‌غلط مانع fallback وب می‌شود.
+    Note: In Brother rum, the drum percentage may be healthy, but the toner is unknown;
+    The simple condition "no raw_level" in that case falsely prevents web fallback.
     """
     toner_keys = [k for k in toners.keys() if k not in ("drum", "opc")]
     if not toner_keys:
@@ -143,9 +157,9 @@ def _toner_level_missing(toners: Dict) -> bool:
 
 
 def _merge_scraped_toners(toners: Dict, scraped: Dict, source: str) -> int:
-    """ادغام نتیجه‌ی اسکریپ وب در دیکشنری toners (همان الگوی Canon/TopAccess).
-    کلیدهای «_» فراداده‌اند (مثل «_used» در HP) و رد می‌شوند.
-    خروجی: تعداد تونرهایی که مقدارشان تازه‌شده است."""
+    """Integration of web script result in toners dictionary (same as Canon/TopAccess template).
+    "_" keys are metadata (like "_used" in HP) and are ignored.
+    Output: The number of toners whose value has been updated."""
     merged = 0
     for color_key, pct in scraped.items():
         if color_key.startswith("_") or not isinstance(pct, (int, float)) or isinstance(pct, bool):
@@ -176,9 +190,9 @@ def _merge_scraped_toners(toners: Dict, scraped: Dict, source: str) -> int:
             merged += 1
     return merged
 
-# ─── توابع کمکی ───────────────────────────────────────────────────
+# Auxiliary functions
 def _log_to_toner_report(content: str):
-    """اضافه کردن خط به فایل toner_report.txt"""
+    """Add line to toner_report.txt file"""
     try:
         with open("toner_report.txt", "a", encoding="utf-8") as f:
             f.write(content + "\n")
@@ -187,7 +201,7 @@ def _log_to_toner_report(content: str):
 
 
 def _log_validation_error(ip: str, error_type: str, details: str):
-    """ثبت خطا در فایل validation log"""
+    """Record errors in the validation log file"""
     try:
         timestamp = datetime.now().isoformat()
         with open(VALIDATION_LOG_FILE, "a", encoding="utf-8") as f:
@@ -199,18 +213,18 @@ def _log_validation_error(ip: str, error_type: str, details: str):
 
 def detect_snmp_version(ip: str, community: str = "public", timeout: float = 2.0) -> Optional[int]:
     """
-    تشخیص نسخه SNMP با تکیه بر cache و negative-cache ماژول protocol.
-    بازگشت: 1, 2, یا None
+    Detection of SNMP version relying on cache and negative-cache protocol module.
+    Returns: 1, 2, or None
     """
     return _detect_snmp_version(ip, community, probe_timeout=timeout)
 
 
-def try_alternative_oids(ip: str, community: str, brand: str, cartridge_model: str = "", 
+def try_alternative_oids(ip: str, community: str, brand: str, cartridge_model: str = "",
                          snmp_version: int = None, timeout: float = 3.0) -> Optional[int]:
-    """تلاش با OIDهای جایگزین برای دریافت سطح تونر"""
-    
+    """Try alternative OIDs to get the toner level"""
+
     if brand == "hp":
-        # اول OIDهای مخصوص مدل کارتریج (match بدون حساسیت به حروف)
+        # First, OIDs for the cartridge model (case-insensitive match)
         cart_upper = (cartridge_model or "").upper()
         for model_key, oid_list in HP_ALTERNATE_OIDS.items():
             if model_key in cart_upper:
@@ -223,8 +237,8 @@ def try_alternative_oids(ip: str, community: str, brand: str, cartridge_model: s
                                 return int_val
                         except Exception:
                             pass
-        
-        # OIDهای عمومی HP
+
+        # Generic HP OIDs
         general_oids = [
             "1.3.6.1.4.1.11.2.3.9.4.2.1.4.1.2.1.5.5.1.1",
             "1.3.6.1.4.1.11.2.3.9.4.2.1.4.1.2.4.1.2.1.5.5.1.1",
@@ -239,7 +253,7 @@ def try_alternative_oids(ip: str, community: str, brand: str, cartridge_model: s
                         return int_val
                 except Exception:
                     pass
-    
+
     elif brand == "canon":
         for oid in CANON_ALTERNATE_OIDS:
             val = snmp_get_with_fallback(ip, oid, community, version=snmp_version, timeout=timeout)
@@ -250,23 +264,23 @@ def try_alternative_oids(ip: str, community: str, brand: str, cartridge_model: s
                         return int_val
                 except Exception:
                     pass
-    
+
     return None
 
 
-def walk_supplies_table(ip: str, community: str, brand: str = "unknown", 
+def walk_supplies_table(ip: str, community: str, brand: str = "unknown",
                         snmp_version: int = None, timeout: float = 2.0, current_total: int = None) -> List[Dict]:
     """
-    Walk کامل روی جدول prtMarkerSuppliesTable
-    بازگشت: لیستی از دیکشنری‌های حاوی اطلاعات کارتریج‌ها
+    Complete walk on the prtMarkerSuppliesTable table
+    Returns: A list of dictionaries containing cartridge information
     """
     supplies = []
-    
-    # برای Brother، اول روش اختصاصی امتحان می‌شود.
-    # اگر سطح تونر از OID اختصاصی به دست نیاید (مثل بعضی مدل‌های NC-8300h)،
-    # به روش استاندارد prtMarkerSuppliesTable fallback می‌کنیم.
+
+    # For Brother, the proprietary method is tried first.
+    # If the toner level is not obtained from the dedicated OID (like some NC-8300h models),
+    # We fallback to the standard prtMarkerSuppliesTable method.
     if brand == "brother":
-        toner_level = snmp_get_with_fallback(ip, BROTHER_TONER_OID, community, 
+        toner_level = snmp_get_with_fallback(ip, BROTHER_TONER_OID, community,
                                               version=snmp_version, timeout=timeout)
         if toner_level is not None:
             try:
@@ -286,8 +300,8 @@ def walk_supplies_table(ip: str, community: str, brand: str = "unknown",
                     })
             except Exception:
                 pass
-        
-        # درام هم بخوانیم
+
+        # Let's play drama too
         drum_level = snmp_get_with_fallback(ip, BROTHER_DRUM_OID, community,
                                              version=snmp_version, timeout=timeout)
         if drum_level is not None:
@@ -309,29 +323,29 @@ def walk_supplies_table(ip: str, community: str, brand: str = "unknown",
             except Exception:
                 pass
 
-        # اگر تونر اختصاصی با موفقیت خوانده شد، همان را برگردان.
-        # در غیر این صورت، به روش عمومی prtMarkerSuppliesTable ادامه می‌دهیم.
+        # If the proprietary toner is read successfully, return the same.
+        # Otherwise, we proceed to the prtMarkerSuppliesTable public method.
         if any(s.get("type_name") == "toner" for s in supplies):
             return supplies
-    
-    # روش استاندارد برای سایر برندها
+
+    # Standard practice for other brands
     for idx in range(1, ENHANCED_MAX_SUPPLIES + 1):
         try:
             name_oid = f"1.3.6.1.2.1.43.11.1.1.6.1.{idx}"
-            name = snmp_get_with_fallback(ip, name_oid, community, 
+            name = snmp_get_with_fallback(ip, name_oid, community,
                                           version=snmp_version, timeout=timeout)
-            
+
             if name is None:
                 if idx >= 5 and brand in ["canon", "hp", "brother"]:
                     break
                 continue
-            
+
             name_str = str(name).strip()
-            
+
             type_oid = f"1.3.6.1.2.1.43.11.1.1.5.1.{idx}"
             stype = snmp_get_with_fallback(ip, type_oid, community,
                                            version=snmp_version, timeout=timeout)
-            
+
             unit_oid = f"1.3.6.1.2.1.43.11.1.1.7.1.{idx}"
             unit_val = snmp_get_with_fallback(ip, unit_oid, community,
                                               version=snmp_version, timeout=timeout)
@@ -339,15 +353,15 @@ def walk_supplies_table(ip: str, community: str, brand: str = "unknown",
             max_oid = f"1.3.6.1.2.1.43.11.1.1.8.1.{idx}"
             max_val = snmp_get_with_fallback(ip, max_oid, community,
                                              version=snmp_version, timeout=timeout)
-            
+
             rem_oid = f"1.3.6.1.2.1.43.11.1.1.9.1.{idx}"
             rem_val = snmp_get_with_fallback(ip, rem_oid, community,
                                              version=snmp_version, timeout=timeout)
-            
+
             stype_int = 0
             if stype is not None and str(stype).lstrip('-').isdigit():
                 stype_int = int(stype)
-            
+
             type_names = {
                 1: "other", 2: "unknown", 3: "toner", 4: "wasteToner",
                 5: "ink", 6: "wasteInk", 7: "OPC", 8: "developer",
@@ -355,8 +369,8 @@ def walk_supplies_table(ip: str, community: str, brand: str = "unknown",
                 21: "cartridge"
             }
             type_name = type_names.get(stype_int, f"type_{stype_int}")
-            # Brother برخی consumableها را با typeهای غیر دقیق گزارش می‌کند.
-            # برای نمایش صحیح درام و تونر، از نام مصرفی هم کمک می‌گیریم.
+            # Brother reports some consumables with inaccurate types.
+            # To display the drum and toner correctly, we also use the user name.
             if brand == "brother":
                 lowered_name = name_str.lower()
                 if "drum" in lowered_name:
@@ -374,7 +388,7 @@ def walk_supplies_table(ip: str, community: str, brand: str = "unknown",
                 4: "micrometers", 7: "impressions", 8: "sheets",
                 16: "feet", 17: "meters", 18: "items", 19: "percent",
             }
-            
+
             try:
                 if unit_val is not None and str(unit_val).lstrip('-').isdigit():
                     unit_int = int(unit_val)
@@ -382,22 +396,22 @@ def walk_supplies_table(ip: str, community: str, brand: str = "unknown",
                     max_int = int(max_val)
                 if rem_val is not None and str(rem_val).lstrip('-').isdigit():
                     rem_int = int(rem_val)
-                
-                # ✅ باگ #20: فقط وقتی max_int معتبره درصد حساب کن
-                # حذف شرط elif که فرض می‌کرد rem_int بین 0-100 = درصد
+
+                # ✅ Bug #20: Calculate percentage only when max_int is valid
+                # Remove elif condition that assumed rem_int between 0-100 = percent
                 if max_int > 0 and rem_int >= 0:
                     percent = round(rem_int / max_int * 100)
                 elif unit_int == 19 and 0 <= rem_int <= 100:
-                    # ✅ فیکس HP FutureSmart (M527 / E52645): با واحد «percent (19)»
-                    # خودِ Level همان درصد است، حتی اگر MaxCapacity خوانده نشود یا
-                    # دستگاه آن را -3 (ظرفیت نامشخص) برگرداند. بدون این قانون، این
-                    # دو مدل دقیقاً همان «تونر دریافت نمی‌شود» کاربر را تجربه می‌کردند.
+                    # ✅ Fix HP FutureSmart (M527 / E52645): with "percent (19)" unit
+                    # Level itself is the same percentage, even if MaxCapacity is not read or
+                    # The device returned it as -3 (unspecified capacity). Without this law, this
+                    # Two models were experiencing the exact same "toner not received" user.
                     percent = rem_int
                     percent_source = "unit_percent"
             except (ValueError, TypeError) as e:
                 log.warning(f"Supply conversion error for {ip} idx={idx}: max={max_val}, rem={rem_val}: {e}")
-            
-            # اگر درصد نداریم، OIDهای جایگزین را امتحان کن
+
+            # If we don't have a percentage, try alternative OIDs
             _canon_discrete = (brand == "canon" and max_int <= 0 and rem_int in (0, 5, 7))
             if percent is None and brand in ["hp", "canon"] and not _canon_discrete:
                 alt_percent = try_alternative_oids(ip, community, brand, name_str, snmp_version, timeout)
@@ -407,7 +421,7 @@ def walk_supplies_table(ip: str, community: str, brand: str = "unknown",
                     rem_int = alt_percent
                     max_int = 100
 
-            # وضعیت
+            # status
             status = "N/A"
             supply_present = False
             if percent is not None and percent_source != "canon_status_code":
@@ -420,44 +434,44 @@ def walk_supplies_table(ip: str, community: str, brand: str = "unknown",
                 else:
                     status = "ok"
             elif brand == "canon" and percent is None and max_int <= 0 and rem_int in (0, 5, 7):
-                # ✅ فیکس Canon i-SENSYS (مثل LBP233dw): این خانواده به‌جای درصد
-                # واقعی، کد وضعیت گسسته برمی‌گرداند: 0=Empty، 5=Low، 7=OK.
-                # عدد نمایشی فقط «برآورد نمایشی» است و هرگز نباید به‌عنوان
-                # raw_level در یادگیری yield مصرف شود (percent_source مشخص است).
+                # Canon i-SENSYS fix (like LBP233dw): this family instead of percentage
+                # True, returns a discrete status code: 0=Empty, 5=Low, 7=OK.
+                # A representative number is only a "demographic estimate" and should never be used as an estimate
+                # raw_level to be used in yield learning (percent_source is specified).
                 status = {0: "empty", 5: "low", 7: "ok"}[rem_int]
                 percent = {0: 0, 5: 15, 7: 70}[rem_int]
                 percent_source = "canon_status_code"
                 supply_present = rem_int != 0
             elif rem_int == -3 or max_int == -3:
-                # ✅ RFC 3805: -3 یعنی «دستگاه می‌داند مقداری مصرفی/فضا هست» ولی
-                # عدد ندارد. وضعیت unknown+present است، نه «پشتیبانی نمی‌شود».
+                # ✅ RFC 3805:-3 means "the device knows there is some consumption/space" but
+                # It does not have a number. The status is unknown+present, not "not supported".
                 status = "unknown"
                 supply_present = True
             elif rem_int == -2:
-                # ✅ باگ #15: وقتی max معتبر نداریم، هرگز rem را به‌عنوان درصد فرض نکن.
-                # این حالت معمولاً یعنی سنسور/مقدار قابل‌اعتماد در دسترس نیست.
+                # Bug #15: Never assume rem as a percentage when we don't have a valid max.
+                # This mode usually means that the reliable sensor/value is not available.
                 status = "no_sensor" if name_str and name_str != "Unknown" else "not_supported"
                 log.info(f"  [{ip}] Supply {idx} ({name_str}): no sensor data available")
 
-            # فیلتر Unknownهای تکراری
+            # Duplicate unknowns filter
             if name_str.startswith("Unknown"):
                 unknown_count = sum(1 for s in supplies if s["name"].startswith("Unknown"))
                 if unknown_count > 2:
                     continue
-            
+
             unit_name = unit_names.get(unit_int, "unknown")
-            # ✅ فیکس سطرهای فانتوم (کشف واقعی: Canon LBP2330K روی 172.16.0.43):
-            # این دستگاه سطر اول را صحیح می‌دهد (Cartridge 324 II، level=10) ولی
-            # سه سطر بعدی «نام خالی + بدون داده» دارند. قبل از این فیکس، آن سطرها
-            # همین جدول را رد می‌کردند و چون نامشان خالی بود، هنگام ساخت toners همگی
-            # به کلید «black» می‌خوردند و مقدار واقعی ۱۰٪ را با unknown بازنویسی
-            # می‌کردند — نتیجه: «تونر خوانده نمی‌شود» با اینکه SNMP سالم بود!
+            # Fix phantom lines (real discovery: Canon LBP2330K on 172.16.0.43):
+            # This device gives the correct first line (Cartridge 324 II, level=10) but
+            # The next three lines have "empty name + no data". Before this fix, those lines
+            # They rejected the same table and because their names were empty, when making toners, all of them
+            # They hit the "black" key and overwrite the actual value of 10% with unknown
+            # They did — result: "toner not read" even though SNMP was fine!
             if not name_str and percent is None:
                 log.info(f"  [{ip}] Supply {idx}: رد سطر فانتوم (نام خالی و بدون داده قابل‌استفاده)")
                 continue
-            # اگر max بزرگ‌تر از ۱۰۰ باشد و unit درصد نباشد، معمولاً ظرفیت اعلام‌شده
-            # توسط خود دستگاه است (صفحه/Impressions/Items). این مقدار به Yield Engine
-            # داده می‌شود تا default=2000 فقط آخرین fallback باشد.
+            # If max is greater than 100 and unit is not percentage, it is usually declared capacity
+            # It is by the device itself (page/Impressions/Items). This amount to the Yield Engine
+            # It is given so that default=2000 is only the last fallback.
             device_capacity_pages = None
             if max_int > 100 and unit_int != 19 and type_name in ("toner", "cartridge", "drum", "OPC", "opc"):
                 device_capacity_pages = max_int
@@ -478,42 +492,42 @@ def walk_supplies_table(ip: str, community: str, brand: str = "unknown",
                 "status": status,
                 "device_capacity_pages": device_capacity_pages,
             })
-            
+
         except Exception as e:
             if idx <= 3:
                 _log_validation_error(ip, "walk_supplies_exception", f"idx={idx}: {e}")
-    
+
     return supplies
 
 
 def walk_input_trays(ip: str, community: str, snmp_version: int = None, timeout: float = 2.0) -> List[Dict]:
-    """Walk روی جدول prtInputTable برای سینی‌ها"""
+    """Walk on prtInputTable table for trays"""
     trays = []
-    
+
     for idx in range(1, 8):
         try:
             name_oid = f"1.3.6.1.2.1.43.8.2.1.13.1.{idx}"
-            name = snmp_get_with_fallback(ip, name_oid, community, 
+            name = snmp_get_with_fallback(ip, name_oid, community,
                                           version=snmp_version, timeout=timeout)
-            
+
             cap_oid = f"1.3.6.1.2.1.43.8.2.1.9.1.{idx}"
             cap_val = snmp_get_with_fallback(ip, cap_oid, community,
                                              version=snmp_version, timeout=timeout)
-            
+
             level_oid = f"1.3.6.1.2.1.43.8.2.1.10.1.{idx}"
             level_val = snmp_get_with_fallback(ip, level_oid, community,
                                                version=snmp_version, timeout=timeout)
-            
+
             if name is None and cap_val is None and level_val is None:
                 continue
-            
+
             name_str = str(name).strip() if name else f"Tray {idx}"
-            
+
             try:
                 cap_int = int(cap_val) if cap_val is not None and str(cap_val).lstrip('-').isdigit() else 0
             except Exception:
                 cap_int = 0
-            
+
             try:
                 if level_val is not None and str(level_val).lstrip('-').isdigit():
                     level_int = int(level_val)
@@ -521,10 +535,10 @@ def walk_input_trays(ip: str, community: str, snmp_version: int = None, timeout:
                     level_int = -2
             except Exception:
                 level_int = -2
-            
+
             fill_percent = None
             status = "unknown"
-            
+
             if level_int == -2:
                 status = "no_sensor"
             elif level_int == -3:
@@ -542,7 +556,7 @@ def walk_input_trays(ip: str, community: str, snmp_version: int = None, timeout:
             elif level_int >= 0 and level_int <= 100 and cap_int == 0:
                 fill_percent = level_int
                 status = "ok" if level_int > 25 else "low" if level_int > 10 else "critical"
-            
+
             trays.append({
                 "index": idx,
                 "name": name_str,
@@ -551,17 +565,17 @@ def walk_input_trays(ip: str, community: str, snmp_version: int = None, timeout:
                 "fill_percent": fill_percent,
                 "status": status,
             })
-            
-        except Exception as e:
+
+        except Exception:
             continue
-    
+
     return trays
 
 
 def _save_oid_profile(ip: str, community: str, snmp_version: int, model: str,
                       device_type: str, total: int, color: Optional[int], bw: int,
                       supplies: List[Dict], trays: List[Dict], scan_ms: int):
-    """پروفایل OID را برای یک IP بسازد و در oid_profiles.json ذخیره کند."""
+    """Create an OID profile for an IP and store it in oid_profiles.json."""
     try:
         candidates = {
             "sys_descr": "1.3.6.1.2.1.1.1.0",
@@ -696,18 +710,18 @@ def _save_oid_profile(ip: str, community: str, snmp_version: int, model: str,
 
 
 def detect_printer_type_from_supplies(supplies: List[Dict]) -> str:
-    """تشخیص نوع پرینتر از روی مواد مصرفی"""
+    """Identifying the type of printer from consumables"""
     toners = [s for s in supplies if s.get("type") == 3 or s.get("type_name") == "toner"]
     if not toners:
         toners = supplies
-    
+
     color_keywords = ["cyan", "magenta", "yellow", "سیان", "مژنتا", "color", "colour"]
     for t in toners:
         name_lower = t.get("name", "").lower()
         for c in color_keywords:
             if c in name_lower:
                 return "color"
-    
+
     return "mono"
 
 
@@ -722,15 +736,15 @@ def _canon_display_percent(model: str, supply_name: str, percent: Optional[int])
     return percent
 
 
-# ─── نام‌های منطقه‌ای معادل کارتریج کانن ─────────────────────────
-# CRG-137 (آمریکا) / CRG-337 (آسیا) / CRG-737 (اروپا) / CRG-937 (اقیانوسیه)
-# همگی یک کارتریج فیزیکی یکسان با ظرفیت یکسان هستند و شماره‌شان فقط منطقه‌ای است.
-# کاتالوگ پروژه و بازار خرید ایران «Cartridge 737» را مرجع می‌دانند، ولی
-# دستگاهی با فریمور منطقه‌ی دیگر نام معادل را گزارش می‌کند (مورد واقعی ناوگان:
-# SNMP نامی «Cartridge 137» برگرداند درحالی‌که کاربر Cartridge 737 نصب کرده بود).
-# نمایش/کلید یادگیری با نام کانونیکال یکدست می‌شود و نام خام دستگاه در
-# raw_name حفظ می‌شود. heuristicهایی که روی نام خام کار می‌کنند (مثل
-# _canon_display_percent) همچنان رشته‌ی اصلی را می‌بینند.
+# Regional names equivalent to Canon cartridges
+# CRG-137 (America) / CRG-337 (Asia) / CRG-737 (Europe) / CRG-937 (Pacific)
+# They are all the same physical cartridge with the same capacity and their number is only regional.
+# The project catalog and the Iran shopping market "Cartridge 737" are considered as a reference, but
+# A device with another region's firmware reports the equivalent name (actual fleet case:
+# SNMP returned a name of "Cartridge 137" while the user installed Cartridge 737).
+# The display/learning key is aligned with the canonical name and the raw device name in
+# raw_name is preserved. Heuristics that operate on raw names (eg
+# _canon_display_percent) still see the original string.
 _CANON_REGIONAL_CARTRIDGE_EQUIVALENTS = {
     "cartridge 137": "Cartridge 737",
     "cartridge 337": "Cartridge 737",
@@ -739,7 +753,7 @@ _CANON_REGIONAL_CARTRIDGE_EQUIVALENTS = {
 
 
 def _canonical_cartridge_display_name(name):
-    """نام کانونیکال نمایشی کارتریج: معادل‌های منطقه‌ای کانن را به «737» نگاشت می‌کند."""
+    """Canonical cartridge display name: maps canon regional equivalents to "737"."""
     if not name:
         return name
     key = " ".join(str(name).strip().lower().split())
@@ -748,6 +762,7 @@ def _canonical_cartridge_display_name(name):
 
 
 def _read_toshiba_value(ip: str, community: str, key: str, snmp_version: int, default=None, timeout: float = 2.0):
+    """Read one Toshiba value by key over SNMP; returns the default when it is missing or fails."""
     oid = OIDS.get(key)
     if not oid:
         return default
@@ -762,19 +777,19 @@ def _read_toshiba_value(ip: str, community: str, key: str, snmp_version: int, de
 
 
 def _collect_toshiba_job_data(ip: str, community: str, snmp_version: int, total: int, color: Optional[int]):
-    """خواندن شمارنده‌های اختصاصی Toshiba برای جلوگیری از overcount و تکمیل UI/log.
+    """Read Toshiba's proprietary counters to prevent overcount and UI/log completion.
 
-    برای مدل‌های قدیمی‌تر (مثل e-STUDIO3540) اگر OID اصلی total در دسترس نباشد،
-    از مجموع paper-size یا sub-counterها total پیشنهادی ساخته می‌شود.
+    For older models (such as e-STUDIO3540) if the original total OID is not available,
+    From the sum of paper-size or sub-counters, a suggested total is made.
     """
     a3_total = _read_toshiba_value(ip, community, "a3_total", snmp_version, default=None)
     a4_total = _read_toshiba_value(ip, community, "a4_total", snmp_version, default=None)
     prev = store._prev.get(ip) or {}
 
-    # ✅ فیکس باگ «سایز کاغذ اشتباه در لاگ»: برچسب فقط وقتی گذاشته می‌شود که
-    # دلتای شمارنده‌های کاغذ با دلتای شمارنده کل هم‌راستا باشد (هویت اثبات‌شده‌ی
-    # a3_total + a4_total == print_total). در غیر این صورت snapshot کهنه است و
-    # برچسب قبلی «مطمئن اما اشتباه» بود — حالا سایز نامشخص ثبت می‌شود.
+    # ✅ Fix bug "wrong paper size in log": label is placed only when
+    # The delta of the paper counters should be in line with the delta of the total counter (proven identity).
+    # a3_total + a4_total == print_total). Otherwise, the snapshot is outdated
+    # Previous label was "sure but wrong" — now records unknown size.
     paper_size, paper_split, paper_size_reliable = attribute_paper_size(
         total=total,
         prev_total=prev.get("print_total"),
@@ -796,8 +811,8 @@ def _collect_toshiba_job_data(ip: str, community: str, snmp_version: int, total:
     fax = _read_toshiba_value(ip, community, "print_fax", snmp_version, default=None)
     list_count = _read_toshiba_value(ip, community, "print_list", snmp_version, default=None)
 
-    # برای ثبت رویداد، به total خام تکیه می‌کنیم و twin را وارد محاسبه pages نمی‌کنیم
-    # چون در برخی مدل‌های Toshiba دو فاز update باعث duplicate PRINT می‌شود.
+    # To register the event, we rely on the raw total and do not include the twin in the pages calculation
+    # Because in some Toshiba models, the two-phase update causes duplicate PRINT.
     bw_for_event = print_bw_raw if isinstance(print_bw_raw, int) and print_bw_raw > 0 else (max(0, total - (color or 0)) if total is not None else None)
     scan_fc = _read_toshiba_value(ip, community, "scan_fc", snmp_version, default=None)
     scan_bw = _read_toshiba_value(ip, community, "scan_bw", snmp_version, default=None)
@@ -866,7 +881,7 @@ def _collect_toshiba_job_data(ip: str, community: str, snmp_version: int, total:
 
 def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
     """
-    جمع‌آوری پیشرفته داده‌ها با استفاده از روش test_toner.py
+    Advanced data collection using the test_toner.py method
     """
     ip = printer["ip"]
     name = printer["name"]
@@ -874,28 +889,28 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
     community = printer.get("community", "public")
     brand = printer.get("brand", "").lower()
     start_time = time.time()
-    
+
     log.info(f"[ENHANCED] Pulling {name} ({ip})")
     _log_to_toner_report(f"\n{'='*80}")
     _log_to_toner_report(f"🖨  {name} ({ip}) | زمان: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    
-    # ─── تشخیص SNMP ───────────────────────────────────────────────
+
+    # SNMP detection
     snmp_version = detect_snmp_version(ip, community, timeout=2.0)
     if snmp_version is None:
         elapsed = int((time.time() - start_time) * 1000)
-        _log_to_toner_report(f"   ❌ بدون پاسخ SNMP")
+        _log_to_toner_report("   ❌ بدون پاسخ SNMP")
         return {
             "ip": ip, "name": name, "nickname": nickname, "brand": brand,
             "online": False, "last_poll": utc_now_iso(), "poll_ms": elapsed,
             "error": "No SNMP response",
         }
-    
-    # ─── اطلاعات پایه ────────────────────────────────────────────
+
+    # Basic information
     sys_desc = snmp_get_with_fallback(ip, "1.3.6.1.2.1.1.1.0", community, version=snmp_version, timeout=2.0)
     sys_desc_str = str(sys_desc) if sys_desc else ""
     toshiba_vendor_model_probe = None
 
-    # تشخیص سنسور؛ فقط به sysDescr متکی نیستیم چون بعضی ECS100Gها فقط OID اختصاصی را جواب می‌دهند.
+    # sensor detection; We don't rely only on sysDescr because some ECS100Gs only respond to specific OID.
     sensor_probe = None
     if brand == "sensor" or "ECS100G" in sys_desc_str.upper():
         sensor_probe = True
@@ -914,8 +929,8 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
         result["nickname"] = nickname
         return result
 
-    # ─── برند خودشفابخش: اگر برند ذخیره‌شده با هویت واقعی دستگاه ناسازگار است ───
-    # (ناشی از جابه‌جایی IP/DHCP یا ورود دستی اشتباه) آن را اصلاح و ماندگار کن.
+    # ─── Self-healing brand: if the stored brand is incompatible with the real identity of the device ───
+    # (caused by IP/DHCP migration or wrong manual entry) fix it and make it permanent.
     sys_object_id_str = ""
     vendor_hint = _vendor_hint_from_identity(sys_desc_str)
     if not vendor_hint and not sys_desc_str:
@@ -950,8 +965,8 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
         except Exception as _exc:
             log.error("Persisting corrected brand for %s failed: %s", ip, _exc)
 
-    # ─── شمارنده‌های اصلی ─────────────────────────────────────────
-    # تلاش برای خواندن total از OIDهای مختلف
+    # The main counters
+    # Trying to read total from different OIDs
     total = 0
     total_oids = [
         "1.3.6.1.2.1.43.10.2.1.4.1.1",  # standard
@@ -962,7 +977,7 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
         if val is not None:
             try:
                 total = int(val)
-                # ✅ باگ #12: validation مقدار total (جلوگیری از مقادیر منفی)
+                # ✅ Bug #12: validation of the total value (preventing negative values)
                 if total < 0:
                     log.warning(f"Negative total ({total}) for {ip}, using 0")
                     total = 0
@@ -971,19 +986,19 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
             except (ValueError, TypeError) as e:
                 log.warning(f"Total conversion error for {ip}: {val!r}: {e}")
 
-    # ─── خواندن اطلاعات پیشرفته ───────────────────────────────────
+    # Reading advanced information
     supplies = walk_supplies_table(ip, community, brand, snmp_version, timeout=ENHANCED_TIMEOUT, current_total=total)
     trays = walk_input_trays(ip, community, snmp_version, timeout=ENHANCED_TIMEOUT)
-    
-    # ─── تشخیص رنگ ───────────────────────────────────────────────
-    # اگر supplies در یک poll خوانده نشود، نباید دستگاه رنگی را اشتباهاً mono فرض کنیم.
+
+    # Color detection
+    # A color device should not be mistakenly assumed to be mono if supplies are not read in a poll.
     prev_snapshot = store._prev.get(ip) or {}
     configured_type = (printer.get("device_type") or "").strip().lower()
     previous_type = (prev_snapshot.get("device_type") or "").strip().lower()
     detected_type = detect_printer_type_from_supplies(supplies) if supplies else "unknown"
     device_type = detected_type if detected_type != "unknown" else (configured_type or previous_type or "unknown")
     if device_type == "color":
-        # تلاش برای خواندن شمارنده رنگی
+        # Attempting to read the color counter
         color = 0
         color_oids = [
             "1.3.6.1.2.1.43.10.2.1.4.1.2",  # standard color
@@ -998,7 +1013,7 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
                         break
                 except Exception:
                     pass
-        # ✅ باگ #16: validation مقدار color (جلوگیری از color > total)
+        # ✅ Bug #16: validation of color value (preventing color > total)
         if color > total and total > 0:
             log.warning(f"color ({color}) > total ({total}) for {ip}, correcting")
             color = None
@@ -1012,12 +1027,12 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
         color = None
         bw = total
     else:
-        # نوع دستگاه نامطمئن است؛ تفکیک رنگ/سیاه‌وسفید را قطعی فرض نکن.
+        # Device type is uncertain; Don't assume the separation of color/black and white is absolute.
         color = None
         bw = None
 
-    # برخی Toshibaها به sysDescr استاندارد پاسخ نمی‌دهند. برای این مدل‌ها،
-    # با model OID اختصاصی هم probe می‌کنیم تا vendor-specific path فعال شود.
+    # Some Toshibas do not respond to the standard sysDescr. For these models,
+    # We also probe with the specific OID model so that the vendor-specific path is activated.
     if brand != "toshiba" and "toshiba" not in sys_desc_str.lower():
         try:
             toshiba_vendor_model_probe = snmp_get_with_fallback(
@@ -1041,9 +1056,9 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
             if toshiba_total is not None and toshiba_total >= 0:
                 total = toshiba_total
             else:
-                # ✅ فیکس نوسان شمارنده Toshiba (علت اصلی spikeهای +۱۲۳هزار صفحه‌ای
-                # در لاگ واقعی): وقتی OID vendor خوانده نمی‌شود، نباید به شمارنده
-                # استاندارد/ترکیبی با مقیاس متفاوت سوییچ کرد. Snapshot قبلی حفظ می‌شود.
+                # ✅ Fix the oscillation of the Toshiba counter (the main cause of +123 thousand page spikes
+                # In the actual log): When the vendor OID is not read, it should not be countered
+                # Switched standard/mixed with different scale. The previous snapshot is preserved.
                 toshiba_vendor_total_failed = True
                 log.warning(
                     "  [%s] Toshiba vendor print_total unreadable this poll; keeping previous snapshot",
@@ -1057,9 +1072,9 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
             toshiba_data = _collect_toshiba_job_data(ip, community, snmp_version, total, color)
             has_baseline = bool((store._prev.get(ip) or {}).get("print_total") is not None)
             if (not total or total <= 0) and not has_baseline and toshiba_data and isinstance(toshiba_data.get("suggested_total"), int) and toshiba_data.get("suggested_total") > 0:
-                # فقط در اولین poll (بدون baseline) از ترکیب شمارنده‌های جانبی استفاده کن.
-                # بعد از baseline، سوییچ به این شمارنده‌های جانبی (مثل comp_sum=۲۱۲۴ در
-                # لاگ واقعی در مقابل print_total=۱۶۰هزار) باعث deltaهای انفجاری می‌شد.
+                # Only use the combination of side counters in the first poll (without baseline).
+                # After baseline, switch to these side counters (such as comp_sum=2124).
+                # Actual log vs. print_total=160k) would cause explosive deltas.
                 total = toshiba_data["suggested_total"]
                 log.info("Toshiba total fallback (first poll only) for %s -> %s", ip, total)
             if (bw is None or bw <= 0) and toshiba_data and isinstance(toshiba_data.get("suggested_bw"), int) and toshiba_data.get("suggested_bw") > 0:
@@ -1068,26 +1083,26 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
         except Exception as exc:
             log.warning("Toshiba vendor counters unavailable for %s: %s", ip, exc)
             toshiba_data = None
-    
-    # ─── مدل و سریال ─────────────────────────────────────────────
+
+    # Model and serial number
     model = "Unknown"
     serial = "N/A"
-    
-    # تلاش برای خواندن مدل از OIDهای مختلف
+
+    # Trying to read models from different OIDs
     model_oids = [
         "1.3.6.1.2.1.43.5.1.1.16.1",  # standard
         "1.3.6.1.4.1.1129.2.3.50.1.2.3.1.3.1.1",  # Toshiba
         "1.3.6.1.4.1.11.2.3.9.1.1.3.1.1.1.1.2.0",  # HP
         "1.3.6.1.4.1.1602.1.1.1.1.0",  # Canon
         "1.3.6.1.4.1.2435.2.4.3.99.3.1.6.1.2.1",  # Brother
-        "1.3.6.1.2.1.1.5.0",  # sysName (آخرین fallback)
+        "1.3.6.1.2.1.1.5.0",  # sysName (last fallback)
     ]
     for oid in model_oids:
         val = snmp_get_with_fallback(ip, oid, community, version=snmp_version, timeout=2.0)
         if val and str(val).strip() not in ("", "N/A", "None"):
             model = str(val).strip()[:100]
             break
-    
+
     serial_oids = [
         "1.3.6.1.2.1.43.5.1.1.17.1",
         "1.3.6.1.4.1.1129.2.3.50.1.2.4.1.8.1.1",
@@ -1100,8 +1115,8 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
         if val and str(val).strip() not in ("", "N/A", "None"):
             serial = str(val).strip()[:100]
             break
-    
-    # ─── تبدیل تونرها به فرمت toners ─────────────────────────────
+
+    # Converting toners to toners format
     toners = {}
     for s in supplies:
         if s["type_name"] in ("toner", "cartridge", "drum", "opc"):
@@ -1110,19 +1125,19 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
                 color_key = "drum"
                 display_level = s["percent"]
             else:
-                # ✅ باگ #8: استفاده از تشخیص رنگ دقیق با regex
+                # Bug #8: Using accurate color detection with regex
                 color_key = _detect_toner_color(s["name"]) or "black"
                 display_level = _canon_display_percent(model, s["name"], s["percent"])
 
-            # ✅ محافظ «مقدار بهتر را نگه دار»: اگر برای این کلید قبلاً عدد واقعی
-            # ثبت شده (مثلاً idx=1 با level=10) و کاندیدای جدید داده‌ای ندارد
-            # (سطر فانتوم/ثانویه)، روی مقدار واقعی بازنویسی نکن.
+            # ✅ "Keep better value" protection: if for this key already real number
+            # registered (eg idx=1 with level=10) and new candidate has no data
+            # (phantom/secondary row), do not overwrite the actual value.
             existing = toners.get(color_key)
             if existing and existing.get("level") is not None and s["percent"] is None:
                 continue
 
-            # ✅ فیکس نام کارتریج کانن: معادل منطقه‌ای (137/337/937) → کانونیکال 737
-            # نام خام SNMP در raw_name برای ردگیری نگه داشته می‌شود.
+            # ✅ Fix Canon cartridge name: regional equivalent (137/337/937) → Canonical 737
+            # The raw SNMP name is kept in raw_name for tracing.
             raw_supply_name = s["name"]
             display_supply_name = (
                 _canonical_cartridge_display_name(raw_supply_name) if brand == "canon" else raw_supply_name
@@ -1130,9 +1145,9 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
 
             toners[color_key] = {
                 "level": display_level,
-                # ✅ فیکس: raw_level باید واقعاً خام باشد تا یادگیری yield از داده‌ی
-                # مصنوعی ساخته‌نشده استفاده نکند. مقادیر برآوردی (کد وضعیت گسسته‌ی
-                # Canon، و…) فقط برای نمایش‌اند و raw را می‌سازند None.
+                # Fix: raw_level must be really raw to learn yield from data
+                # Do not use artificially made. Estimated values ​​(discrete status code
+                # Canon, and...) only for display and they make raw None.
                 "raw_level": s["percent"] if s.get("percent_source") != "canon_status_code" else None,
                 "percent_source": s.get("percent_source"),
                 "supply_present": s.get("supply_present", False),
@@ -1148,10 +1163,10 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
             }
 
     # ─── Toshiba TopAccess fallback ───
-    # ✅ فیکس دقت تونر: بسیاری از e-STUDIOها درصد تونر را از prtMarkerSuppliesTable
-    # نمی‌دهند (percent=None) و فقط وضعیت سطحی (kestrel NE flags) دارند که به
-    # پله‌های تخمینی ۸۵٪/۷۰٪/۳۰٪/… تبدیل می‌شود. در این حالت از scrape پنل
-    # TopAccess (همان روش کالکتور legacy با کش داخلی) درصد واقعی می‌خوانیم.
+    # ✅ Toner accuracy fix: Many e-STUDIOs use toner percentage from prtMarkerSuppliesTable
+    # do not give (percent=None) and only have a surface status (Kestrel NE flags) that
+    # Estimated steps are converted to 85%/70%/30%/…. In this case, from the scrape panel
+    # TopAccess (the same method as the legacy collector with an internal cache) reads the actual percentage.
     if is_toshiba:
         need_scrape = False
         for t in toners.values():
@@ -1191,10 +1206,10 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
                 log.debug("Toshiba TopAccess fallback failed for %s: %s", ip, exc)
 
     # ─── Canon Remote UI fallback ───
-    # ✅ فیکس Canon i-SENSYS (مثل LBP233dw): اگر از مسیر SNMP هیچ درصد «واقعی»
-    # نرسید (کد گسسته یا کلاً نامشخص)، از پنل Remote UI دستگاه اسکریپ می‌کنیم —
-    # همان روشی که کالکتور legacy دارد. داده‌ی scrape واقعی است پس raw_level هم
-    # صادقانه پر می‌شود.
+    # Canon i-SENSYS fix (like LBP233dw): if no "real" percentage from SNMP path
+    # did not arrive (discrete code or completely unknown), we scrip from the device's Remote UI panel —
+    # The same method as the legacy collector. The scrape data is real, so is the raw_level
+    # It fills honestly.
     if brand == "canon" or "canon" in sys_desc_str.lower():
         if not any(t.get("raw_level") is not None for t in toners.values()):
             try:
@@ -1228,10 +1243,10 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
                 log.debug("Canon Remote UI fallback failed for %s: %s", ip, exc)
 
     # ─── Brother web fallback ───
-    # ✅ خانواده‌ی NC-8xxx/MFC-85xx در جدول استاندارد فقط level=-3 (مقداری هست)
-    # می‌دهند و OID اختصاصی هم همیشه هست نیست؛ پنل وب آن‌ها (مورد تأیید: 172.16.25.43)
-    # معمولاً باز است و درصد را متنی نشان می‌دهد. شرط «تونرِ واقعیِ گمشده» (نه فقط
-    # «هیچ level») تا درامِ سالم (مثلاً ۹۰٪) مانع اجرای اسکریپ نشود.
+    # ✅ NC-8xxx/MFC-85xx family in standard table only level=-3 (there is some value)
+    # and there is not always a dedicated OID; Their web panel (confirmation: 172.16.25.43)
+    # It is usually open and shows the percentage in text. "Actually Missing Toner" condition (not just
+    # "no level") until a healthy drum (eg 90%) does not prevent the script from running.
     if brand == "brother" or "brother" in sys_desc_str.lower():
         if _toner_level_missing(toners):
             try:
@@ -1245,9 +1260,9 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
                 log.debug("Brother web fallback failed for %s: %s", ip, exc)
 
     # ─── HP web fallback ───
-    # ✅ مورد واقعی E52645: دستگاه برای کارتریج W9008MC مقدار level=-2 (unknown)
-    # برمی‌گرداند و OID خصوصی NPCL هم پاسخ نمی‌دهد. بسیاری از FutureSmartها پورت
-    # ۸۰ را بسته‌اند ولی ۴۴۳ باز است — تلاش HTTP+HTTPS + XML مصرفی‌های DevMgmt.
+    # ✅ Real item E52645: device for W9008MC cartridge, value level=-2 (unknown)
+    # returns and NPCL private OID also does not respond. Many FutureSmarts port
+    # 80 are closed but 443 are open — HTTP+HTTPS+XML DevMgmt consumption attempts.
     if brand == "hp" or "hp" in sys_desc_str.lower() or "laserjet" in sys_desc_str.lower():
         if _toner_level_missing(toners):
             try:
@@ -1257,10 +1272,10 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
                     merged = _merge_scraped_toners(toners, scraped, "hp_web")
                     if merged:
                         log.info("  [%s] HP toner percent via web scrape: %s", ip, scraped)
-                # ✅ کشف روی دستگاه واقعی (E52645 + M401dn): وقتی SNMP برای
-                # کارتریج HP مقدار -2 (unknown) می‌دهد، معمولاً چون کارتریج
-                # شارژی/استفاده‌شده است و خود EWS هم عدد ندارد. اسکریپر وضعیت
-                # «used» را برمی‌گرداند تا UI به‌جای «نامشخص مبهم» بگوید علت چیست.
+                # ✅ Discovery on real device (E52645 + M401dn): When SNMP for
+                # The HP cartridge gives a value of -2 (unknown), usually because the cartridge
+                # It is charged/used and the EWS itself does not have the same number. Status scraper
+                # Returns "used" so that the UI says what the cause is instead of "ambiguous".
                 hp_used = set((scraped or {}).get("_used") or [])
                 for color_key in hp_used:
                     t = toners.get(color_key)
@@ -1285,12 +1300,12 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
             except Exception as exc:
                 log.debug("HP web fallback failed for %s: %s", ip, exc)
 
-    # اگر تونری پیدا نشد، یک تونر مشکی پیش‌فرض
+    # If no toner is found, a default black toner
     if not toners:
         toners["black"] = {"level": None, "raw_level": None, "status": "unknown", "name": "Toner", "remaining": -1, "max": -1}
 
-    # فیلدهای مصرف برای همه برندها به صورت سازگار نگه داشته می‌شوند؛ اگر داده‌ای
-    # وجود نداشته باشد UI آن را نمایش نمی‌دهد.
+    # Consumption fields are kept consistent for all brands; If you have given
+    # If it doesn't exist, the UI won't display it.
     for toner_data in toners.values():
         toner_data.setdefault("usage", None)
         toner_data.setdefault("usage_m", None)
@@ -1304,7 +1319,7 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
                 toners[color_key]["usage"] = usage_raw
                 toners[color_key]["usage_m"] = round(usage_raw / 1_000_000, 2)
 
-    # ─── غنی‌سازی نام کارتریج: اگر toner نام ندارد از standard MIB بخوان ──
+    # ─── Cartridge name enrichment: if the toner does not have a name, read from the standard MIB ──
     _color_mib_idx = {"black": 1, "cyan": 2, "magenta": 3, "yellow": 4}
     for col, idx in _color_mib_idx.items():
         t = toners.get(col)
@@ -1318,18 +1333,17 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
             except Exception:
                 pass
 
-    # ─── اعمال override دستی تونر بر اساس مصرف صفحات ─────────────────
+    # Apply toner manual override based on page consumption
     prev_override = store._prev.get(ip) or {}
     if prev_override.get('yield_per_page', 2000) == 2000 and not prev_override.get('force_estimate'):
         boot = _bootstrap_yield_from_history(ip, prev_override)
         if boot:
             prev_override = store._prev.get(ip) or prev_override
 
-    override_color = prev_override.get('override_color')
     pages_since_last_reset = get_pages_since_last_reset(prev_override, total)
-    # ✅ فیکس «بازگشت مقدار دستی به پیش‌فرض»: همه‌ی رنگ‌های دارای override فعال
-    # مقدار نمایشی خودشان را از اسلات per-color می‌گیرند — نه فقط آخرین رنگ.
-    # ردیابی اسلات‌های منقضی (شمارنده عقب‌رفته) برای پاکسازی در همان‌جا.
+    # ✅ "Return manual value to default" fix: all colors with active override
+    # They get their display value from the per-color slot — not just the last color.
+    # Tracking of expired slots (count down) for on-the-spot clearing.
     try:
         from core.collectors.base import _normalize_overrides as _norm_ov, _overrides_valid_after_total as _ov_valid
         _active_overrides = _ov_valid(_norm_ov(prev_override), total)
@@ -1355,7 +1369,7 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
             else:
                 toners[ov_color]['status'] = 'ok'
 
-    # ─── هشدارها ─────────────────────────────────────────────────
+    # Warnings Warnings
     alerts = []
     for color_key, toner in toners.items():
         level = toner.get("level")
@@ -1371,17 +1385,17 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
         toner["status"] = "empty" if level == 0 else status
         alerts.append({
             "message": f"{toner.get('name', color_key)}: {toner['status']} ({level}%)",
-            # کد هشدار باید پایدار باشد؛ index جدول SNMP ممکن است بین pollها تغییر کند.
+            # The warning code must be stable; SNMP table index may change between polls.
             "code": f"toner:{color_key}",
         })
-    
+
     # ─── uptime ──────────────────────────────────────────────────
-    # ✅ فیکس مهم: خواندن ناموفق uptime نباید به int(0) تبدیل شود؛ مقدار صفر در
-    # _uptime_reset به‌اشتباه «ریبوت» تشخیص داده می‌شد (۲۷۶ ریست کاذب در لاگ واقعی).
+    # Important fix: failed read uptime should not be converted to int(0); Zero value in
+    # _uptime_reset was incorrectly detecting "reboot" (276 false resets in real log).
     ut = None
     ut_raw = snmp_get_with_fallback(ip, "1.3.6.1.2.1.1.3.0", community, version=snmp_version, timeout=2.0)
     if ut_raw is None:
-        # SNMP stack برخی دستگاه‌ها (مخصوصاً Toshiba) کند است؛ یک retry بخاطر‌سپرده‌تر
+        # SNMP stack of some devices (especially Toshiba) is slow; A more memorable retry
         ut_raw = snmp_get_with_fallback(ip, "1.3.6.1.2.1.1.3.0", community, version=snmp_version, timeout=4.0)
     if ut_raw is not None:
         try:
@@ -1390,10 +1404,10 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
             ut = None
     us = (ut or 0) // 100
     uptime_str = f"{us//86400}d {(us%86400)//3600:02d}:{(us%3600)//60:02d}" if ut else "N/A"
-    
+
     elapsed = int((time.time() - start_time) * 1000)
-    
-    # ─── ثبت در toner_report.txt ─────────────────────────────────
+
+    # Register in toner_report.txt
     _log_to_toner_report(f"   SNMP v{snmp_version} | مدل: {model} | نوع: {device_type}")
     bw_display = f"{bw:,}" if isinstance(bw, int) else "نامشخص"
     color_display = f"{color:,}" if isinstance(color, int) else "نامشخص"
@@ -1404,21 +1418,21 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
         _log_to_toner_report(f"   {color_key}: {pct_str} {status_icon}")
     _log_to_toner_report(f"   زمان پاسخ: {elapsed}ms")
     try:
-        # ذخیره پروفایل OID برای این دستگاه (به‌روز رسانی یا ساخت جدید)
+        # Save OID profile for this device (update or new build)
         _save_oid_profile(ip, community, snmp_version, model, device_type, total, color, bw, supplies, trays, elapsed)
     except Exception:
         log.debug("Saving oid profile failed, continuing")
-    
-    # ✅ باگ #2 + #5 + #12: حذف نوشتن مستقیم DB
-    # نوشتن در دیتابیس حالا بعد از _counters_event انجام می‌شه
-    # (به خطوط بعدی مراجعه کنید)
-    
-    # ─── ثبت رویداد PRINT / REFILL ────────────────────────────────
-    # ✅ باگ #2: ثبت رویداد BEFORE نوشتن در دیتابیس
+
+    # Bug #2 + #5 + #12: Remove direct DB write
+    # Writing to the database is now done after _counters_event
+    # (see next lines)
+
+    # Registration of PRINT / REFILL event
+    # Bug #2: event registration BEFORE writing to the database
     prev = store._prev.get(ip) or {}
     black_level = None
-    # ✅ یادگیری yield و منطق REFILL باید از سطح خام دستگاه استفاده کنند، نه از
-    # مقدار نمایشی/override؛ در غیر این صورت چرخه‌ی تخمین-یادگیری دایره‌ای می‌شود.
+    # Yield learning and REFILL logic should use the raw surface of the device, not the
+    # display value/override; Otherwise, the estimation-learning cycle becomes circular.
     if toners.get("black", {}).get("raw_level") is not None:
         legacy_toner_color = "black"
         black_level = toners["black"]["raw_level"]
@@ -1438,9 +1452,9 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
                 legacy_toner_color = ck
                 break
 
-    # ✅ سطحِ خامِ هر رنگ برای تشخیص خودکار تعویض/شارژ کارتریج (رویداد
-    # CARTRIDGE_CHANGED در _counters_event). فقط داده‌ی واقعی (raw_level) وارد
-    # می‌شود؛ برآوردهای نمایشی (مثل canon_status_code) رویداد جعلی نمی‌سازند.
+    # Raw level of each color to automatically detect cartridge replacement/charging (event
+    # CARTRIDGE_CHANGED in _counters_event). Only real data (raw_level) is entered
+    # becomes; Demo estimates (like canon_status_code) don't create fake events.
     toner_levels_for_events = {}
     for ck in ("black", "cyan", "magenta", "yellow"):
         _t = toners.get(ck) or {}
@@ -1452,9 +1466,9 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
         except (TypeError, ValueError):
             continue
 
-    # ✅ شناسه‌ی یکتای کارتریج (ChipID/سریال از SNMP/Web) — سیگنال قطعی تعویض.
-    # کش ۱۰دقیقه‌ای دارد و در نبود شواهد خالی برمی‌گرداند؛ fallback همان مسیر
-    # جهش سطح است. خواندن خطا هم هرگز چرخه‌ی poll را خراب نمی‌کند.
+    # Unique ID of the cartridge (ChipID/serial from SNMP/Web) — definitive signal of replacement.
+    # It has a cache of 10 minutes and returns empty in the absence of evidence; fallback same path
+    # Level jump. Error reading also never breaks the poll cycle.
     cartridge_ids_event = None
     cartridge_pages_event = None
     cartridge_id_source = "none"
@@ -1462,7 +1476,7 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
     cartridge_identity_type = {}
     try:
         from core.collectors.cartridge_id import get_cartridge_identity_data
-        # اگر برند ذخیره‌شده خالی/نامعتبر باشد، از sysDescr (معتبرترین منبع) استنتاج کن
+        # If stored brand is empty/invalid, infer from sysDescr (most authoritative source).
         _cid_brand = brand
         if _cid_brand not in ("hp", "canon", "brother", "toshiba"):
             _sd = (sys_desc_str or "").lower()
@@ -1482,9 +1496,9 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
             cartridge_id_source = _cid.get("source") or "none"
             cartridge_signal_quality = _cid.get("signal_quality") or {}
             cartridge_identity_type = _cid.get("identity_type") or {}
-        # 🔍 کشف خودکار: اگر هنوز هیچ شناسه‌ای برای این دستگاه پیدا نشده و برند
-        # شناخته‌شده است، یک‌بار به صف کشف OID اضافه می‌شود (worker پس‌زمینه،
-        # dedup + cooldown — هیچ سرباری روی خود poll ندارد).
+        # 🔍 Automatic discovery: if no ID is found for this device and brand yet
+        # is known, once added to the OID discovery queue (background worker,
+        # dedup + cooldown — has no overhead on the poll itself).
         if not cartridge_ids_event and _cid_brand in ("hp", "canon", "brother", "toshiba"):
             try:
                 from core.collectors.cartridge_discovery import queue_discovery
@@ -1501,15 +1515,15 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
     bw_for_event = (toshiba_data or {}).get("black_white_for_event", bw)
 
     if is_toshiba and toshiba_vendor_total_failed:
-        # مسیر حفاظت‌شده: None → _counters_event هشدار می‌دهد و snapshot قبلی را
-        # نگه می‌دارد؛ هیچ delta تقلبی (COUNTER_RESET/PRINT_OVERFLOW زنجیره‌ای)
-        # ساخته نمی‌شود. وقتی vendor دوباره به‌کار افتاد، مقادیر سازگار می‌مانند.
+        # Protected path: None → _counters_event alerts and previous snapshot
+        # keeps; No fake delta (COUNTER_RESET/PRINT_OVERFLOW chain)
+        # It is not made. When the vendor is restarted, the values ​​remain consistent.
         total_for_event = None
     else:
         total_for_event = total
 
-    # ✅ باگ #2: ثبت رویداد اول (قبل از نوشتن DB)
-    # استخراج نام supply از تونرها برای تشخیص تعویض از روی نام
+    # Bug #2: Registering the first event (before writing the DB)
+    # Extracting the name of supply from toners to detect replacement from the name
     _current_supply_names = {}
     for _ck, _tv in (toners or {}).items():
         if _ck in ('drum', 'opc'):
@@ -1529,8 +1543,8 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
                     poll_timestamp=to_utc_z(datetime.fromtimestamp(start_time, tz=timezone.utc)),
                     paper_split=(toshiba_data or {}).get("paper_split"))
 
-    # ─── Yield Engine جدید: یادگیری per-cartridge/per-color بر اساس history و anchor ───
-    # این لایه مستقل از منطق قدیمی است و برای پرینترهای کم‌مصرف و رنگی طراحی شده است.
+    # ─── New Yield Engine: per-cartridge/per-color learning based on history and anchor ───
+    # This layer is independent of legacy logic and is designed for low power and color printers.
     yield_engine_meta = {}
     try:
         from core.yield_engine import process_printer_yield_snapshot
@@ -1545,14 +1559,14 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
         )
     except Exception as exc:
         log.exception("Yield engine processing failed for %s: %s", ip, exc)
-    
-    # ✅ باگ #5: منبع حقیقت فقط PrevStore/`printer_counters` است.
-    # از نوشتن مستقیم و مضاعف در دیتابیس خودداری می‌کنیم.
+
+    # Bug #5: The source of truth is PrevStore/`printer_counters' only.
+    # We avoid direct and double writing in the database.
     if save_to_db:
         log.debug("Enhanced snapshot persisted via PrevStore only for %s", ip)
 
-    # آخرین مقدار yield ممکن است داخل _counters_event یاد گرفته/به‌روز شده باشد؛
-    # بنابراین برای خروجی API دوباره از PrevStore می‌خوانیم.
+    # The last yield value may be learned/updated inside _counters_event;
+    # So we read from PrevStore again for API output.
     final_prev = store._prev.get(ip) or prev_override or {}
     try:
         yield_per_page = int(final_prev.get("yield_per_page", 2000) or 2000)
@@ -1562,8 +1576,8 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
     if final_prev.get("force_estimate"):
         yield_source = "forced_estimate"
 
-    # مقدار legacy برای backward compatibility نگه داشته می‌شود، ولی اگر Yield Engine
-    # برای black خروجی داشته باشد، خروجی API از مقدار دقیق‌تر per-cartridge استفاده می‌کند.
+    # The legacy value is kept for backward compatibility, but if the Yield Engine
+    # To output black, the output API uses the more accurate per-cartridge value.
     api_yield_per_page = yield_per_page
     api_yield_source = yield_source
     api_yield_confidence = "low" if yield_source == "default" else "medium"
@@ -1573,8 +1587,8 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
         api_yield_source = black_meta.get("yield_source") or yield_source
         api_yield_confidence = black_meta.get("confidence") or api_yield_confidence
 
-    # sync با مسیر legacy: فایل missing_yield_printers.txt و printer_counters قدیمی
-    # قبلاً فقط مقدار PrevStore را می‌دیدند و از catalog/device_capacity بی‌خبر بودند.
+    # sync with legacy path: missing_yield_printers.txt file and old printer_counters
+    # Previously, they only saw the PrevStore value and were unaware of the catalog/device_capacity.
     if api_yield_per_page and api_yield_per_page != yield_per_page:
         try:
             from core.database import update_missing_yield_list
@@ -1603,7 +1617,7 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
             if engine_info.get("shared_profile"):
                 toner_data["shared_yield_profile"] = engine_info["shared_profile"]
         else:
-            # fallback قدیمی برای دستگاه‌هایی که هنوز level معتبر ندارند.
+            # Old fallback for devices that do not have a valid level yet.
             toner_data["capacity_pages"] = yield_per_page
             toner_data["capacity_source"] = yield_source if toner_color == "black" else f"{yield_source}_global"
             toner_data["yield_per_page"] = yield_per_page
@@ -1656,7 +1670,7 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
         "trays": trays,
         "toners": toners,
         "alerts": alerts,
-        # شناسه‌ی یکتای کارتریج + منبع تشخیص (برای API/داشبورد)
+        # Cartridge unique ID + detection source (for API/dashboard)
         "cartridge_ids": cartridge_ids_event or {},
         "cartridge_id_source": cartridge_id_source,
         "cartridge_signal_quality": cartridge_signal_quality or {},

@@ -1,35 +1,35 @@
 #
-# monitoring/snmp.yml — پیکربندیِ runtime برای snmp_exporter (فاز G · گام G.3)
+# monitoring/snmp.yml — runtime configuration for snmp_exporter (phase G · step G.3)
 #
-# مشتق‌شده از `monitoring/generator.yml` (spec) — تک‌منبعِ حقیقت. هیچ OIDی اینجا
-# اختراع نشده: هر metric یک ردیفِ spec دارد و هر `help:` به فایل:خطِ کد می‌رسد.
-# گیتِ پوشش: python tools/check_oid_coverage.py · گیتِ ساختارِ همین فایل:
+# Derived from `monitoring/generator.yml` (spec) — the single source of truth. No OID is invented here:
+# every metric has a spec row, and every `help:` points to a file:line of code.
+# Coverage gate: python tools/check_oid_coverage.py · structure gate of this file:
 # python -m pytest tests/test_snmp_yml.py
-# بازتولید/بررسی: python tools/build_snmp_yml.py [--check]
+# Regenerate/check: python tools/build_snmp_yml.py [--check]
 #
-# چرا دستی؟ generator رسمی به MIB vendor (Canon/Brother/Toshiba) نیاز دارد که در
-# دسترس نیست. شرح و جدولِ نگاشت: docs/snmp-exporter-setup.md §۴
+# Why manual? The official generator needs the vendor MIBs (Canon/Brother/Toshiba), which are
+# not available. Description and mapping table: docs/snmp-exporter-setup.md §4
 #
 # schema = config/config.go of snmp_exporter v0.26.0 and the loader is strict
-# (yaml.UnmarshalStrict) ⇒ هر کلیدِ ناشناخته اینجا، خطای load روی دستگاه مقصد است.
-# پس دو کلیدِ spec اینجا کلید نیستند:
-#   • ignore_values → کامنتِ همان متریک؛ فیلترِ sentinel در
-#     core/collectors/exporter_adapter.py (گام G.5) می‌کند، همان‌جا که امروز
-#     si() و گارد 0..100 در کدِ collector هست
-#   • source        → متنِ help:
+# (yaml.UnmarshalStrict) ⇒ any unknown key here is a load error on the target device.
+# So the two spec keys are not keys here:
+#   • ignore_values → a comment on the same metric; the sentinel filter is in
+#     core/collectors/exporter_adapter.py (step G.5), where today
+#     si() and the 0..100 guard are in the collector code
+#   • source        → the help: text
 #
-# load با باینریِ رسمی در sandbox انجام **نشده** (تصمیم مالک: تست واقعی روی سرور
-# خودش در پایان پروژه) — monitoring/snmp-manifest.json → load_test_sandbox:
-# not_attempted. فایل مستقل از OS است: همان بایت‌ها روی Windows و لینوکس load
-# می‌شوند.
+# Load with the official binary in the sandbox was **not** done (owner decision: a real test on the server
+# itself at the end of the project) — monitoring/snmp-manifest.json → load_test_sandbox:
+# not_attempted. The file is OS-independent: the same bytes are loaded on Windows and Linux
+# alike.
 #
-# 136 متریک = 98 ردیفِ get + 38 ردیفِ جداولِ 7 تاییِ walk.
-# 10 کاوشِ probe-only در spec کامنت‌اند و اینجا هم کامنت می‌مانند.
+# 136 metrics = 98 get rows + 38 rows of 7 walk tables.
+# 10 probe-only probes are comments in the spec and stay comments here too.
 
 version: 1
 
 auths:
-  # نام‌ها با قرارداد فاز G یکی‌اند: printer['exporter_auth'] == f"public_{snmp_version}"
+  # names follow the phase G convention: printer['exporter_auth'] == f"public_{snmp_version}"
   public_v1:
     community: public
     version: 1
@@ -37,9 +37,9 @@ auths:
     community: public
     version: 2
   secure_v3:
-    # placeholder؛ مقدار واقعی از env خوانده می‌شود و هرگز commit نمی‌شود
-    # runtime این کلیدها را می‌خواهد: password/priv_password (نه auth/priv_passphrase)
-    # و --config.expand-env لازم است تا ${...}ها مقدار بگیرند
+    # placeholder; the real value is read from env and is never committed
+    # the runtime wants these keys: password/priv_password (not auth/priv_passphrase)
+    # and --config.expand-env is needed so that ${...} values get filled in
     version: 3
     username: "${SNMP_V3_USERNAME}"
     security_level: authPriv
@@ -47,18 +47,18 @@ auths:
     password: "${SNMP_V3_AUTH_PASSPHRASE}"
     priv_protocol: AES
     priv_password: "${SNMP_V3_PRIV_PASSPHRASE}"
-    # نکته: مقدارِ runtime «AES» است، نه AES128ِ spec
+    # note: the runtime value is "AES", not the AES128 of the spec
 
 modules:
   # ────────────────────────────────────────────────────────────────────────
-  # printer_std — 24 متریک · 11 get · 2 جدول walk
+  # printer_std — 24 metrics · 11 get · 2 walk tables
   # ────────────────────────────────────────────────────────────────────────
   printer_std:
-    # یک GETNEXT-sweep روی این درخت‌ها، چند ردیف را یک‌جا می‌آورد
+    # a GETNEXT sweep over these trees brings several rows at once
     walk:
-    - 1.3.6.1.2.1.43.11.1.1          # supplies_table — 7 سطرِ ماتریس زیر این درخت
-    - 1.3.6.1.2.1.43.8.2.1          # tray_table — 6 سطرِ ماتریس زیر این درخت
-    # scalarها: یک GET بسته، بدون walk
+    - 1.3.6.1.2.1.43.11.1.1          # supplies_table — 7 matrix rows under this tree
+    - 1.3.6.1.2.1.43.8.2.1          # tray_table — 6 matrix rows under this tree
+    # scalars: one closed GET, no walk
     get:
     - 1.3.6.1.2.1.1.1.0          # sys_descr
     - 1.3.6.1.2.1.1.2.0          # sys_object_id
@@ -75,121 +75,121 @@ modules:
     - name: sys_descr
       oid: 1.3.6.1.2.1.1.1.0
       type: DisplayString
-      help: "PrintGuard printer_std: sys_descr [core/oid/catalog.py:8]"
+      help: "PrintGuard printer_std: sys_descr [core/oid/catalog.py:19]"
     - name: sys_object_id
       oid: 1.3.6.1.2.1.1.2.0
       type: DisplayString
-      help: "PrintGuard printer_std: sys_object_id [core/oid/catalog.py:11]"
+      help: "PrintGuard printer_std: sys_object_id [core/oid/catalog.py:22]"
     - name: sys_uptime
       oid: 1.3.6.1.2.1.1.3.0
       type: gauge
-      help: "PrintGuard printer_std: sys_uptime [core/oid/catalog.py:9]"
+      help: "PrintGuard printer_std: sys_uptime [core/oid/catalog.py:20]"
     - name: sys_hostname
       oid: 1.3.6.1.2.1.1.5.0
       type: DisplayString
-      help: "PrintGuard printer_std: sys_hostname [core/oid/catalog.py:10]"
+      help: "PrintGuard printer_std: sys_hostname [core/oid/catalog.py:21]"
     - name: model_mib
       oid: 1.3.6.1.2.1.43.5.1.1.16.1
       type: DisplayString
-      help: "PrintGuard printer_std: model_mib [core/oid/catalog.py:24]"
+      help: "PrintGuard printer_std: model_mib [core/oid/catalog.py:35]"
     - name: serial_mib
       oid: 1.3.6.1.2.1.43.5.1.1.17.1
       type: DisplayString
-      help: "PrintGuard printer_std: serial_mib [core/oid/catalog.py:25]"
+      help: "PrintGuard printer_std: serial_mib [core/oid/catalog.py:36]"
     - name: cover_status
       oid: 1.3.6.1.2.1.43.6.1.1.3.1.1
       type: gauge
-      help: "PrintGuard printer_std: cover_status [core/oid/catalog.py:40]"
+      help: "PrintGuard printer_std: cover_status [core/oid/catalog.py:51]"
     - name: bro_total
       oid: 1.3.6.1.2.1.43.10.2.1.4.1.1
       type: counter
-      help: "PrintGuard printer_std: bro_total [core/oid/catalog.py:90]"
+      help: "PrintGuard printer_std: bro_total [core/oid/catalog.py:101]"
     - name: bro_color
       oid: 1.3.6.1.2.1.43.10.2.1.4.1.2
       type: counter
-      help: "PrintGuard printer_std: bro_color [core/oid/catalog.py:91]"
+      help: "PrintGuard printer_std: bro_color [core/oid/catalog.py:102]"
     - name: bw_std
       oid: 1.3.6.1.2.1.43.10.2.1.4.1.3
       type: counter
-      help: "PrintGuard printer_std: bw_std [core/collectors/canon.py:203]"
-      # type inferred, not declared in code — canon.py:203 si(g(…43.10.2.1.4.1.3)) → black_white pages (canon.py:306)
+      help: "PrintGuard printer_std: bw_std [core/collectors/canon.py:218]"
+      # type inferred, not declared in code — canon.py:216 si(g(…43.10.2.1.4.1.3)) → black_white pages (canon.py:316)
     - name: bro_bw
       oid: 1.3.6.1.2.1.43.10.2.1.5.1.1
       type: counter
-      help: "PrintGuard printer_std: bro_bw [core/oid/catalog.py:92]"
+      help: "PrintGuard printer_std: bro_bw [core/oid/catalog.py:103]"
     # ── supplies_table (subtree 1.3.6.1.2.1.43.11.1.1) ──
     - name: standard
       oid: 1.3.6.1.2.1.43.11.1.1.6
       type: DisplayString
-      help: "PrintGuard printer_std: standard [core/collectors/cartridge_discovery.py:62]"
-      # type inferred, not declared in code — 43.11.1.1.6 = prtMarkerSuppliesDescription column root — cartridge_discovery.py:62; no sample is emitted for the bare column OID
+      help: "PrintGuard printer_std: standard [core/collectors/cartridge_discovery.py:75]"
+      # type inferred, not declared in code — 43.11.1.1.6 = prtMarkerSuppliesDescription column root — cartridge_discovery.py:76; no sample is emitted for the bare column OID
     - name: toner_name_1
       oid: 1.3.6.1.2.1.43.11.1.1.6.1.1
       type: DisplayString
-      help: "PrintGuard printer_std: toner_name_1 [core/oid/catalog.py:28]"
+      help: "PrintGuard printer_std: toner_name_1 [core/oid/catalog.py:39]"
     - name: toner_name_2
       oid: 1.3.6.1.2.1.43.11.1.1.6.1.2
       type: DisplayString
-      help: "PrintGuard printer_std: toner_name_2 [core/oid/catalog.py:31]"
+      help: "PrintGuard printer_std: toner_name_2 [core/oid/catalog.py:42]"
     - name: toner_max_1
       oid: 1.3.6.1.2.1.43.11.1.1.8.1.1
       type: gauge
-      help: "PrintGuard printer_std: toner_max_1 [core/oid/catalog.py:29]"
+      help: "PrintGuard printer_std: toner_max_1 [core/oid/catalog.py:40]"
       # ignore_values: ["-2", "-3"]
     - name: toner_max_2
       oid: 1.3.6.1.2.1.43.11.1.1.8.1.2
       type: gauge
-      help: "PrintGuard printer_std: toner_max_2 [core/oid/catalog.py:32]"
+      help: "PrintGuard printer_std: toner_max_2 [core/oid/catalog.py:43]"
       # ignore_values: ["-2", "-3"]
     - name: toner_remain_1
       oid: 1.3.6.1.2.1.43.11.1.1.9.1.1
       type: gauge
-      help: "PrintGuard printer_std: toner_remain_1 [core/oid/catalog.py:30]"
+      help: "PrintGuard printer_std: toner_remain_1 [core/oid/catalog.py:41]"
       # ignore_values: ["-2", "-3"]
     - name: toner_remain_2
       oid: 1.3.6.1.2.1.43.11.1.1.9.1.2
       type: gauge
-      help: "PrintGuard printer_std: toner_remain_2 [core/oid/catalog.py:33]"
+      help: "PrintGuard printer_std: toner_remain_2 [core/oid/catalog.py:44]"
       # ignore_values: ["-2", "-3"]
     # ── tray_table (subtree 1.3.6.1.2.1.43.8.2.1) ──
     - name: tray1_cap
       oid: 1.3.6.1.2.1.43.8.2.1.9.1.1
       type: gauge
-      help: "PrintGuard printer_std: tray1_cap [core/oid/catalog.py:35]"
+      help: "PrintGuard printer_std: tray1_cap [core/oid/catalog.py:46]"
       # ignore_values: ["-2", "-3"]
     - name: tray2_cap
       oid: 1.3.6.1.2.1.43.8.2.1.9.1.2
       type: gauge
-      help: "PrintGuard printer_std: tray2_cap [core/oid/catalog.py:38]"
+      help: "PrintGuard printer_std: tray2_cap [core/oid/catalog.py:49]"
       # ignore_values: ["-2", "-3"]
     - name: tray1_level
       oid: 1.3.6.1.2.1.43.8.2.1.10.1.1
       type: gauge
-      help: "PrintGuard printer_std: tray1_level [core/oid/catalog.py:36]"
+      help: "PrintGuard printer_std: tray1_level [core/oid/catalog.py:47]"
       # ignore_values: ["-2", "-3"]
     - name: tray2_level
       oid: 1.3.6.1.2.1.43.8.2.1.10.1.2
       type: gauge
-      help: "PrintGuard printer_std: tray2_level [core/oid/catalog.py:39]"
+      help: "PrintGuard printer_std: tray2_level [core/oid/catalog.py:50]"
       # ignore_values: ["-2", "-3"]
     - name: tray1_name
       oid: 1.3.6.1.2.1.43.8.2.1.13.1.1
       type: DisplayString
-      help: "PrintGuard printer_std: tray1_name [core/oid/catalog.py:34]"
+      help: "PrintGuard printer_std: tray1_name [core/oid/catalog.py:45]"
     - name: tray2_name
       oid: 1.3.6.1.2.1.43.8.2.1.13.1.2
       type: DisplayString
-      help: "PrintGuard printer_std: tray2_name [core/oid/catalog.py:37]"
+      help: "PrintGuard printer_std: tray2_name [core/oid/catalog.py:48]"
 
   # ────────────────────────────────────────────────────────────────────────
-  # printer_hp — 14 متریک · 10 get · 2 جدول walk
+  # printer_hp — 14 metrics · 10 get · 2 walk tables
   # ────────────────────────────────────────────────────────────────────────
   printer_hp:
-    # یک GETNEXT-sweep روی این درخت‌ها، چند ردیف را یک‌جا می‌آورد
+    # a GETNEXT sweep over these trees brings several rows at once
     walk:
-    - 1.3.6.1.4.1.11.2.3.9.4.2.1.1.6          # hp_cartridge_tree — 1 سطرِ ماتریس زیر این درخت
-    - 1.3.6.1.4.1.11.2.3.9.4.2.1.4          # hp_supplies_columns — 3 سطرِ ماتریس زیر این درخت
-    # scalarها: یک GET بسته، بدون walk
+    - 1.3.6.1.4.1.11.2.3.9.4.2.1.1.6          # hp_cartridge_tree — 1 matrix rows under this tree
+    - 1.3.6.1.4.1.11.2.3.9.4.2.1.4          # hp_supplies_columns — 3 matrix rows under this tree
+    # scalars: one closed GET, no walk
     get:
     - 1.3.6.1.4.1.11.2.3.9.1.1.3.1.1.1.1.2.0          # hp_model
     - 1.3.6.1.4.1.11.2.3.9.1.1.3.1.1.1.1.3.0          # hp_serial
@@ -205,75 +205,75 @@ modules:
     - name: hp_model
       oid: 1.3.6.1.4.1.11.2.3.9.1.1.3.1.1.1.1.2.0
       type: DisplayString
-      help: "PrintGuard printer_hp: hp_model [core/oid/catalog.py:76]"
+      help: "PrintGuard printer_hp: hp_model [core/oid/catalog.py:87]"
     - name: hp_serial
       oid: 1.3.6.1.4.1.11.2.3.9.1.1.3.1.1.1.1.3.0
       type: DisplayString
-      help: "PrintGuard printer_hp: hp_serial [core/oid/catalog.py:77]"
+      help: "PrintGuard printer_hp: hp_serial [core/oid/catalog.py:88]"
     - name: hp_firmware
       oid: 1.3.6.1.4.1.11.2.3.9.1.1.3.1.1.1.1.7.0
       type: DisplayString
-      help: "PrintGuard printer_hp: hp_firmware [core/oid/catalog.py:78]"
+      help: "PrintGuard printer_hp: hp_firmware [core/oid/catalog.py:89]"
     - name: general_oids_2
       oid: 1.3.6.1.4.1.11.2.3.9.1.1.7.0
       type: gauge
-      help: "PrintGuard printer_hp: general_oids_2 [core/enhanced_collector.py:231]"
-      # type inferred, not declared in code — enhanced_collector.py:231 same int()/0..100 loop
+      help: "PrintGuard printer_hp: general_oids_2 [core/enhanced_collector.py:245]"
+      # type inferred, not declared in code — enhanced_collector.py:245 same int()/0..100 loop
       # ignore_values: ["-2", "-3"]
     - name: hp_scan_color
       oid: 1.3.6.1.4.1.11.2.3.9.6.1.1.3.1
       type: counter
-      help: "PrintGuard printer_hp: hp_scan_color [core/oid/catalog.py:82]"
+      help: "PrintGuard printer_hp: hp_scan_color [core/oid/catalog.py:93]"
     - name: hp_print_color
       oid: 1.3.6.1.4.1.11.2.3.9.6.1.1.5.1
       type: counter
-      help: "PrintGuard printer_hp: hp_print_color [core/oid/catalog.py:81]"
+      help: "PrintGuard printer_hp: hp_print_color [core/oid/catalog.py:92]"
     - name: hp_copy_color
       oid: 1.3.6.1.4.1.11.2.3.9.6.1.1.6.1
       type: counter
-      help: "PrintGuard printer_hp: hp_copy_color [core/oid/catalog.py:79]"
+      help: "PrintGuard printer_hp: hp_copy_color [core/oid/catalog.py:90]"
     - name: hp_copy_mono
       oid: 1.3.6.1.4.1.11.2.3.9.6.1.1.9.1
       type: counter
-      help: "PrintGuard printer_hp: hp_copy_mono [core/oid/catalog.py:80]"
+      help: "PrintGuard printer_hp: hp_copy_mono [core/oid/catalog.py:91]"
     - name: hp_scan_mono
       oid: 1.3.6.1.4.1.11.2.3.9.6.1.1.10.1
       type: counter
-      help: "PrintGuard printer_hp: hp_scan_mono [core/oid/catalog.py:83]"
+      help: "PrintGuard printer_hp: hp_scan_mono [core/oid/catalog.py:94]"
     - name: hp_fax
       oid: 1.3.6.1.4.1.11.2.3.9.6.1.1.11.1
       type: counter
-      help: "PrintGuard printer_hp: hp_fax [core/oid/catalog.py:84]"
+      help: "PrintGuard printer_hp: hp_fax [core/oid/catalog.py:95]"
     # ── hp_cartridge_tree (subtree 1.3.6.1.4.1.11.2.3.9.4.2.1.1.6) ──
     - name: candidate_subtrees_hp
       oid: 1.3.6.1.4.1.11.2.3.9.4.2.1.1.6
       type: DisplayString
-      help: "PrintGuard printer_hp: candidate_subtrees_hp [core/collectors/cartridge_discovery.py:65]"
-      # type inferred, not declared in code — cartridge_discovery.py:65 — walk candidate, not a value; no sample is emitted for the bare column OID
+      help: "PrintGuard printer_hp: candidate_subtrees_hp [core/collectors/cartridge_discovery.py:78]"
+      # type inferred, not declared in code — cartridge_discovery.py:79 — walk candidate, not a value; no sample is emitted for the bare column OID
     # ── hp_supplies_columns (subtree 1.3.6.1.4.1.11.2.3.9.4.2.1.4) ──
     - name: candidate_subtrees_hp_2
       oid: 1.3.6.1.4.1.11.2.3.9.4.2.1.4
       type: DisplayString
-      help: "PrintGuard printer_hp: candidate_subtrees_hp_2 [core/collectors/cartridge_discovery.py:66]"
-      # type inferred, not declared in code — cartridge_discovery.py:66 — walk candidate, not a value; no sample is emitted for the bare column OID
+      help: "PrintGuard printer_hp: candidate_subtrees_hp_2 [core/collectors/cartridge_discovery.py:79]"
+      # type inferred, not declared in code — cartridge_discovery.py:80 — walk candidate, not a value; no sample is emitted for the bare column OID
     - name: general_oids
       oid: 1.3.6.1.4.1.11.2.3.9.4.2.1.4.1.2.1.5.5.1.1
       type: gauge
-      help: "PrintGuard printer_hp: general_oids [core/enhanced_collector.py:229]"
-      # type inferred, not declared in code — enhanced_collector.py:229-235 int(val) + 0..100 guard
+      help: "PrintGuard printer_hp: general_oids [core/enhanced_collector.py:243]"
+      # type inferred, not declared in code — enhanced_collector.py:243-249 int(val) + 0..100 guard
       # ignore_values: ["-2", "-3"]
     - name: hp_npcl_pct_oid
       oid: 1.3.6.1.4.1.11.2.3.9.4.2.1.4.1.2.4.1.2.1.5.5.1.1
       type: gauge
-      help: "PrintGuard printer_hp: hp_npcl_pct_oid [core/enhanced_collector.py:39]"
-      # type inferred, not declared in code — enhanced_collector.py:39 _HP_NPCL_PCT_OID → percent path
+      help: "PrintGuard printer_hp: hp_npcl_pct_oid [core/enhanced_collector.py:53]"
+      # type inferred, not declared in code — enhanced_collector.py:53 _HP_NPCL_PCT_OID → percent path
       # ignore_values: ["-2", "-3"]
 
   # ────────────────────────────────────────────────────────────────────────
-  # printer_canon — 16 متریک · 16 get · 0 جدول walk
+  # printer_canon — 16 metrics · 16 get · 0 walk tables
   # ────────────────────────────────────────────────────────────────────────
   printer_canon:
-    # scalarها: یک GET بسته، بدون walk
+    # scalars: one closed GET, no walk
     get:
     - 1.3.6.1.4.1.1602.1.1.1.1.0          # canon_model
     - 1.3.6.1.4.1.1602.1.1.1.4.0          # canon_firmware
@@ -295,85 +295,85 @@ modules:
     - name: canon_model
       oid: 1.3.6.1.4.1.1602.1.1.1.1.0
       type: DisplayString
-      help: "PrintGuard printer_canon: canon_model [core/oid/catalog.py:65]"
+      help: "PrintGuard printer_canon: canon_model [core/oid/catalog.py:76]"
     - name: canon_firmware
       oid: 1.3.6.1.4.1.1602.1.1.1.4.0
       type: DisplayString
-      help: "PrintGuard printer_canon: canon_firmware [core/oid/catalog.py:67]"
+      help: "PrintGuard printer_canon: canon_firmware [core/oid/catalog.py:78]"
     - name: canon_alternate_oids
       oid: 1.3.6.1.4.1.1602.1.2.1.1.1.1.1
       type: gauge
-      help: "PrintGuard printer_canon: canon_alternate_oids [core/enhanced_collector.py:60]"
-      # type inferred, not declared in code — enhanced_collector.py:244-250 int(val) + 0..100 guard
+      help: "PrintGuard printer_canon: canon_alternate_oids [core/enhanced_collector.py:74]"
+      # type inferred, not declared in code — enhanced_collector.py:258-264 int(val) + 0..100 guard
       # ignore_values: ["-2", "-3"]
     - name: canon_alternate_oids_2
       oid: 1.3.6.1.4.1.1602.1.2.1.1.1.2.1
       type: gauge
-      help: "PrintGuard printer_canon: canon_alternate_oids_2 [core/enhanced_collector.py:61]"
-      # type inferred, not declared in code — enhanced_collector.py:244-250 same loop
+      help: "PrintGuard printer_canon: canon_alternate_oids_2 [core/enhanced_collector.py:75]"
+      # type inferred, not declared in code — enhanced_collector.py:258-264 same loop
       # ignore_values: ["-2", "-3"]
     - name: canon_serial
       oid: 1.3.6.1.4.1.1602.1.2.1.4.0
       type: DisplayString
-      help: "PrintGuard printer_canon: canon_serial [core/oid/catalog.py:66]"
+      help: "PrintGuard printer_canon: canon_serial [core/oid/catalog.py:77]"
     - name: canon_lbp_total
       oid: 1.3.6.1.4.1.1602.1.11.1.1.1.3.1
       type: counter
-      help: "PrintGuard printer_canon: canon_lbp_total [core/oid/catalog.py:73]"
+      help: "PrintGuard printer_canon: canon_lbp_total [core/oid/catalog.py:84]"
     - name: alt_lbp_total
       oid: 1.3.6.1.4.1.1602.1.11.1.1.1.3.3
       type: counter
-      help: "PrintGuard printer_canon: alt_lbp_total [core/collectors/canon.py:267]"
-      # type inferred, not declared in code — canon.py:267 si(gc(…1.11.1.1.1.3.3)) → total pages
+      help: "PrintGuard printer_canon: alt_lbp_total [core/collectors/canon.py:280]"
+      # type inferred, not declared in code — canon.py:278 si(gc(…1.11.1.1.1.3.3)) → total pages
     - name: canon_lbp_color
       oid: 1.3.6.1.4.1.1602.1.11.1.1.1.3.4
       type: counter
-      help: "PrintGuard printer_canon: canon_lbp_color [core/oid/catalog.py:74]"
+      help: "PrintGuard printer_canon: canon_lbp_color [core/oid/catalog.py:85]"
     - name: canon_total
       oid: 1.3.6.1.4.1.1602.1.11.2.1.1.3.1
       type: counter
-      help: "PrintGuard printer_canon: canon_total [core/oid/catalog.py:68]"
+      help: "PrintGuard printer_canon: canon_total [core/oid/catalog.py:79]"
     - name: canon_copy
       oid: 1.3.6.1.4.1.1602.1.11.2.1.1.3.6
       type: counter
-      help: "PrintGuard printer_canon: canon_copy [core/oid/catalog.py:70]"
+      help: "PrintGuard printer_canon: canon_copy [core/oid/catalog.py:81]"
     - name: canon_print
       oid: 1.3.6.1.4.1.1602.1.11.2.1.1.3.9
       type: counter
-      help: "PrintGuard printer_canon: canon_print [core/oid/catalog.py:71]"
+      help: "PrintGuard printer_canon: canon_print [core/oid/catalog.py:82]"
     - name: canon_scan
       oid: 1.3.6.1.4.1.1602.1.11.2.1.1.3.12
       type: counter
-      help: "PrintGuard printer_canon: canon_scan [core/oid/catalog.py:72]"
+      help: "PrintGuard printer_canon: canon_scan [core/oid/catalog.py:83]"
     - name: alt_total
       oid: 1.3.6.1.4.1.1602.1.11.2.2.1.3.1
       type: counter
-      help: "PrintGuard printer_canon: alt_total [core/collectors/canon.py:216]"
-      # type inferred, not declared in code — canon.py:216 si(gc(…1.11.2.2.1.3.1))
+      help: "PrintGuard printer_canon: alt_total [core/collectors/canon.py:231]"
+      # type inferred, not declared in code — canon.py:229 si(gc(…1.11.2.2.1.3.1))
     - name: alt_copy
       oid: 1.3.6.1.4.1.1602.1.11.2.2.1.3.6
       type: counter
-      help: "PrintGuard printer_canon: alt_copy [core/collectors/canon.py:217]"
-      # type inferred, not declared in code — canon.py:217 si(…1.11.2.2.1.3.6)
+      help: "PrintGuard printer_canon: alt_copy [core/collectors/canon.py:232]"
+      # type inferred, not declared in code — canon.py:230 si(…1.11.2.2.1.3.6)
     - name: alt_print
       oid: 1.3.6.1.4.1.1602.1.11.2.2.1.3.9
       type: counter
-      help: "PrintGuard printer_canon: alt_print [core/collectors/canon.py:218]"
-      # type inferred, not declared in code — canon.py:218 si(…1.11.2.2.1.3.9)
+      help: "PrintGuard printer_canon: alt_print [core/collectors/canon.py:233]"
+      # type inferred, not declared in code — canon.py:231 si(…1.11.2.2.1.3.9)
     - name: alt_scan
       oid: 1.3.6.1.4.1.1602.1.11.2.2.1.3.12
       type: counter
-      help: "PrintGuard printer_canon: alt_scan [core/collectors/canon.py:219]"
-      # type inferred, not declared in code — canon.py:219 si(…1.11.2.2.1.3.12)
+      help: "PrintGuard printer_canon: alt_scan [core/collectors/canon.py:234]"
+      # type inferred, not declared in code — canon.py:232 si(…1.11.2.2.1.3.12)
 
   # ────────────────────────────────────────────────────────────────────────
-  # printer_brother — 9 متریک · 4 get · 1 جدول walk
+  # printer_brother — 9 metrics · 4 get · 1 walk tables
   # ────────────────────────────────────────────────────────────────────────
   printer_brother:
-    # یک GETNEXT-sweep روی این درخت‌ها، چند ردیف را یک‌جا می‌آورد
+    # a GETNEXT sweep over these trees brings several rows at once
     walk:
-    - 1.3.6.1.4.1.2435.2.3.9.4.2.1          # bro_cartridge_tree — 5 سطرِ ماتریس زیر این درخت
-    # scalarها: یک GET بسته، بدون walk
+    - 1.3.6.1.4.1.2435.2.3.9.4.2.1          # bro_cartridge_tree — 5 matrix rows under this tree
+    # scalars: one closed GET, no walk
     get:
     - 1.3.6.1.4.1.2435.2.3.9.1.1.1.1.3.0          # bro_firmware_alt
     - 1.3.6.1.4.1.2435.2.4.3.99.3.1.6.1.2.1          # bro_model
@@ -383,57 +383,57 @@ modules:
     - name: bro_firmware_alt
       oid: 1.3.6.1.4.1.2435.2.3.9.1.1.1.1.3.0
       type: DisplayString
-      help: "PrintGuard printer_brother: bro_firmware_alt [core/oid/catalog.py:89]"
+      help: "PrintGuard printer_brother: bro_firmware_alt [core/oid/catalog.py:100]"
     - name: bro_model
       oid: 1.3.6.1.4.1.2435.2.4.3.99.3.1.6.1.2.1
       type: DisplayString
-      help: "PrintGuard printer_brother: bro_model [core/oid/catalog.py:86]"
+      help: "PrintGuard printer_brother: bro_model [core/oid/catalog.py:97]"
     - name: bro_serial
       oid: 1.3.6.1.4.1.2435.2.4.3.99.3.1.6.1.2.3
       type: DisplayString
-      help: "PrintGuard printer_brother: bro_serial [core/oid/catalog.py:87]"
+      help: "PrintGuard printer_brother: bro_serial [core/oid/catalog.py:98]"
     - name: bro_firmware
       oid: 1.3.6.1.4.1.2435.2.4.3.1240.6.5.0
       type: DisplayString
-      help: "PrintGuard printer_brother: bro_firmware [core/oid/catalog.py:88]"
+      help: "PrintGuard printer_brother: bro_firmware [core/oid/catalog.py:99]"
     # ── bro_cartridge_tree (subtree 1.3.6.1.4.1.2435.2.3.9.4.2.1) ──
     - name: candidate_subtrees_brother
       oid: 1.3.6.1.4.1.2435.2.3.9.4.2.1.1.6
       type: DisplayString
-      help: "PrintGuard printer_brother: candidate_subtrees_brother [core/collectors/cartridge_discovery.py:69]"
-      # type inferred, not declared in code — cartridge_discovery.py:69 — walk candidate, not a value; no sample is emitted for the bare column OID
+      help: "PrintGuard printer_brother: candidate_subtrees_brother [core/collectors/cartridge_discovery.py:82]"
+      # type inferred, not declared in code — cartridge_discovery.py:83 — walk candidate, not a value; no sample is emitted for the bare column OID
     - name: candidate_subtrees_brother_2
       oid: 1.3.6.1.4.1.2435.2.3.9.4.2.1.5
       type: DisplayString
-      help: "PrintGuard printer_brother: candidate_subtrees_brother_2 [core/collectors/cartridge_discovery.py:70]"
-      # type inferred, not declared in code — cartridge_discovery.py:70 — walk candidate, not a value; no sample is emitted for the bare column OID
+      help: "PrintGuard printer_brother: candidate_subtrees_brother_2 [core/collectors/cartridge_discovery.py:83]"
+      # type inferred, not declared in code — cartridge_discovery.py:84 — walk candidate, not a value; no sample is emitted for the bare column OID
     - name: val_val
       oid: 1.3.6.1.4.1.2435.2.3.9.4.2.1.5.1.1.6.0
       type: counter
-      help: "PrintGuard printer_brother: val_val [core/collectors/cartridge_id.py:305]"
-      # type inferred, not declared in code — cartridge_id.py:305-310 int(str(val)) — Toner Replace Count, +1 per swap
+      help: "PrintGuard printer_brother: val_val [core/collectors/cartridge_id.py:317]"
+      # type inferred, not declared in code — cartridge_id.py:316-321 int(str(val)) — Toner Replace Count, +1 per swap
     - name: brother_black
       oid: 1.3.6.1.4.1.2435.2.3.9.4.2.1.5.5.1.1
       type: gauge
-      help: "PrintGuard printer_brother: brother_black [core/collectors/brother.py:169]"
-      # type inferred, not declared in code — brother.py:169-172 si(...) + 0..100 → toner level
+      help: "PrintGuard printer_brother: brother_black [core/collectors/brother.py:185]"
+      # type inferred, not declared in code — brother.py:183-186 si(...) + 0..100 → toner level
       # ignore_values: ["-2", "-3"]
     - name: brother_drum_oid
       oid: 1.3.6.1.4.1.2435.2.3.9.4.2.1.5.5.1.2
       type: gauge
-      help: "PrintGuard printer_brother: brother_drum_oid [core/enhanced_collector.py:66]"
-      # type inferred, not declared in code — enhanced_collector.py:66 BROTHER_DRUM_OID → drum life percent
+      help: "PrintGuard printer_brother: brother_drum_oid [core/enhanced_collector.py:80]"
+      # type inferred, not declared in code — enhanced_collector.py:80 BROTHER_DRUM_OID → drum life percent
       # ignore_values: ["-2", "-3"]
 
   # ────────────────────────────────────────────────────────────────────────
-  # printer_toshiba — 63 متریک · 47 get · 2 جدول walk
+  # printer_toshiba — 63 metrics · 47 get · 2 walk tables
   # ────────────────────────────────────────────────────────────────────────
   printer_toshiba:
-    # یک GETNEXT-sweep روی این درخت‌ها، چند ردیف را یک‌جا می‌آورد
+    # a GETNEXT sweep over these trees brings several rows at once
     walk:
-    - 1.3.6.1.4.1.1129.2.3.50.1.3.5.1.1          # tsh_tray_table — 12 سطرِ ماتریس زیر این درخت
-    - 1.3.6.1.4.1.1129.2.3.50.1.3.21.8.1.3.1          # tsh_supply_status_table — 4 سطرِ ماتریس زیر این درخت
-    # scalarها: یک GET بسته، بدون walk
+    - 1.3.6.1.4.1.1129.2.3.50.1.3.5.1.1          # tsh_tray_table — 12 matrix rows under this tree
+    - 1.3.6.1.4.1.1129.2.3.50.1.3.21.8.1.3.1          # tsh_supply_status_table — 4 matrix rows under this tree
+    # scalars: one closed GET, no walk
     get:
     - 1.3.6.1.4.1.1129.2.3.50.1.2.3.1.3.1.1          # tsh_model
     - 1.3.6.1.4.1.1129.2.3.50.1.2.3.1.4.1.1          # tsh_firmware
@@ -486,320 +486,320 @@ modules:
     - name: tsh_model
       oid: 1.3.6.1.4.1.1129.2.3.50.1.2.3.1.3.1.1
       type: DisplayString
-      help: "PrintGuard printer_toshiba: tsh_model [core/oid/catalog.py:42]"
+      help: "PrintGuard printer_toshiba: tsh_model [core/oid/catalog.py:53]"
     - name: tsh_firmware
       oid: 1.3.6.1.4.1.1129.2.3.50.1.2.3.1.4.1.1
       type: DisplayString
-      help: "PrintGuard printer_toshiba: tsh_firmware [core/oid/catalog.py:44]"
+      help: "PrintGuard printer_toshiba: tsh_firmware [core/oid/catalog.py:55]"
     - name: uptime
       oid: 1.3.6.1.4.1.1129.2.3.50.1.2.3.1.11.1.1
       type: gauge
-      help: "PrintGuard printer_toshiba: uptime [core/snmp/oid_map.py:11]"
-      # type inferred, not declared in code — base.py:375,396 prev_uptime carried forward — sys_uptime precedent
+      help: "PrintGuard printer_toshiba: uptime [core/snmp/oid_map.py:21]"
+      # type inferred, not declared in code — base.py:394,415 prev_uptime carried forward — sys_uptime precedent
     - name: tsh_serial
       oid: 1.3.6.1.4.1.1129.2.3.50.1.2.4.1.8.1.1
       type: DisplayString
-      help: "PrintGuard printer_toshiba: tsh_serial [core/oid/catalog.py:43]"
+      help: "PrintGuard printer_toshiba: tsh_serial [core/oid/catalog.py:54]"
     - name: alert1_code
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.15.2.1.7.1.1
       type: gauge
-      help: "PrintGuard printer_toshiba: alert1_code [core/snmp/oid_map.py:72]"
+      help: "PrintGuard printer_toshiba: alert1_code [core/snmp/oid_map.py:82]"
       # type inferred, not declared in code — status code, sibling of the alert*_msg text rows
     - name: alert2_code
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.15.2.1.7.1.2
       type: gauge
-      help: "PrintGuard printer_toshiba: alert2_code [core/snmp/oid_map.py:73]"
+      help: "PrintGuard printer_toshiba: alert2_code [core/snmp/oid_map.py:83]"
       # type inferred, not declared in code — status code, sibling of the alert*_msg text rows
     - name: alert3_code
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.15.2.1.7.1.3
       type: gauge
-      help: "PrintGuard printer_toshiba: alert3_code [core/snmp/oid_map.py:74]"
+      help: "PrintGuard printer_toshiba: alert3_code [core/snmp/oid_map.py:84]"
       # type inferred, not declared in code — status code, sibling of the alert*_msg text rows
     - name: alert1_msg
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.15.2.1.8.1.1
       type: DisplayString
-      help: "PrintGuard printer_toshiba: alert1_msg [core/snmp/oid_map.py:69]"
+      help: "PrintGuard printer_toshiba: alert1_msg [core/snmp/oid_map.py:79]"
       # type inferred, not declared in code — alert message text
     - name: alert2_msg
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.15.2.1.8.1.2
       type: DisplayString
-      help: "PrintGuard printer_toshiba: alert2_msg [core/snmp/oid_map.py:70]"
+      help: "PrintGuard printer_toshiba: alert2_msg [core/snmp/oid_map.py:80]"
       # type inferred, not declared in code — alert message text
     - name: alert3_msg
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.15.2.1.8.1.3
       type: DisplayString
-      help: "PrintGuard printer_toshiba: alert3_msg [core/snmp/oid_map.py:71]"
+      help: "PrintGuard printer_toshiba: alert3_msg [core/snmp/oid_map.py:81]"
       # type inferred, not declared in code — alert message text
     - name: tsh_color
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.2.1.1
       type: counter
-      help: "PrintGuard printer_toshiba: tsh_color [core/oid/catalog.py:46]"
+      help: "PrintGuard printer_toshiba: tsh_color [core/oid/catalog.py:57]"
     - name: tsh_twin
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.2.1.2
       type: counter
-      help: "PrintGuard printer_toshiba: tsh_twin [core/oid/catalog.py:52]"
+      help: "PrintGuard printer_toshiba: tsh_twin [core/oid/catalog.py:63]"
     - name: tsh_bw
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.2.1.3
       type: counter
-      help: "PrintGuard printer_toshiba: tsh_bw [core/oid/catalog.py:47]"
+      help: "PrintGuard printer_toshiba: tsh_bw [core/oid/catalog.py:58]"
     - name: tsh_total
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.2.1.4
       type: counter
-      help: "PrintGuard printer_toshiba: tsh_total [core/oid/catalog.py:45]"
+      help: "PrintGuard printer_toshiba: tsh_total [core/oid/catalog.py:56]"
     - name: tsh_print_fc
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.3.1.1
       type: counter
-      help: "PrintGuard printer_toshiba: tsh_print_fc [core/oid/catalog.py:50]"
+      help: "PrintGuard printer_toshiba: tsh_print_fc [core/oid/catalog.py:61]"
     - name: tsh_print_bw
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.3.1.3
       type: counter
-      help: "PrintGuard printer_toshiba: tsh_print_bw [core/oid/catalog.py:51]"
+      help: "PrintGuard printer_toshiba: tsh_print_bw [core/oid/catalog.py:62]"
     - name: tsh_copy_fc
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.4.1.1
       type: counter
-      help: "PrintGuard printer_toshiba: tsh_copy_fc [core/oid/catalog.py:48]"
+      help: "PrintGuard printer_toshiba: tsh_copy_fc [core/oid/catalog.py:59]"
     - name: tsh_copy_bw
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.4.1.3
       type: counter
-      help: "PrintGuard printer_toshiba: tsh_copy_bw [core/oid/catalog.py:49]"
+      help: "PrintGuard printer_toshiba: tsh_copy_bw [core/oid/catalog.py:60]"
     - name: tsh_fax
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.7.1.4
       type: counter
-      help: "PrintGuard printer_toshiba: tsh_fax [core/oid/catalog.py:53]"
+      help: "PrintGuard printer_toshiba: tsh_fax [core/oid/catalog.py:64]"
     - name: scan_net_fc
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.8.1.1
       type: counter
-      help: "PrintGuard printer_toshiba: scan_net_fc [core/snmp/oid_map.py:47]"
+      help: "PrintGuard printer_toshiba: scan_net_fc [core/snmp/oid_map.py:57]"
       # type inferred, not declared in code — family of tsh_scan_fc (counter); read through _raw_int
     - name: scan_net_bw
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.8.1.3
       type: counter
-      help: "PrintGuard printer_toshiba: scan_net_bw [core/snmp/oid_map.py:48]"
+      help: "PrintGuard printer_toshiba: scan_net_bw [core/snmp/oid_map.py:58]"
       # type inferred, not declared in code — family of tsh_scan_bw (counter); read through _raw_int
     - name: tsh_scan_fc
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.9.1.1
       type: counter
-      help: "PrintGuard printer_toshiba: tsh_scan_fc [core/oid/catalog.py:54]"
+      help: "PrintGuard printer_toshiba: tsh_scan_fc [core/oid/catalog.py:65]"
     - name: tsh_scan_bw
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.9.1.3
       type: counter
-      help: "PrintGuard printer_toshiba: tsh_scan_bw [core/oid/catalog.py:55]"
+      help: "PrintGuard printer_toshiba: tsh_scan_bw [core/oid/catalog.py:66]"
     - name: print_list
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.11.1.4
       type: counter
-      help: "PrintGuard printer_toshiba: print_list [core/snmp/oid_map.py:21]"
-      # type inferred, not declared in code — toshiba.py:429 _raw_int → toshiba.py:415-417 si(v)
+      help: "PrintGuard printer_toshiba: print_list [core/snmp/oid_map.py:31]"
+      # type inferred, not declared in code — toshiba.py:444 _raw_int → toshiba.py:430-432 si(v)
     - name: oids_a3_fc
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.207.1.1
       type: counter
-      help: "PrintGuard printer_toshiba: oids_a3_fc [core/snmp/oid_map.py:34]"
-      # type inferred, not declared in code — fc sub-counter of branch a3 (oid_map.py:33-35); base.py:325 typed `int`, diffed by _safe_delta (toshiba.py:419-425)
+      help: "PrintGuard printer_toshiba: oids_a3_fc [core/snmp/oid_map.py:44]"
+      # type inferred, not declared in code — fc sub-counter of branch a3 (oid_map.py:43-45); base.py:344 typed `int`, diffed by _safe_delta (toshiba.py:434-440)
     - name: oids_a3_bw
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.207.1.3
       type: counter
-      help: "PrintGuard printer_toshiba: oids_a3_bw [core/snmp/oid_map.py:35]"
-      # type inferred, not declared in code — bw sub-counter of branch a3 (oid_map.py:33-35); base.py:325 typed `int`, diffed by _safe_delta (toshiba.py:419-425)
+      help: "PrintGuard printer_toshiba: oids_a3_bw [core/snmp/oid_map.py:45]"
+      # type inferred, not declared in code — bw sub-counter of branch a3 (oid_map.py:43-45); base.py:344 typed `int`, diffed by _safe_delta (toshiba.py:434-440)
     - name: a3_total
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.207.1.4
       type: counter
-      help: "PrintGuard printer_toshiba: a3_total [core/snmp/oid_map.py:33]"
-      # type inferred, not declared in code — total sub-counter of branch a3 (oid_map.py:33-35); base.py:325 typed `int`, diffed by _safe_delta (toshiba.py:419-425)
+      help: "PrintGuard printer_toshiba: a3_total [core/snmp/oid_map.py:43]"
+      # type inferred, not declared in code — total sub-counter of branch a3 (oid_map.py:43-45); base.py:344 typed `int`, diffed by _safe_delta (toshiba.py:434-440)
     - name: oids_a4_fc
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.208.1.1
       type: counter
-      help: "PrintGuard printer_toshiba: oids_a4_fc [core/snmp/oid_map.py:31]"
-      # type inferred, not declared in code — fc sub-counter of branch a4 (oid_map.py:30-32); base.py:325 typed `int`, diffed by _safe_delta (toshiba.py:419-425)
+      help: "PrintGuard printer_toshiba: oids_a4_fc [core/snmp/oid_map.py:41]"
+      # type inferred, not declared in code — fc sub-counter of branch a4 (oid_map.py:40-42); base.py:344 typed `int`, diffed by _safe_delta (toshiba.py:434-440)
     - name: oids_a4_bw
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.208.1.3
       type: counter
-      help: "PrintGuard printer_toshiba: oids_a4_bw [core/snmp/oid_map.py:32]"
-      # type inferred, not declared in code — bw sub-counter of branch a4 (oid_map.py:30-32); base.py:325 typed `int`, diffed by _safe_delta (toshiba.py:419-425)
+      help: "PrintGuard printer_toshiba: oids_a4_bw [core/snmp/oid_map.py:42]"
+      # type inferred, not declared in code — bw sub-counter of branch a4 (oid_map.py:40-42); base.py:344 typed `int`, diffed by _safe_delta (toshiba.py:434-440)
     - name: a4_total
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.208.1.4
       type: counter
-      help: "PrintGuard printer_toshiba: a4_total [core/snmp/oid_map.py:30]"
-      # type inferred, not declared in code — total sub-counter of branch a4 (oid_map.py:30-32); base.py:325 typed `int`, diffed by _safe_delta (toshiba.py:419-425)
+      help: "PrintGuard printer_toshiba: a4_total [core/snmp/oid_map.py:40]"
+      # type inferred, not declared in code — total sub-counter of branch a4 (oid_map.py:40-42); base.py:344 typed `int`, diffed by _safe_delta (toshiba.py:434-440)
     - name: a4r_fc
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.209.1.1
       type: counter
-      help: "PrintGuard printer_toshiba: a4r_fc [core/snmp/oid_map.py:37]"
-      # type inferred, not declared in code — fc sub-counter of branch a4r (oid_map.py:36-38); base.py:325 typed `int`, diffed by _safe_delta (toshiba.py:419-425)
+      help: "PrintGuard printer_toshiba: a4r_fc [core/snmp/oid_map.py:47]"
+      # type inferred, not declared in code — fc sub-counter of branch a4r (oid_map.py:46-48); base.py:344 typed `int`, diffed by _safe_delta (toshiba.py:434-440)
     - name: a4r_bw
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.209.1.3
       type: counter
-      help: "PrintGuard printer_toshiba: a4r_bw [core/snmp/oid_map.py:38]"
-      # type inferred, not declared in code — bw sub-counter of branch a4r (oid_map.py:36-38); base.py:325 typed `int`, diffed by _safe_delta (toshiba.py:419-425)
+      help: "PrintGuard printer_toshiba: a4r_bw [core/snmp/oid_map.py:48]"
+      # type inferred, not declared in code — bw sub-counter of branch a4r (oid_map.py:46-48); base.py:344 typed `int`, diffed by _safe_delta (toshiba.py:434-440)
     - name: a4r_total
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.209.1.4
       type: counter
-      help: "PrintGuard printer_toshiba: a4r_total [core/snmp/oid_map.py:36]"
-      # type inferred, not declared in code — total sub-counter of branch a4r (oid_map.py:36-38); base.py:325 typed `int`, diffed by _safe_delta (toshiba.py:419-425)
+      help: "PrintGuard printer_toshiba: a4r_total [core/snmp/oid_map.py:46]"
+      # type inferred, not declared in code — total sub-counter of branch a4r (oid_map.py:46-48); base.py:344 typed `int`, diffed by _safe_delta (toshiba.py:434-440)
     - name: oids_a5_fc
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.210.1.1
       type: counter
-      help: "PrintGuard printer_toshiba: oids_a5_fc [core/snmp/oid_map.py:40]"
-      # type inferred, not declared in code — fc sub-counter of branch a5 (oid_map.py:39-41); base.py:325 typed `int`, diffed by _safe_delta (toshiba.py:419-425)
+      help: "PrintGuard printer_toshiba: oids_a5_fc [core/snmp/oid_map.py:50]"
+      # type inferred, not declared in code — fc sub-counter of branch a5 (oid_map.py:49-51); base.py:344 typed `int`, diffed by _safe_delta (toshiba.py:434-440)
     - name: oids_a5_bw
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.210.1.3
       type: counter
-      help: "PrintGuard printer_toshiba: oids_a5_bw [core/snmp/oid_map.py:41]"
-      # type inferred, not declared in code — bw sub-counter of branch a5 (oid_map.py:39-41); base.py:325 typed `int`, diffed by _safe_delta (toshiba.py:419-425)
+      help: "PrintGuard printer_toshiba: oids_a5_bw [core/snmp/oid_map.py:51]"
+      # type inferred, not declared in code — bw sub-counter of branch a5 (oid_map.py:49-51); base.py:344 typed `int`, diffed by _safe_delta (toshiba.py:434-440)
     - name: a5_total
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.210.1.4
       type: counter
-      help: "PrintGuard printer_toshiba: a5_total [core/snmp/oid_map.py:39]"
-      # type inferred, not declared in code — total sub-counter of branch a5 (oid_map.py:39-41); base.py:325 typed `int`, diffed by _safe_delta (toshiba.py:419-425)
+      help: "PrintGuard printer_toshiba: a5_total [core/snmp/oid_map.py:49]"
+      # type inferred, not declared in code — total sub-counter of branch a5 (oid_map.py:49-51); base.py:344 typed `int`, diffed by _safe_delta (toshiba.py:434-440)
     - name: oids_b4_fc
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.227.1.1
       type: counter
-      help: "PrintGuard printer_toshiba: oids_b4_fc [core/snmp/oid_map.py:43]"
-      # type inferred, not declared in code — fc sub-counter of branch b4 (oid_map.py:42-44); base.py:325 typed `int`, diffed by _safe_delta (toshiba.py:419-425)
+      help: "PrintGuard printer_toshiba: oids_b4_fc [core/snmp/oid_map.py:53]"
+      # type inferred, not declared in code — fc sub-counter of branch b4 (oid_map.py:52-54); base.py:344 typed `int`, diffed by _safe_delta (toshiba.py:434-440)
     - name: oids_b4_bw
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.227.1.3
       type: counter
-      help: "PrintGuard printer_toshiba: oids_b4_bw [core/snmp/oid_map.py:44]"
-      # type inferred, not declared in code — bw sub-counter of branch b4 (oid_map.py:42-44); base.py:325 typed `int`, diffed by _safe_delta (toshiba.py:419-425)
+      help: "PrintGuard printer_toshiba: oids_b4_bw [core/snmp/oid_map.py:54]"
+      # type inferred, not declared in code — bw sub-counter of branch b4 (oid_map.py:52-54); base.py:344 typed `int`, diffed by _safe_delta (toshiba.py:434-440)
     - name: b4_total
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.227.1.4
       type: counter
-      help: "PrintGuard printer_toshiba: b4_total [core/snmp/oid_map.py:42]"
-      # type inferred, not declared in code — total sub-counter of branch b4 (oid_map.py:42-44); base.py:325 typed `int`, diffed by _safe_delta (toshiba.py:419-425)
+      help: "PrintGuard printer_toshiba: b4_total [core/snmp/oid_map.py:52]"
+      # type inferred, not declared in code — total sub-counter of branch b4 (oid_map.py:52-54); base.py:344 typed `int`, diffed by _safe_delta (toshiba.py:434-440)
     - name: toner_cyan_usage
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.8.1.2.1.1
       type: gauge
-      help: "PrintGuard printer_toshiba: toner_cyan_usage [core/snmp/oid_map.py:61]"
+      help: "PrintGuard printer_toshiba: toner_cyan_usage [core/snmp/oid_map.py:71]"
       # type inferred, not declared in code — block of tsh_blk_st, typed gauge in the spec
       # ignore_values: ["-2", "-3"]
     - name: toner_magenta_usage
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.8.1.2.1.2
       type: gauge
-      help: "PrintGuard printer_toshiba: toner_magenta_usage [core/snmp/oid_map.py:62]"
+      help: "PrintGuard printer_toshiba: toner_magenta_usage [core/snmp/oid_map.py:72]"
       # type inferred, not declared in code — block of tsh_blk_st, typed gauge in the spec
       # ignore_values: ["-2", "-3"]
     - name: toner_yellow_usage
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.8.1.2.1.3
       type: gauge
-      help: "PrintGuard printer_toshiba: toner_yellow_usage [core/snmp/oid_map.py:63]"
+      help: "PrintGuard printer_toshiba: toner_yellow_usage [core/snmp/oid_map.py:73]"
       # type inferred, not declared in code — block of tsh_blk_st, typed gauge in the spec
       # ignore_values: ["-2", "-3"]
     - name: toner_black_usage
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.8.1.2.1.4
       type: gauge
-      help: "PrintGuard printer_toshiba: toner_black_usage [core/snmp/oid_map.py:64]"
+      help: "PrintGuard printer_toshiba: toner_black_usage [core/snmp/oid_map.py:74]"
       # type inferred, not declared in code — block of tsh_blk_st, typed gauge in the spec
       # ignore_values: ["-2", "-3"]
     - name: toner_magenta_status
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.8.1.5.1.1
       type: gauge
-      help: "PrintGuard printer_toshiba: toner_magenta_status [core/snmp/oid_map.py:65]"
+      help: "PrintGuard printer_toshiba: toner_magenta_status [core/snmp/oid_map.py:75]"
       # type inferred, not declared in code — block of tsh_cyan_st, typed gauge in the spec
       # ignore_values: ["-2", "-3"]
     - name: toner_cyan_status
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.8.1.5.1.2
       type: gauge
-      help: "PrintGuard printer_toshiba: toner_cyan_status [core/snmp/oid_map.py:66]"
+      help: "PrintGuard printer_toshiba: toner_cyan_status [core/snmp/oid_map.py:76]"
       # type inferred, not declared in code — block of tsh_cyan_st, typed gauge in the spec
       # ignore_values: ["-2", "-3"]
     - name: toner_yellow_status
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.8.1.5.1.3
       type: gauge
-      help: "PrintGuard printer_toshiba: toner_yellow_status [core/snmp/oid_map.py:67]"
+      help: "PrintGuard printer_toshiba: toner_yellow_status [core/snmp/oid_map.py:77]"
       # type inferred, not declared in code — block of tsh_cyan_st, typed gauge in the spec
       # ignore_values: ["-2", "-3"]
     - name: toner_black_status
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.8.1.5.1.4
       type: gauge
-      help: "PrintGuard printer_toshiba: toner_black_status [core/snmp/oid_map.py:68]"
+      help: "PrintGuard printer_toshiba: toner_black_status [core/snmp/oid_map.py:78]"
       # type inferred, not declared in code — block of tsh_cyan_st, typed gauge in the spec
       # ignore_values: ["-2", "-3"]
     # ── tsh_tray_table (subtree 1.3.6.1.4.1.1129.2.3.50.1.3.5.1.1) ──
     - name: tray1_status
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.5.1.1.3.1.1
       type: gauge
-      help: "PrintGuard printer_toshiba: tray1_status [core/snmp/oid_map.py:57]"
+      help: "PrintGuard printer_toshiba: tray1_status [core/snmp/oid_map.py:67]"
       # type inferred, not declared in code — tsh_tray_table status code (int in the dict the collector reads)
     - name: tray2_status
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.5.1.1.3.1.2
       type: gauge
-      help: "PrintGuard printer_toshiba: tray2_status [core/snmp/oid_map.py:58]"
+      help: "PrintGuard printer_toshiba: tray2_status [core/snmp/oid_map.py:68]"
       # type inferred, not declared in code — tsh_tray_table status code (int in the dict the collector reads)
     - name: tray3_status
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.5.1.1.3.1.3
       type: gauge
-      help: "PrintGuard printer_toshiba: tray3_status [core/snmp/oid_map.py:59]"
+      help: "PrintGuard printer_toshiba: tray3_status [core/snmp/oid_map.py:69]"
       # type inferred, not declared in code — tsh_tray_table status code (int in the dict the collector reads)
     - name: tray6_status
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.5.1.1.3.1.6
       type: gauge
-      help: "PrintGuard printer_toshiba: tray6_status [core/snmp/oid_map.py:60]"
+      help: "PrintGuard printer_toshiba: tray6_status [core/snmp/oid_map.py:70]"
       # type inferred, not declared in code — tsh_tray_table status code (int in the dict the collector reads)
     - name: tsh_t1_size
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.5.1.1.4.1.1
       type: gauge
-      help: "PrintGuard printer_toshiba: tsh_t1_size [core/oid/catalog.py:58]"
+      help: "PrintGuard printer_toshiba: tsh_t1_size [core/oid/catalog.py:69]"
     - name: tsh_t2_size
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.5.1.1.4.1.2
       type: gauge
-      help: "PrintGuard printer_toshiba: tsh_t2_size [core/oid/catalog.py:59]"
+      help: "PrintGuard printer_toshiba: tsh_t2_size [core/oid/catalog.py:70]"
     - name: tray3_size
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.5.1.1.4.1.3
       type: gauge
-      help: "PrintGuard printer_toshiba: tray3_size [core/snmp/oid_map.py:55]"
+      help: "PrintGuard printer_toshiba: tray3_size [core/snmp/oid_map.py:65]"
       # type inferred, not declared in code — family of tsh_t1_size, typed gauge in the spec
     - name: tray6_size
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.5.1.1.4.1.6
       type: gauge
-      help: "PrintGuard printer_toshiba: tray6_size [core/snmp/oid_map.py:56]"
+      help: "PrintGuard printer_toshiba: tray6_size [core/snmp/oid_map.py:66]"
       # type inferred, not declared in code — family of tsh_t1_size, typed gauge in the spec
     - name: tsh_t1_level
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.5.1.1.5.1.1
       type: gauge
-      help: "PrintGuard printer_toshiba: tsh_t1_level [core/oid/catalog.py:56]"
+      help: "PrintGuard printer_toshiba: tsh_t1_level [core/oid/catalog.py:67]"
       # ignore_values: ["-2", "-3"]
     - name: tsh_t2_level
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.5.1.1.5.1.2
       type: gauge
-      help: "PrintGuard printer_toshiba: tsh_t2_level [core/oid/catalog.py:57]"
+      help: "PrintGuard printer_toshiba: tsh_t2_level [core/oid/catalog.py:68]"
       # ignore_values: ["-2", "-3"]
     - name: tray3_level
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.5.1.1.5.1.3
       type: gauge
-      help: "PrintGuard printer_toshiba: tray3_level [core/snmp/oid_map.py:51]"
+      help: "PrintGuard printer_toshiba: tray3_level [core/snmp/oid_map.py:61]"
       # type inferred, not declared in code — family of tsh_t1_level, typed gauge in the spec
       # ignore_values: ["-2", "-3"]
     - name: tray6_level
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.5.1.1.5.1.6
       type: gauge
-      help: "PrintGuard printer_toshiba: tray6_level [core/snmp/oid_map.py:52]"
+      help: "PrintGuard printer_toshiba: tray6_level [core/snmp/oid_map.py:62]"
       # type inferred, not declared in code — family of tsh_t1_level, typed gauge in the spec
       # ignore_values: ["-2", "-3"]
     # ── tsh_supply_status_table (subtree 1.3.6.1.4.1.1129.2.3.50.1.3.21.8.1.3.1) ──
     - name: tsh_cyan_st
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.8.1.3.1.1
       type: gauge
-      help: "PrintGuard printer_toshiba: tsh_cyan_st [core/oid/catalog.py:60]"
+      help: "PrintGuard printer_toshiba: tsh_cyan_st [core/oid/catalog.py:71]"
       # ignore_values: ["-2", "-3"]
     - name: tsh_mag_st
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.8.1.3.1.2
       type: gauge
-      help: "PrintGuard printer_toshiba: tsh_mag_st [core/oid/catalog.py:61]"
+      help: "PrintGuard printer_toshiba: tsh_mag_st [core/oid/catalog.py:72]"
       # ignore_values: ["-2", "-3"]
     - name: tsh_yel_st
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.8.1.3.1.3
       type: gauge
-      help: "PrintGuard printer_toshiba: tsh_yel_st [core/oid/catalog.py:62]"
+      help: "PrintGuard printer_toshiba: tsh_yel_st [core/oid/catalog.py:73]"
       # ignore_values: ["-2", "-3"]
     - name: tsh_blk_st
       oid: 1.3.6.1.4.1.1129.2.3.50.1.3.21.8.1.3.1.4
       type: gauge
-      help: "PrintGuard printer_toshiba: tsh_blk_st [core/oid/catalog.py:63]"
+      help: "PrintGuard printer_toshiba: tsh_blk_st [core/oid/catalog.py:74]"
       # ignore_values: ["-2", "-3"]
 
   # ────────────────────────────────────────────────────────────────────────
-  # sensor_ecs100g — 10 متریک · 10 get · 0 جدول walk
+  # sensor_ecs100g — 10 metrics · 10 get · 0 walk tables
   # ────────────────────────────────────────────────────────────────────────
   sensor_ecs100g:
-    # scalarها: یک GET بسته، بدون walk
+    # scalars: one closed GET, no walk
     get:
     - 1.3.6.1.4.1.47206.1.0          # sensor_model
     - 1.3.6.1.4.1.47206.2.0          # sensor_serial
@@ -815,40 +815,40 @@ modules:
     - name: sensor_model
       oid: 1.3.6.1.4.1.47206.1.0
       type: DisplayString
-      help: "PrintGuard sensor_ecs100g: sensor_model [core/oid/catalog.py:13]"
+      help: "PrintGuard sensor_ecs100g: sensor_model [core/oid/catalog.py:24]"
     - name: sensor_serial
       oid: 1.3.6.1.4.1.47206.2.0
       type: DisplayString
-      help: "PrintGuard sensor_ecs100g: sensor_serial [core/oid/catalog.py:14]"
+      help: "PrintGuard sensor_ecs100g: sensor_serial [core/oid/catalog.py:25]"
     - name: sensor_temp1_st
       oid: 1.3.6.1.4.1.47206.110.1.1.0
       type: gauge
-      help: "PrintGuard sensor_ecs100g: sensor_temp1_st [core/oid/catalog.py:16]"
+      help: "PrintGuard sensor_ecs100g: sensor_temp1_st [core/oid/catalog.py:27]"
     - name: sensor_temp1
       oid: 1.3.6.1.4.1.47206.110.1.2.0
       type: gauge
-      help: "PrintGuard sensor_ecs100g: sensor_temp1 [core/oid/catalog.py:15]"
+      help: "PrintGuard sensor_ecs100g: sensor_temp1 [core/oid/catalog.py:26]"
     - name: sensor_temp2_st
       oid: 1.3.6.1.4.1.47206.110.2.1.0
       type: gauge
-      help: "PrintGuard sensor_ecs100g: sensor_temp2_st [core/oid/catalog.py:18]"
+      help: "PrintGuard sensor_ecs100g: sensor_temp2_st [core/oid/catalog.py:29]"
     - name: sensor_temp2
       oid: 1.3.6.1.4.1.47206.110.2.2.0
       type: gauge
-      help: "PrintGuard sensor_ecs100g: sensor_temp2 [core/oid/catalog.py:17]"
+      help: "PrintGuard sensor_ecs100g: sensor_temp2 [core/oid/catalog.py:28]"
     - name: sensor_hum1_st
       oid: 1.3.6.1.4.1.47206.111.1.1.0
       type: gauge
-      help: "PrintGuard sensor_ecs100g: sensor_hum1_st [core/oid/catalog.py:20]"
+      help: "PrintGuard sensor_ecs100g: sensor_hum1_st [core/oid/catalog.py:31]"
     - name: sensor_hum1
       oid: 1.3.6.1.4.1.47206.111.1.2.0
       type: gauge
-      help: "PrintGuard sensor_ecs100g: sensor_hum1 [core/oid/catalog.py:19]"
+      help: "PrintGuard sensor_ecs100g: sensor_hum1 [core/oid/catalog.py:30]"
     - name: sensor_hum2_st
       oid: 1.3.6.1.4.1.47206.111.2.1.0
       type: gauge
-      help: "PrintGuard sensor_ecs100g: sensor_hum2_st [core/oid/catalog.py:22]"
+      help: "PrintGuard sensor_ecs100g: sensor_hum2_st [core/oid/catalog.py:33]"
     - name: sensor_hum2
       oid: 1.3.6.1.4.1.47206.111.2.2.0
       type: gauge
-      help: "PrintGuard sensor_ecs100g: sensor_hum2 [core/oid/catalog.py:21]"
+      help: "PrintGuard sensor_ecs100g: sensor_hum2 [core/oid/catalog.py:32]"

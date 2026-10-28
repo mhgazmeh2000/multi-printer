@@ -1,29 +1,42 @@
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tests/test_strictness_pg.py
+# @brief:        End-to-end PostgreSQL strictness tests with no silent failures (E.4.10).
+# @details:      Responsibilities: Cover boolean strictness, RETURNING ids, schema and timezone
+#                handling.
+#                Main API: _PgBase, BooleanStrictnessTests, InsertReturningIdTests,
+#                SchemaAndTimezoneTests, ExecutescriptTests, SavepointContentsTests
+#                Side effects: database access
+# @dependencies: internal: core.database, core.db, core.db.schema, tests.migration_graph |
+#                external: psycopg
+# @notes:        Can be run directly as a script.
+# =============================================================================
+
 """
-تست‌های E.4.10 — سخت‌گیری PostgreSQL، سرتاسری و بدون شکست بی‌صدا.
+E.4.10 tests — PostgreSQL hardening, end-to-end and without silent failures.
 
-این فایل **قفل پذیرش فاز E.4** است: هر قابلیتی که در E.4.1 تا E.4.9 ساخته
-شد، این‌جا یک‌بار به‌صورت یکپارچه و روی PG واقعی سنجیده می‌شود.
+This file is **E.4 Phase Acceptance Lock**: any functionality built in E.4.1 to E.4.9
+Done, this is measured once integrally and on the actual PG.
 
-قاعدهٔ صریح مالک
+The express rule of the owner
 ----------------
-«اگر PG هست، این فایل نباید skip شود.» پیاده‌سازی:
-  • کل ماژول بدون ``PG_DSN`` یک‌جا skip می‌شود (با دلیل روشن و دستور اجرا)؛
-  • وقتی PG در دسترس است، ``NoSilentSkipsTests`` همان تست‌های این فایل را
-    دوباره اجرا می‌کند و اگر **حتی یک** skip یا خطا ببیند، تست شکست می‌خورد.
+"If it is PG, this file should not be skipped." Implementation:
+  • The entire module without ``PG_DSN'' is skipped (with a clear reason and execution order);
+  • ``NoSilentSkipsTests'' same tests as this file when PG is available
+    It runs again and if it sees **even** a skip or an error, the test fails.
 
-پوشش (هر مورد ریشه در یک گام دارد)
+Coverage (each item is rooted in one step)
 -----------------------------------
-| موضوع | گام | سنجش این فایل |
+| Subject | Step | Evaluation of this file
 |---|---|---|
-| ستون‌های BOOLEAN و اتصال سختِ نوع | E.4.1 | `information_schema` + درج واقعی `bool` و رد شدن `int` |
-| `insert_returning_id` (RETURNING) | E.4.3 | درج در `logs` و بازخوانی همان `id` |
-| DDL فقط از Alembic | E.4.5 | `alembic_version` = `0003` و کامل‌بودن جدول‌ها |
-| `executescript` تقسیم‌شده | E.4.7 | اسکریپت دو‌گزاره‌ای روی PG |
-| SAVEPOINT و ادامهٔ تراکنش | E.4.8 | خطا در یک ردیف ⇒ برگشت به SAVEPOINT و ادامه |
-| `json_extract` مستقل از backend | E.4.9 | خواندن JSON از `logs` با هر دو نوع |
-| نگاشت خطاهای مشترک | E.4.4 | 42P01/42703/23505/42701 ⇒ کلاس‌های `core.db` |
-| TimeZone قفل‌شده | E.2/E.3 | `SHOW TimeZone` = `UTC` |
+| BOOLEAN columns and hard binding of type | E.4.1 `information_schema` + actual insertion of `bool` and rejection of `int` |
+| `insert_returning_id` (RETURNING) | E.4.3 insert in `logs` and read the same `id`
+| DDL only from Alembic | E.4.5 `alembic_version` = `0003` and the completeness of the tables
+| split `executescript` | E.4.7 Two-statement script on PG |
+| SAVEPOINT and continue the transaction E.4.8 Error in a row ⇒ return to SAVEPOINT and continue |
+| `json_extract` independent of backend | E.4.9 Reading JSON from `logs` with both |
+| Mapping common errors E.4.4 42P01/42703/23505/42701 ⇒ `core.db` classes |
+| TimeZone locked | E.2/E.3 | `SHOW TimeZone` = `UTC` |
 """
 import os
 import tempfile
@@ -50,7 +63,7 @@ LOG_IP = "203.0.113.150"
 
 
 def _pg_target():
-    """``(dsn, None)`` اگر PG در دسترس باشد، وگرنه ``(None, دلیلِ skip)``."""
+    """``(dsn, None)'' if PG is available, otherwise ``(None, skip reason)''."""
     dsn = (os.getenv(ENV_PG_DSN, "") or "").strip()
     if not dsn:
         return None, (f"{ENV_PG_DSN} ست نشده است ⇒ کل فایل سخت‌گیری روی PG اجرا نمی‌شود "
@@ -71,26 +84,28 @@ TEMPLATE_TABLES = ("strictness_t",)
 
 
 # ─────────────────────────────────────────────────────────────────────
-# پایه
+# base
 # ─────────────────────────────────────────────────────────────────────
 @unittest.skipUnless(_PG_DSN, _PG_SKIP or "")
 class _PgBase(unittest.TestCase):
-    """اتصال PG + جدول موقت + پاک‌سازی (بدون تکیه بر دادهٔ موجود)."""
+    """PG connection + temporary table + cleanup (without relying on existing data)."""
 
     def setUp(self):
+        """Prepare the fixtures that each test in this class uses."""
         if not _PG_DSN:
             self.skipTest(_PG_SKIP or "PG در دسترس نیست")
         self.conn = connect_postgres(_PG_DSN)
         self.addCleanup(self._cleanup)
 
     def _cleanup(self):
+        """Helper: cleanup."""
         try:
             self.conn.rollback()
             for table in TEMPLATE_TABLES:
                 self.conn.execute(f"DROP TABLE IF EXISTS {table}")
             self.conn.execute("DELETE FROM logs WHERE printer_ip = ?", (LOG_IP,))
             self.conn.commit()
-        except Exception:                     # پاک‌سازی نباید نتیجه را بی‌اعتبار کند
+        except Exception:                     # Cleaning should not invalidate the result
             pass
         try:
             self.conn.close()
@@ -98,7 +113,7 @@ class _PgBase(unittest.TestCase):
             pass
 
     def _expect_error(self, cls, sql, params=()):
-        """اجرای گزاره با انتظار خطا؛ تراکنش پس از خطا rollback می‌شود."""
+        """execution of the statement expecting an error; The transaction is rolled back after an error."""
         try:
             with self.assertRaises(cls) as ctx:
                 self.conn.execute(sql, params)
@@ -108,12 +123,13 @@ class _PgBase(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────
-# ۱) ستون‌های BOOLEAN و اتصال سختِ نوع (E.4.1)
+# 1) BOOLEAN columns and hard connection type (E.4.1)
 # ─────────────────────────────────────────────────────────────────────
 class BooleanStrictnessTests(_PgBase):
-    """روی PG ستون‌ها واقعاً BOOLEAN‌اند و ``int`` را نمی‌پذیرند."""
+    """On PG the columns are really BOOLEAN and do not accept ``int''."""
 
     def test_all_five_columns_are_boolean(self):
+        """Verifies all five columns are boolean."""
         rows = self.conn.execute(
             "SELECT table_name, column_name, data_type FROM information_schema.columns "
             "WHERE table_schema = current_schema() AND data_type = 'boolean' "
@@ -122,7 +138,7 @@ class BooleanStrictnessTests(_PgBase):
         self.assertEqual(found, set(BOOLEAN_COLUMNS))
 
     def test_int_is_rejected_by_a_boolean_column(self):
-        """``yield_samples.accepted`` مقدار ``int`` را رد می‌کند (اتصال سختِ نوع)."""
+        """``yield_samples.accepted'' rejects an ``int'' value (type hard binding)."""
         exc = self._expect_error(
             DatabaseError,
             "INSERT INTO yield_samples (printer_ip, color, created_at, accepted) "
@@ -134,7 +150,7 @@ class BooleanStrictnessTests(_PgBase):
                       "42804 عمداً ترجمه نمی‌شود؛ خطای نوع، خطای integrity نیست")
 
     def test_bool_is_accepted_and_read_back_as_boolean(self):
-        """``True/False`` واقعی می‌رود و بولی برمی‌گردد."""
+        """``True/False'' goes real and returns boolean."""
         try:
             self.conn.execute(
                 "INSERT INTO yield_samples (printer_ip, color, created_at, accepted) "
@@ -152,12 +168,13 @@ class BooleanStrictnessTests(_PgBase):
 
 
 # ─────────────────────────────────────────────────────────────────────
-# ۲) insert_returning_id (E.4.3)
+# 2) insert_returning_id (E.4.3)
 # ─────────────────────────────────────────────────────────────────────
 class InsertReturningIdTests(_PgBase):
-    """``lastrowid`` روی PG معنا ندارد؛ ``insert_returning_id`` جای آن است."""
+    """``lastrowid'' has no meaning on PG; ``insert_returning_id'' is the placeholder."""
 
     def test_insert_returns_the_new_id(self):
+        """Verifies insert returns the new id."""
         new_id = self.conn.insert_returning_id(
             "INSERT INTO logs (printer_ip, timestamp, type, message) VALUES (?, ?, ?, ?)",
             (LOG_IP, "2026-10-04T00:00:00.000000Z", "PRINT", "strictness"))
@@ -168,7 +185,7 @@ class InsertReturningIdTests(_PgBase):
         self.assertEqual(fetched, new_id, "id برگشتی باید همان ردیف درج‌شده باشد")
 
     def test_id_is_generated_by_identity(self):
-        """``logs.id`` روی PG ستون IDENTITY است (E.4.2) و خودش مقدار می‌سازد."""
+        """``logs.id'' on the PG is the IDENTITY column (E.4.2) and creates a value by itself."""
         kind = self.conn.execute(
             "SELECT is_identity FROM information_schema.columns "
             "WHERE table_schema = current_schema() AND table_name = 'logs' "
@@ -177,41 +194,43 @@ class InsertReturningIdTests(_PgBase):
 
 
 # ─────────────────────────────────────────────────────────────────────
-# ۳) DDL فقط از Alembic (E.4.5) و TimeZone قفل‌شده (E.2/E.3)
+# 3) DDL only from Alembic (E.4.5) and TimeZone locked (E.2/E.3)
 # ─────────────────────────────────────────────────────────────────────
 class SchemaAndTimezoneTests(_PgBase):
-    """اسکیمای PG ساختهٔ Alembic است و نشست روی UTC قفل شده."""
+    """The PG schema is made by Alembic and the session is locked to UTC."""
 
     def test_revision_is_the_migration_head(self):
         """
-        اسکیمای اجراشده باید روی **سرِ واقعی** زنجیره باشد.
+        The executed schema must be on the **real head** of the chain.
 
-        عدد hardcode نبود (پیش‌تر ``0003`` بود و با هر migration تازه می‌شکست):
-        سر از فایل‌های ``alembic/versions`` محاسبه می‌شود، پس این قفل همواره
-        «مهاجرت‌ها همه اعمال شده‌اند» را می‌سنجد — از 0004_jsonb_columns (E.6.4) هم.
+        The number was not hardcoded (it used to be ``0003'' and was broken with every migration):
+        The head is calculated from ``alembic/versions'' files, so this lock is always
+        Tests "migrations all applied" — also from 0004_jsonb_columns (E.6.4).
         """
         revision = self.conn.execute("SELECT version_num FROM alembic_version").fetchone()[0]
         self.assertEqual(revision, migration_head(),
                          "اسکیما روی سرِ migrationها نیست (`alembic upgrade head` runs)")
 
     def test_all_app_tables_exist(self):
+        """Verifies all app tables exist."""
         missing = [t for t in APP_TABLES if t not in present_tables(self.conn)]
         self.assertEqual(missing, [], "اسکیمای Alembic کامل نیست")
 
     def test_session_timezone_is_utc(self):
+        """Verifies session timezone is utc."""
         self.assertEqual(self.conn.execute("SHOW TimeZone").fetchone()[0], "UTC")
 
     def test_timestamp_is_text_and_details_is_jsonb_as_documented(self):
         """
-        قرارداد نوع ستون‌ها روی PG:
+        Column type convention on PG:
 
-        • ``timestamp`` هنوز ``text`` است (E.1/E.3 — **نه** TIMESTAMPTZ؛ نشست و
-          قالب رشته‌ای در ``docs/timezone-contract.md`` قفل شده‌اند)؛
-        • ``details`` از E.6.4 ``jsonb`` است (migration ``0004``) — تنها ستون JSON
-          که SQL روی آن محتوا می‌خواند؛ بقیهٔ ستون‌های JSON (``users.allowed_*``،
-          ``printer_counters.cartridge_id_state``/``toner_overrides``،
-          ``security_events.details``) هنوز ``text``‌اند و در
-          ``tests/test_jsonb_columns.py`` قفل شده‌اند.
+        • ``timestamp'' is still ``text'' (E.1/E.3 — **not** TIMESTAMPTZ; sit and
+          string format are locked in ``docs/timezone-contract.md'');
+        • ``details'' is ``jsonb'' from E.6.4 (migration ``0004'') — only JSON column
+          on which SQL reads content; The rest of the JSON columns (``users.allowed_*'',
+          ``printer_counters.cartridge_id_state``/``toner_overrides``,
+          ``security_events.details'') are still ``text'' and in
+          ``tests/test_jsonb_columns.py'' are locked.
         """
         rows = dict(self.conn.execute(
             "SELECT column_name, data_type FROM information_schema.columns "
@@ -221,12 +240,13 @@ class SchemaAndTimezoneTests(_PgBase):
 
 
 # ─────────────────────────────────────────────────────────────────────
-# ۴) executescript تقسیم‌شده (E.4.7)
+# 4) split executescript (E.4.7)
 # ─────────────────────────────────────────────────────────────────────
 class ExecutescriptTests(_PgBase):
-    """روی PG اسکریپت چندگزاره‌ای اجرا می‌شود (تقسیم به statement)."""
+    """Multi-statement script is executed on PG (divided into statements)."""
 
     def test_two_statement_script_creates_both_tables(self):
+        """Verifies two statement script creates both tables."""
         self.conn.executescript(
             "CREATE TABLE strictness_t (id integer primary key, name text);"
             "INSERT INTO strictness_t (id, name) VALUES (1, 'a');"
@@ -236,9 +256,9 @@ class ExecutescriptTests(_PgBase):
 
     def test_multi_command_with_params_is_why_we_split(self):
         """
-        دلیل تقسیم: psycopg با پارامتر غیرخالی چند گزاره را نمی‌پذیرد
+        Reason for split: psycopg does not accept multiple statements with a non-empty parameter
         (``cannot insert multiple commands into a prepared statement``).
-        این تست آن دلیل را زنده نگه می‌دارد.
+        This test keeps that reason alive.
         """
         exc = self._expect_error(
             DatabaseError,
@@ -248,17 +268,18 @@ class ExecutescriptTests(_PgBase):
 
 
 # ─────────────────────────────────────────────────────────────────────
-# ۵) SAVEPOINT در import (E.4.8)
+# 5) SAVEPOINT in import (E.4.8)
 # ─────────────────────────────────────────────────────────────────────
 class SavepointContentsTests(_PgBase):
-    """روی PG خطای یک ردیف فقط تا SAVEPOINT برمی‌گردد و تراکنش زنده می‌ماند."""
+    """On PG a single row error only goes back to the SAVEPOINT and the transaction survives."""
 
     def test_savepoint_keeps_the_transaction_usable(self):
+        """Verifies savepoint keeps the transaction usable."""
         self.conn.execute("CREATE TABLE strictness_t (ip text PRIMARY KEY, n integer)")
         self.conn.execute("INSERT INTO strictness_t (ip, n) VALUES (?, ?)", ("a", 1))
         self.conn.commit()
 
-        # ردیف تکراری: بدون SAVEPOINT، کل تراکنش abort می‌شد (25P02).
+        # Duplicate row: Without SAVEPOINT, the entire transaction would have been aborted (25P02).
         self.conn.execute("SAVEPOINT sp_row")
         try:
             self.conn.execute("INSERT INTO strictness_t (ip, n) VALUES (?, ?)", ("a", 2))
@@ -276,7 +297,7 @@ class SavepointContentsTests(_PgBase):
                          "ردیف سالم بعد از خطای ردیف تکراری باید ثبت شود")
 
     def test_without_savepoint_the_transaction_dies(self):
-        """شاهد معکوس: بدون SAVEPOINT همان سناریو تراکنش را از دست می‌دهد."""
+        """Reverse Witness: Without SAVEPOINT the same scenario loses the transaction."""
         self.conn.execute("CREATE TABLE strictness_t (ip text PRIMARY KEY, n integer)")
         self.conn.execute("INSERT INTO strictness_t (ip, n) VALUES (?, ?)", ("a", 1))
         self.conn.commit()
@@ -292,12 +313,13 @@ class SavepointContentsTests(_PgBase):
 
 
 # ─────────────────────────────────────────────────────────────────────
-# ۶) json_extract مستقل از backend (E.4.9)
+# 6) json_extract independent of backend (E.4.9)
 # ─────────────────────────────────────────────────────────────────────
 class JsonExtractStrictnessTests(_PgBase):
-    """قطعهٔ JSON روی PG متن و عدد را درست برمی‌گرداند."""
+    """JSON snippet on PG returns text and number correctly."""
 
     def setUp(self):
+        """Prepare the fixtures that each test in this class uses."""
         super().setUp()
         self.conn.execute(
             "INSERT INTO logs (printer_ip, timestamp, type, details) VALUES (?, ?, ?, ?)",
@@ -306,6 +328,7 @@ class JsonExtractStrictnessTests(_PgBase):
         self.conn.commit()
 
     def test_text_and_number_fragments(self):
+        """Verifies text and number fragments."""
         text_frag = self.conn.json_extract("details", "detection")
         num_frag = self.conn.json_extract("details", "prev_total", as_number=True)
         self.assertEqual(self.conn.execute(
@@ -317,15 +340,15 @@ class JsonExtractStrictnessTests(_PgBase):
 
     def test_invalid_json_is_rejected_at_write_time(self):
         """
-        تغییرِ E.6.4: روی PG خطای JSON خراب به **زمان نوشتن** منتقل شد.
+        Change E.6.4: On PG the corrupted JSON error was moved to **write time**.
 
-        پیش از 0004، ستون ``text`` بود و همین تست یک ردیف بدفرمت می‌ناوخت و
-        انتظار داشت ``SELECT`` با خطای ``22P02`` بترکد (یعنی یک ردیف خراب، کوئری
-        aggregate‌ی کسی را که هیچ ربطی به آن ردیف ندارد می‌شکست). حالا ``jsonb``
-        همان‌جا رد می‌کند که نوشته می‌شود ⇒ نه ``22P02`` در خواندن، و نه دادهٔ
-        نیمه‌کاره در جدول. روی SQLite همان رفتار خواندن باقی مانده است
-        (``json_extract`` روی رشتهٔ بدفرمت) و در
-        ``tests/test_jsonb_columns.py::ReaderToleranceTests`` قفل شده.
+        Before 0004, the column was ``text'' and this test played a malformed row
+        Expected ``SELECT'' to explode with error ``22P02'' (ie a bad row, query
+        aggregate breaks the one that has nothing to do with that row). Now ``jsonb''
+        It rejects that it is written ⇒ neither ``22P02'' in reading, nor data
+        Semi-finished on the table. On SQLite, the same reading behavior remains
+        (``json_extract'' on the malformed string) and in
+        ``tests/test_jsonb_columns.py::ReaderToleranceTests'' locked.
         """
         exc = self._expect_error(
             DatabaseError,
@@ -336,9 +359,9 @@ class JsonExtractStrictnessTests(_PgBase):
             "SELECT count(*) FROM logs WHERE printer_ip = ? AND details::text LIKE ?",
             (LOG_IP, "{not json%")).fetchone()[0]
         self.assertEqual(left, 0, "ردیفِ ردشده نباید باقی مانده باشد")
-        # و همان کوئری خواندن (که پیش از E.6.4 با 22P02 می‌سوخت) حالا بی‌خطا اجرا
-        # می‌شود؛ شاهدِ این تست **اجرا شدن** است، نه مقدار شمارش (ردیف‌های تست‌های
-        # دیگر همین کلاس در جدول هستند).
+        # And the same reading query (which burned with 22P02 before E.6.4) now runs without error.
+        # becomes; The witness of this test is **running**, not the count value (rows of tests
+        # The same class is in the table).
         frag = self.conn.json_extract("details", "prev_total", as_number=True)
         counted = self.conn.execute(
             f"SELECT count(*) FROM logs WHERE {frag} IS NOT NULL").fetchone()[0]
@@ -346,43 +369,45 @@ class JsonExtractStrictnessTests(_PgBase):
 
 
 # ─────────────────────────────────────────────────────────────────────
-# ۶.۵) ترتیب بی‌توجه به بزرگی/کوچکی نام کاربری (ردیف ۳ سند سخت‌گیری)
+# 6.5) The order regardless of the upper/lower case of the username (row 3 of the strict document)
 # ─────────────────────────────────────────────────────────────────────
 class CollationOrderingTests(unittest.TestCase):
     """
-    ``list_users`` پیش‌تر ``COLLATE NOCASE`` داشت: نحو SQLite که روی PG با
-    ``42704 collation "nocase" does not exist`` می‌شکند — و چون تابع خطا را
-    می‌گیرد، «[]» بی‌صدا برمی‌گشت. حالا ``lower(username)`` است (E.4.11a).
+    ``list_users'' used to have ``COLLATE NOCASE'': the SQLite syntax used on PG with
+    ``42704 collation "nocase" does not exist'' breaks — and because the error function
+    takes, "[]" returns silently. It is now ``lower(username)'' (E.4.11a).
 
-    **hermetic بودن اجباری است:** این تست توابع سطح-برنامه (``create_user`` /
-    ``list_users``) را صدا می‌زند که backend را از ``DB_BACKEND`` می‌خوانند؛ پس
-    هم متغیر محیطی روی PG قفل می‌شود و هم ``cwd`` به یک پوشهٔ موقت می‌رود. بدون
-    این دو، یک fallback بی‌صدا به SQLite می‌توانست **``logs.db`` مخزن** را بنویسد
-    (یک‌بار همین اتّفاق افتاد؛ فایل با sha256 شاهدِ E.3 بازگردانی شد).
+    **Hermeticity is mandatory:** This tests application-level functions (``create_user`` /
+    calls ``list_users'') which reads the backend from ``DB_BACKEND''; so
+    Both environment variable is locked on PG and ``cwd'' is moved to a temporary folder. without
+    Both, a silent fallback to SQLite could write to the **logs.db" repository**
+    (The same thing happened once; the file was restored with sha256 witness E.3).
     """
 
     NAMES = ("zz_alpha", "zz_Bravo", "zz_charlie")
 
     def setUp(self):
+        """Prepare the fixtures that each test in this class uses."""
         if not _PG_DSN:
             self.skipTest(_PG_SKIP or "PG در دسترس نیست")
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.old_cwd = os.getcwd()
-        os.chdir(self.tmp.name)                  # حتی fallback هم به مخزن نمی‌رسد
+        os.chdir(self.tmp.name)                  # Even the fallback does not reach the repository
         self.addCleanup(lambda: os.chdir(self.old_cwd))
         self.env = mock.patch.dict(os.environ, {
             "DB_BACKEND": "postgresql", ENV_PG_DSN: _PG_DSN})
         self.env.start()
         self.addCleanup(self.env.stop)
         self.conn = connect_postgres(_PG_DSN)
-        # ترتیب ثبت مهم است: addCleanup برعکس اجرا می‌شود، پس اول بستن اتصال ثبت
-        # می‌شود و بعد پاک‌سازی ردیف‌ها — وگرنه پاک‌سازی روی اتصال بسته اجرا
-        # می‌شود و بی‌صدا شکست می‌خورد (همین اشتباه یک‌بار رخ داد).
+        # Registry order is important: addCleanup runs in reverse, so first close the registry connection
+        # and then clearing the rows — otherwise clearing on the execution package connection
+        # and it fails silently (the same error happened once).
         self.addCleanup(self.conn.close)
         self.addCleanup(self._delete_users)
 
     def _delete_users(self):
+        """Helper: delete users."""
         try:
             self.conn.rollback()
             for name in self.NAMES:
@@ -392,19 +417,21 @@ class CollationOrderingTests(unittest.TestCase):
             pass
 
     def _seed(self):
+        """Helper: seed."""
         from core.database import create_user
         for name in self.NAMES:
-            # ``create_user`` هش می‌گیرد (نه رمز خام) — همان قرارداد لایهٔ data.
+            # ``create_user'' takes a hash (not a raw password) — the same convention as the data layer.
             user = create_user(username=name, email=f"{name}@strictness.test",
                                password_hash="x" * 32, role="viewer", is_verified=True)
             self.assertIsNotNone(user, f"ساخت کاربر {name} ناموفق بود")
-        # قفل ضدِ fallback: ردیف‌ها باید در **همان** PG باشند.
+        # Anti-fallback lock: Rows must be in the **same** PG.
         for name in self.NAMES:
             found = self.conn.execute("SELECT 1 FROM users WHERE username = ?",
                                       (name,)).fetchone()
             self.assertIsNotNone(found, f"کاربر {name} در PG نیست (fallback بی‌صدا؟)")
 
     def test_ordering_is_case_insensitive_and_not_silently_empty(self):
+        """Verifies ordering is case insensitive and not silently empty."""
         from core.database import list_users
         self._seed()
         rows = list_users()
@@ -415,12 +442,13 @@ class CollationOrderingTests(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────
-# ۷) نگاشت خطاهای مشترک (E.4.4)
+# 7) Mapping common errors (E.4.4)
 # ─────────────────────────────────────────────────────────────────────
 class SharedErrorMappingTests(_PgBase):
-    """همان جدول نگاشت E.4.4، این‌بار به‌عنوان قفل پذیرش."""
+    """The same mapping table as E.4.4, this time as an acceptance lock."""
 
     def test_mapping_table_on_live_pg(self):
+        """Verifies mapping table on live pg."""
         cases = (
             (UndefinedTable, "SELECT * FROM no_such_table_strictness", "42P01"),
             (UndefinedColumn, "SELECT no_such_column FROM logs", "42703"),
@@ -437,6 +465,7 @@ class SharedErrorMappingTests(_PgBase):
                 self.assertIsNotNone(exc.original)
 
     def test_all_shared_errors_are_one_hierarchy(self):
+        """Verifies all shared errors are one hierarchy."""
         for cls in (UndefinedTable, UndefinedColumn, UniqueViolation,
                     ColumnAlreadyExists, DatabaseOperationalError):
             with self.subTest(cls=cls.__name__):
@@ -445,13 +474,14 @@ class SharedErrorMappingTests(_PgBase):
 
 class SkipReasonContractTests(unittest.TestCase):
     """
-    قرارداد پیام skip — روی هر دو حالت اجرا معنا دارد (پس gete‌د‌گیر نمی‌شود).
+    The skip message convention — has meaning on both execution modes (so gete doesn't get stuck).
 
-    • بدون PG: پیام باید نام متغیر محیطی و دستور اجرا را روشن بگوید؛
-    • با PG: هیچ دلیلی برای skip نباید وجود داشته باشد (``_PG_SKIP is None``).
+    • Without PG: the message must clearly state the name of the environment variable and the execution command;
+    • With PG: there should be no reason for skip (``_PG_SKIP is None'').
     """
 
     def test_either_pg_is_available_or_the_skip_reason_is_actionable(self):
+        """Verifies either pg is available or the skip reason is actionable."""
         if _PG_DSN:
             self.assertIsNone(_PG_SKIP, "وقتی PG در دسترس است، دلیلی برای skip نیست")
             return
@@ -460,18 +490,18 @@ class SkipReasonContractTests(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────
-# ۸) بدون شکست بی‌صدا (قاعدهٔ صریح مالک)
+# 8) without silent failure (Owner's express rule)
 # ─────────────────────────────────────────────────────────────────────
 @unittest.skipUnless(_PG_DSN, _PG_SKIP or "")
 class NoSilentSkipsTests(unittest.TestCase):
     """
-    وقتی PG هست، هیچ تستی در این فایل نباید skip شود.
+    When there is PG, no test in this file should be skipped.
 
-    فهرست کلاس‌ها **صریح** است (نه اسکن ماژول) تا این تست خودش را دوباره اجرا
-    نکند و بازگشت بی‌پایان نسازد.
+    The list of classes is **explicit** (not the module scan) until this test reruns itself
+    Don't do it and don't make endless returns.
     """
 
-    #: کلاس‌هایی که باید روی PG واقعی اجرا شوند (بدون نگهبان skip).
+    #: classes to run on real PG (without skip guard).
     REQUIRED_CLASSES = (
         BooleanStrictnessTests,
         InsertReturningIdTests,
@@ -484,6 +514,7 @@ class NoSilentSkipsTests(unittest.TestCase):
     )
 
     def test_no_skips_or_errors_when_pg_is_available(self):
+        """Verifies no skips or errors when pg is available."""
         import unittest as _unittest
 
         import io as _io
@@ -497,8 +528,8 @@ class NoSilentSkipsTests(unittest.TestCase):
         skipped = [str(t) for t, _r in getattr(result, "skipped", [])]
         failures = [str(t) for t, _tb in result.failures]
         errors = [str(t) for t, _tb in result.errors]
-        # خروجی اجرای داخلی در پیام شکست می‌آید تا علت بی‌واسطه دیده شود.
-        self.assertNotIn("None", "")   # نگه‌داشتن خروجی برای پیام‌ها
+        # The output of the internal execution is in the failure message so that the immediate cause can be seen.
+        self.assertNotIn("None", "")   # Hold output for messages
         if failures or errors:
             raise AssertionError(
                 "اجرای دوباره خطا داد:\n" + output.getvalue()[-4000:])

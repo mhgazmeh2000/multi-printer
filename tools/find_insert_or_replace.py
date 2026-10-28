@@ -1,28 +1,40 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""فهرست `INSERT OR REPLACE` و ستون‌های جاافتاده — گام E.0.4.
+# =============================================================================
+# @file:         tools/find_insert_or_replace.py
+# @brief:        Lists 'INSERT OR REPLACE' usages and their nested columns (step E.0.4).
+# @details:      Responsibilities: Scan the source for the SQL pattern and enrich the report with
+#                schema data.
+#                Main API: scan_file(), scan_assigned_verbs(), build_schema_map(), enrich(),
+#                decide(), print_report(), to_markdown(), main()
+#                Side effects: database access, file I/O
+# @dependencies: internal: core.database, core.security_audit, core.yield_engine
+# @notes:        Can be run directly as a script.
+# =============================================================================
 
-چرا؟ `INSERT OR REPLACE` در SQLite یعنی «اگر تعارض کلیدی بود، ردیف قبلی را حذف
-کن و ردیف تازه بنویس». این معنا با `ON CONFLICT DO UPDATE` پستگرس **یکسان نیست**:
-  • SQLite: ردیف حذف و دوباره درج می‌شود ⇒ ستون‌هایی که در فهرست نیامده‌اند
-    **به مقدار پیش‌فرض/NULL برمی‌گردند** (داده از دست می‌رود).
-  • پستگرس: `ON CONFLICT DO UPDATE` فقط ستون‌های نام‌برده را عوض می‌کند و
-    ستون‌های دیگر دست‌نخورده می‌مانند ⇒ اگر رفتار SQLite را بخواهیم، باید
-    همه‌ی ستون‌های جدول را صریح بنویسیم یا `DO UPDATE SET col=EXCLUDED.col`
-    برای همه‌شان بگذاریم؛ و اگر رفتار پستگرس را بخواهیم، یعنی SQLite امروز
-    داده را بی‌صدا پاک می‌کند (باگ پنهان).
+"""`INSERT OR REPLACE' list and nested columns - step E.0.4.
 
-پس پیش از migration باید بدانیم در هر محل، **چه ستون‌هایی نوشته می‌شوند و کدام
-ستون‌ها جا می‌افتند**.
+why `INSERT OR REPLACE' in SQLite means "If there was a key conflict, delete the previous row."
+Go and write a new row." This meaning is **not the same** as ``ON CONFLICT DO UPDATE'' of Postgres:
+  • SQLite: rows are deleted and reinserted ⇒ columns that are not listed
+    **reverts to default/NULL** (data is lost).
+  • Postgres: ``ON CONFLICT DO UPDATE'' changes only the named columns and
+    Other columns are left untouched ⇒ If we want SQLite behavior, we should
+    Write all the columns of the table explicitly or ``DO UPDATE SET col=EXCLUDED.col''
+    Let's leave it for everyone; And if we want Postgres behavior, that is SQLite today
+    Clears data silently (hidden bug).
 
-این ابزار فقط می‌خواند (هیچ DB تولیدی را باز نمی‌کند؛ برای نقشه‌ی ستون‌ها یک DB
-موقت در پوشه‌ی موقت می‌سازد) و AST-محور است:
+So, before migration, we should know what columns are written in each place and which ones
+The columns fall into place**.
+
+This tool is read-only (does not open any production DB; for the column map a DB
+temporary in the temporary folder) and is AST-oriented:
 
     python tools/find_insert_or_replace.py
     python tools/find_insert_or_replace.py --md /tmp/ior.md --json /tmp/ior.json
-    python tools/find_insert_or_replace.py --no-schema      # بدون ساخت DB موقت
+    python tools/find_insert_or_replace.py --no-schema # No temporary DB creation
 
-کدهای خروج: 0 = همه‌ی محل‌ها قطعی، 2 = محل پویا/ناشناخته وجود دارد، 1 = خطا.
+Exit codes: 0 = all locations are definite, 2 = dynamic/unknown location exists, 1 = error.
 """
 
 from __future__ import annotations
@@ -48,7 +60,7 @@ _SQL_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
-# جدول‌هایی که برای نقشه‌ی ستون‌ها لازم داریم (بقیه هم اگر پیدا شد اضافه می‌شود)
+# The tables we need for the column map (the rest will be added if found)
 SCHEMA_TABLES = (
     "logs", "printer_counters", "cartridge_state", "cartridge_yield_profiles",
     "yield_samples", "toner_snapshots_v2", "toner_history", "sensor_readings",
@@ -56,8 +68,9 @@ SCHEMA_TABLES = (
 )
 
 
-# ───────────────────────────── اسکنِ کد ─────────────────────────────────────
+# Code scanning
 def _iter_py_files():
+    """Yield the Python files under the search directories."""
     for d in SEARCH_DIRS:
         for root, _dirs, files in os.walk(os.path.join(REPO_ROOT, d)):
             if "__pycache__" in root:
@@ -72,7 +85,7 @@ def _iter_py_files():
 
 
 def _string_of(node) -> str:
-    """مقدار رشته‌ای یک گره AST؛ برای f-string فقط بخش‌های ثابت."""
+    """string value of an AST node; For f-string only constant parts."""
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
     if isinstance(node, ast.JoinedStr):
@@ -82,6 +95,7 @@ def _string_of(node) -> str:
 
 
 def _call_name(node) -> str:
+    """Return the function name of a call node."""
     f = node.func
     if isinstance(f, ast.Attribute):
         return f.attr
@@ -89,7 +103,7 @@ def _call_name(node) -> str:
 
 
 def _parse_sql(sql: str, dynamic: bool) -> dict:
-    """جدول و ستون‌های نام‌برده را از متن SQL بیرون می‌کشد."""
+    """Extracts the named table and columns from the SQL statement."""
     m = _SQL_RE.search(sql)
     if not m:
         return {"table": "?", "columns": [], "dynamic": dynamic, "named": False}
@@ -105,6 +119,8 @@ def _parse_sql(sql: str, dynamic: bool) -> dict:
 
 
 def scan_file(path: str) -> list:
+    """Find INSERT OR REPLACE statements in one source file."""
+
     try:
         with open(path, encoding="utf-8") as fh:
             src = fh.read()
@@ -131,7 +147,7 @@ def scan_file(path: str) -> list:
         dynamic = isinstance(arg, ast.JoinedStr) or not sql
         if PHRASE not in sql and not dynamic:
             continue
-        # متغیرِ غیرمنتظره (مثل f"{verb} INTO tbl ...") که جمله در جای دیگری ساخته شده
+        # Unexpected variable (like f"{verb} INTO tbl...") where the sentence is constructed elsewhere
         if PHRASE not in sql and dynamic:
             continue
         info = _parse_sql(sql, dynamic)
@@ -146,7 +162,7 @@ def scan_file(path: str) -> list:
 
 
 def scan_assigned_verbs() -> list:
-    """محل‌هایی که جمله به‌صورت متغیر ساخته می‌شود (مثل import_db) را می‌یابد."""
+    """Finds the places where the sentence is made as a variable (like import_db)."""
     out = []
     for path in _iter_py_files():
         if os.path.abspath(path) == SELF:
@@ -176,9 +192,9 @@ def scan_assigned_verbs() -> list:
     return out
 
 
-# ─────────────────────────── نقشه‌ی ستون‌ها ─────────────────────────────────
+# Map of the columns
 def build_schema_map() -> dict:
-    """DB موقت می‌سازد و ستون‌های هر جدول را برمی‌گرداند (فقط‌خواندنی برای مخزن)."""
+    """Creates a temporary DB and returns the columns of each table (read-only for the repository)."""
     schema: dict[str, list[str]] = {}
     tmp = tempfile.mkdtemp(prefix="pg-ior-schema-")
     old = os.getcwd()
@@ -192,7 +208,7 @@ def build_schema_map() -> dict:
         try:
             from core.security_audit import init_security_audit  # noqa: PLC0415
             init_security_audit()
-        except Exception:  # noqa: BLE001 - اختیاری
+        except Exception:  # noqa: BLE001 - Optional
             pass
         conn = sqlite3.connect(os.path.join(tmp, "logs.db"))
         try:
@@ -205,7 +221,7 @@ def build_schema_map() -> dict:
                     continue
         finally:
             conn.close()
-    except Exception as exc:  # noqa: BLE001 - ابزار باید شکست‌ناپذیر باشد
+    except Exception as exc:  # noqa: BLE001 - Tool must be invincible
         schema["__error__"] = [str(exc)]
     finally:
         os.chdir(old)
@@ -213,6 +229,8 @@ def build_schema_map() -> dict:
 
 
 def enrich(findings: list, schema: dict) -> None:
+    """Add schema information to each finding."""
+
     for f in findings:
         cols = f.get("columns") or []
         table = f.get("table") or ""
@@ -221,11 +239,11 @@ def enrich(findings: list, schema: dict) -> None:
         if all_cols and cols:
             f["missing_columns"] = [c for c in all_cols if c not in cols]
         else:
-            f["missing_columns"] = None      # پویا/ناشناخته
+            f["missing_columns"] = None      # dynamic/unknown
 
 
 def decide(f: dict) -> str:
-    """تصمیم صریح برای هر محل (معیار E.0.4: هیچ ردیف بدون تصمیم نماند)."""
+    """Explicit decision for each location (criterion E.0.4: no row is left undecided)."""
     if f.get("dynamic"):
         return "بازبینی دستی (SQL پویا)"
     all_cols = f.get("table_columns") or []
@@ -240,6 +258,8 @@ def decide(f: dict) -> str:
 
 
 def print_report(findings: list, schema: dict, verbose=True) -> int:
+    """Print the INSERT OR REPLACE findings and return an exit code."""
+
     print("=" * 78)
     print("فهرست INSERT OR REPLACE — فاز E.0.4 (فقط خواندن کد + DB موقت برای نقشه)")
     print("=" * 78)
@@ -275,6 +295,8 @@ def print_report(findings: list, schema: dict, verbose=True) -> int:
 
 
 def to_markdown(findings: list) -> str:
+    """Render the findings as a Markdown table."""
+
     lines = [
         "| فایل:خط | API | جدول | ستون‌های نوشته‌شده | ستون‌های جدول | ستون‌های غایب | تصمیم |",
         "|---|---|---|---|---|---|---|",
@@ -291,6 +313,8 @@ def to_markdown(findings: list) -> str:
 
 
 def main(argv=None) -> int:
+    """Command-line entry point of the INSERT OR REPLACE scan."""
+
     ap = argparse.ArgumentParser(description="فهرست INSERT OR REPLACE — E.0.4")
     ap.add_argument("--md", default="", help="نوشتن جدول Markdown")
     ap.add_argument("--json", dest="json_path", default="", help="نوشتن خروجی ماشینی")

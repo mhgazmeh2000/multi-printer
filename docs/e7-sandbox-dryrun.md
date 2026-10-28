@@ -1,4 +1,4 @@
-# E.7.3 — نتیجهٔ dry-run در sandbox
+# E.7.3 — dry-run result in the sandbox
 
 > افزونهٔ [`docs/cutover-runbook.md`](cutover-runbook.md). این فایل **شاهدِ اجرا** است، نه
 > دستورالعمل؛ اعداد و خروجی‌ها عیناً از همان session گرفته شده‌اند.
@@ -8,7 +8,7 @@
 
 ---
 
-## ۱. چه چیزی تمرین شد و چه چیزی نشد
+## 1. What was rehearsed and what was not
 
 | وضعیت | مورد | چرا |
 |---|---|---|
@@ -18,7 +18,7 @@
 
 ---
 
-## ۲. ردیف‌به‌ردیف، با خروجی واقعی
+## 2. Row by row, with real output
 
 | # | گام | خروجی واقعی (از لاگ اجرا) | exit |
 |---|---|---|---|
@@ -37,7 +37,7 @@
 
 ---
 
-## ۳. چهار یافته که خودِ runbook را اصلاح کرد
+## 3. Four findings that corrected the runbook itself
 
 1. **گیت `n_tup_*` باید `alembic_version` را مستثنی کند.** روی یک اسکیمای کاملاً خالی،
    `alembic upgrade head` به‌خودی‌خود `1 ins / 3 upd` تولید می‌کند (درج `0001` و سه
@@ -58,7 +58,7 @@
 
 ---
 
-## ۴. بازتولید (برای مالک، روی هر ماشین)
+## 4. Reproduction (for the owner, on any machine)
 
 ```powershell
 # ۰) نقطهٔ شروع
@@ -78,7 +78,7 @@ python tools\export_from_pg.py --dsn "host=localhost dbname=printguard user=prin
 
 ---
 
-## ۵. نتیجه
+## 5. Result
 
 runbook و ابزار آمادگی در sandbox **اجرا شدند و رفتارشان مطابق سند بود**: سه کد خروج
 (۰/۱/۲) هر سه دیده شدند، گیت‌های «فایل خراب/DSN خراب/پورت بسته» واقعاً قرمز شدند، و هیچ

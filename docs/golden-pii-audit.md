@@ -1,4 +1,4 @@
-# حسابرسی PII در fixtureهای طلایی — فاز E.0، کار E.0.7
+# PII audit of golden fixtures — phase E.0, task E.0.7
 
 **وضعیت:** اسکن فقط‌خواندنی + یک اصلاح PII (سریال واقعی‌نما). بدون تغییر کد production و بدون تغییر schema.
 **ابزار:** `tools/scan_golden_for_pii.py`
@@ -6,7 +6,7 @@
 
 ---
 
-## ۱. چه چیزی اسکن شد
+## 1. What was scanned
 
 | منبع | چرا |
 |---|---|
@@ -19,7 +19,7 @@
 
 ---
 
-## ۲. خلاصه‌ی نتیجه
+## 2. Summary of results
 
 | دسته | تعداد | حکم |
 |---|---|---|
@@ -35,7 +35,7 @@
 
 ---
 
-## ۳. مورد اصلاح‌شده (تنها عمل PII)
+## 3. Corrected item (the only PII action)
 
 | مقدار | محل | چرا مشکل‌دار بود |
 |---|---|---|
@@ -60,7 +60,7 @@ tests/fixtures/golden/enhanced_02_hp_color_toner_empty.json  | 4 ++--
 
 ---
 
-## ۴. فهرست کامل مقادیر بی‌خطر (با تصمیم هر دسته)
+## 4. Full list of harmless values (with a decision per category)
 
 ### ۴.۱ IPها
 
@@ -101,7 +101,7 @@ tests/fixtures/golden/enhanced_02_hp_color_toner_empty.json  | 4 ++--
 
 ---
 
-## ۵. یافته‌های جانبی (خارج از PII، ثبت‌شده)
+## 5. Side findings (outside PII, recorded)
 
 ۱. **آرتیفکت نرمال‌سازی `<PATH>` روی مقدار «N/A»:** هارنس golden، الگوی مسیر
    (`/[^\s'\"]+`) را روی هر رشته اعمال می‌کند؛ پس مقدار `"N/A"` (که
@@ -116,7 +116,7 @@ tests/fixtures/golden/enhanced_02_hp_color_toner_empty.json  | 4 ++--
 
 ---
 
-## ۶. بازتولید
+## 6. Reproduction
 
 ```bash
 python tools/scan_golden_for_pii.py                    # کد خروج 0 = بی‌خطر

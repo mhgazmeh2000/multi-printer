@@ -1,17 +1,30 @@
 # -*- coding: utf-8 -*-
-"""
-تست‌های تشخیص تعویض کارتریج بر اساس «شناسه‌ی یکتا» (Chip ID / سریال / ریست
-شمارنده‌ی صفحات‌باکارتریج) — سیگنال قطعیِ رویداد CARTRIDGE_CHANGED.
+# =============================================================================
+# @file:         tests/test_cartridge_identity.py
+# @brief:        Tests for cartridge replacement detection based on the unique cartridge ID.
+# @details:      Responsibilities: Cover the identity engine, ID reader, fallback identity and
+#                name-change detection.
+#                Main API: CartridgeIdentityEngineTests, CartridgeIdReaderTests,
+#                FallbackIdentityTests, SupplyNameChangeDetectionTests, EndToEndDatabaseTests
+#                Side effects: network I/O, file I/O
+# @dependencies: internal: core, core.collectors.base, core.collectors.cartridge_id,
+#                core.database, core.snmp.protocol
+# @notes:        Can be run directly as a script.
+# =============================================================================
 
-قواعد کلیدی:
-  ۱) تغییر شناسه‌ی تراشه ⇒ رویداد همان poll (بدون انتظار تأیید ۲poll)، یک‌شوت.
-  ۲) اولین مشاهده‌ی شناسه ⇒ فقط baseline (رویداد نه).
-  ۳) خواندن ناموفق (کلید نبود) مقدار قبلی را پاک نمی‌کند.
-  ۴) رویداد شناسه‌محور، pendingهای مسیر جهش سطح را پاک می‌کند (بدون رویداد دوم).
-  ۵) ریست «صفحات با کارتریج» (۳۲۰۰۰→۱۵) ⇒ رویداد supply_pages_reset.
-  ۶) manual_override همه‌ی تشخیص‌ها را خاموش می‌کند.
-  ۷) شناسه‌ها در دیتابیس persist می‌شوند (تابع‌آمایی در برابر ری‌استارت).
-بخش دوم: واحدهای خواننده (normalize/config SNMP/HP web/cache TTL).
+"""
+Cartridge replacement detection tests based on "unique ID" (Chip ID / serial / reset
+(cartridge pages counter) — interrupt signal of the CARTRIDGE_CHANGED event.
+
+Key rules:
+  1) Chip ID change ⇒ same poll event (without waiting for 2 poll confirmation), one shot.
+  2) First observation of ID ⇒ baseline only (no event).
+  3) Unsuccessful reading (no key) does not delete the previous value.
+  4) The id-driven event clears the level jump path pendings (no second event).
+  5) Reset "pages with cartridge" (32000→15) ⇒ event supply_pages_reset.
+  6) manual_override turns off all detections.
+  7) Identifiers are persisted in the database (preventive function against restart).
+Second part: reader units (normalize/config SNMP/HP web/cache TTL).
 """
 import json
 import os
@@ -27,17 +40,20 @@ recorded_events = []
 
 
 def _fake_add_event(ip, etype, details):
+    """Helper: fake add event."""
     recorded_events.append({"ip": ip, "type": etype, "details": dict(details or {})})
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# موتور رویداد (ادغام با _counters_event)
+# Event engine (integration with _counters_event)
 # ═══════════════════════════════════════════════════════════════════════════
 class CartridgeIdentityEngineTests(unittest.TestCase):
+    """Tests for cartridge identity engine."""
     IP = "10.9.9.10"
     UP = 800_000_000
 
     def setUp(self):
+        """Prepare the fixtures that each test in this class uses."""
         self.tmp = tempfile.TemporaryDirectory()
         self.old_cwd = os.getcwd()
         os.chdir(self.tmp.name)
@@ -48,15 +64,18 @@ class CartridgeIdentityEngineTests(unittest.TestCase):
         base_mod.add_event = _fake_add_event
 
     def tearDown(self):
+        """Release the resources that each test in this class created."""
         base_mod.add_event = self._orig_add_event
         store._prev._cache.clear()
         os.chdir(self.old_cwd)
         self.tmp.cleanup()
 
     def _events(self, etype="CARTRIDGE_CHANGED"):
+        """Helper: events."""
         return [e for e in recorded_events if e["type"] == etype]
 
     def _seed(self, total=1000, manual_override=0):
+        """Helper: seed."""
         store._prev.set(self.IP, {
             "print_total": total, "full_color": 0, "black_white": total,
             "toner_level": 40, "alert_codes": [], "last_alert_codes": [],
@@ -67,6 +86,7 @@ class CartridgeIdentityEngineTests(unittest.TestCase):
     def _poll(self, total, toner_levels=None, legacy_color="black", current_toner=40,
               ids=None, pages=None, uptime=None, signal_quality=None,
               supply_names=None):
+        """Helper: poll."""
         prev = store._prev.get(self.IP) or {}
         base_mod._counters_event(
             self.IP, total, prev, [], [],
@@ -82,12 +102,13 @@ class CartridgeIdentityEngineTests(unittest.TestCase):
             uptime=uptime if uptime is not None else (self.UP + total * 100),
         )
 
-    # ─── ۱) تغییر ChipID ⇒ رویداد فوری (بدون ۲poll) ───
+    # ─── 1) ChipID change ⇒ immediate event (without 2poll) ───
     def test_chip_id_change_fires_immediately_once(self):
+        """Verifies chip id change fires immediately once."""
         self._seed()
         self._poll(1000, ids={"black": "AAA-111"})
-        self.assertEqual(self._events(), [])          # اولین مشاهده = baseline
-        self._poll(1001, ids={"black": "BBB-222"})    # تعویض → رویداد همان poll
+        self.assertEqual(self._events(), [])          # First observation = baseline
+        self._poll(1001, ids={"black": "BBB-222"})    # Switch → same poll event
         evs = self._events()
         self.assertEqual(len(evs), 1)
         d = evs[0]["details"]
@@ -95,32 +116,34 @@ class CartridgeIdentityEngineTests(unittest.TestCase):
         self.assertEqual(d.get("prev_cartridge_id"), "AAA-111")
         self.assertEqual(d.get("cartridge_id"), "BBB-222")
         self.assertEqual(d.get("color"), "black")
-        # یک‌شوت: pollهای بعدی با همان شناسه، رویدادی نیست
+        # One shot: subsequent polls with the same ID are not events
         self._poll(1002, ids={"black": "BBB-222"})
         self._poll(1003, ids={"black": "BBB-222"})
         self.assertEqual(len(self._events()), 1)
 
-    # ─── ۳) خواندن ناموفق مقدار قبلی را حفظ می‌کند ───
+    # ─── 3) Failed reading retains the previous value ───
     def test_missing_read_keeps_previous_identity(self):
+        """Verifies missing read keeps previous identity."""
         self._seed()
         self._poll(1000, ids={"black": "AAA-111"})
-        self._poll(1001, ids={})                       # خواندن fail → حفظ قبلی
+        self._poll(1001, ids={})                       # Read fail → save previous
         self.assertEqual(self._events(), [])
-        self._poll(1002, ids={"black": "AAA-111"})     # همان کارتریج → رویداد نه
+        self._poll(1002, ids={"black": "AAA-111"})     # Same cartridge → event no
         self.assertEqual(self._events(), [])
-        self._poll(1003, ids={"black": "ZZZ-999"})     # تعویض واقعی → رویداد
+        self._poll(1003, ids={"black": "ZZZ-999"})     # Actual switch → event
         self.assertEqual(len(self._events()), 1)
 
-    # ─── ۴) رنگ لگاسی: تعویض شناسه‌محور، REFILL آتی را حذف می‌کند ───
+    # ─── 4) Legacy Color: ID-based replacement removes future REFILL ───
     def test_identity_change_suppresses_refill_and_level_paths(self):
+        """Verifies identity change suppresses refill and level paths."""
         self._seed()
-        # baseline: تونر ۴۰٪ + شناسه‌ی قدیم، سیان پایدار
+        # baseline: 40% toner + old ID, stable cyan
         self._poll(1000, toner_levels={"cyan": 30}, ids={"black": "AAA-111"},
                    current_toner=40)
-        # تعویض: سطح ۴۰→۹۵ (کاندید REFILL لگاسیِ معمولی) + شناسه عوض شد
+        # Changed: level 40→95 (regular legacy REFILL candidate) + ID changed
         self._poll(1001, toner_levels={"cyan": 30}, ids={"black": "BBB-222"},
                    current_toner=95)
-        # pollهای بعدی: سطح پایدار — REFILL هرگز نباید تأیید شود
+        # Subsequent Polls: Stable level — REFILL should never be verified
         self._poll(1002, toner_levels={"cyan": 30}, ids={"black": "BBB-222"},
                    current_toner=95)
         self._poll(1003, toner_levels={"cyan": 30}, ids={"black": "BBB-222"},
@@ -130,62 +153,66 @@ class CartridgeIdentityEngineTests(unittest.TestCase):
         self.assertEqual(len(evs), 1)
         self.assertEqual(evs[0]["details"].get("detection"), "chip_id")
 
-    # ─── ۴ب) کاندید سطحِ در جریان هم پاک می‌شود ───
+    # ─── 4b) Current level candidate is also deleted ───
     def test_pending_level_candidate_cleared_by_identity_event(self):
+        """Verifies pending level candidate cleared by identity event."""
         self._seed()
         self._poll(1000, toner_levels={"cyan": 30}, ids={"cyan": "C-OLD"})
-        self._poll(1001, toner_levels={"cyan": 90}, ids={"cyan": "C-OLD"})   # کاندید
-        self._poll(1002, toner_levels={"cyan": 90}, ids={"cyan": "C-NEW"})   # شناسه عوض شد
+        self._poll(1001, toner_levels={"cyan": 90}, ids={"cyan": "C-OLD"})   # candidate
+        self._poll(1002, toner_levels={"cyan": 90}, ids={"cyan": "C-NEW"})   # The ID has been changed
         evs = self._events()
         self.assertEqual(len(evs), 1)
         self.assertEqual(evs[0]["details"].get("detection"), "chip_id")
-        # تأییدِ دوپالیِ مسیر سطح نباید رویداد دوم بسازد
+        # Two-way verification of the surface path should not create a second event
         self._poll(1003, toner_levels={"cyan": 90}, ids={"cyan": "C-NEW"})
         self._poll(1004, toner_levels={"cyan": 90}, ids={"cyan": "C-NEW"})
         self.assertEqual(len(self._events()), 1)
 
-    # ─── ۵) ریست «صفحات با کارتریج» ───
+    # ─── 5) Reset "pages with cartridges" ───
     def test_supply_pages_reset_detection(self):
+        """Verifies supply pages reset detection."""
         self._seed()
         self._poll(1000, pages={"black": 32000})
         self.assertEqual(self._events(), [])
-        self._poll(1002, pages={"black": 32150})       # صعودی عادی → رویداد نه
+        self._poll(1002, pages={"black": 32150})       # Normal Ascendant → Event No
         self.assertEqual(self._events(), [])
         self._poll(1004, pages={"black": 15})          # reset alone is insufficient evidence
         evs = self._events()
         self.assertEqual(evs, [])
 
     def test_supply_pages_small_drop_or_growth_no_event(self):
+        """Verifies supply pages small drop or growth no event."""
         self._seed()
         self._poll(1000, pages={"black": 100})
         self._poll(1001, pages={"black": 101})
-        self._poll(1002, pages={"black": 60})          # افتِ نه‌چندان عمیق (< حد) → نه
+        self._poll(1002, pages={"black": 60})          # Not so deep drop (< limit) → no
         self.assertEqual(self._events(), [])
 
-    # ─── ۶) manual_override ───
+    # ─── 6) manual_override ───
     def test_manual_override_disables_identity_detection(self):
+        """Verifies manual override disables identity detection."""
         self._seed(manual_override=1)
         self._poll(1000, ids={"black": "AAA-111"}, pages={"black": 5000})
         self._poll(1001, ids={"black": "BBB-222"}, pages={"black": 5})
         self._poll(1002, ids={"black": "BBB-222"}, pages={"black": 6})
         self.assertEqual(self._events(), [])
 
-    # ─── ۷) پایداری در برابر ری‌استارت سرور (DB round-trip) ───
+    # ─── 7) Stability against server restart (DB round-trip) ───
     def test_static_quality_suppresses_event(self):
-        """شناسه با کیفیت static (مدل/پارت) نباید رویداد تغییر بدهد."""
+        """Identifier with static quality (model/part) should not change event."""
         self._seed()
         sq = {"black": "static"}
         self._poll(1000, ids={"black": "model:Cartridge 137"}, signal_quality=sq)
         self._poll(1001, ids={"black": "model:Canon Cartridge 324 II"}, signal_quality=sq)
-        # تغییر مدل → false positive → نباید رویداد باشد
+        # Model change → false positive → should not be an event
         self.assertEqual(self._events(), [])
 
     def test_static_quality_uses_signal_quality_param(self):
-        """فقط وقتی signal_quality=static باشد، فیلتر فعال شود."""
+        """Only when signal_quality=static, the filter will be activated."""
         self._seed()
         self._poll(1000, ids={"black": "AAA"})
         prev = store._prev.get(self.IP) or {}
-        # تغییر شناسه بدون signal_quality → رویداد (like genuine)
+        # ID change without signal_quality → event (like genuine)
         base_mod._counters_event(
             self.IP, 1001, prev, [], [],
             full_color=0, black_white=1001,
@@ -195,14 +222,15 @@ class CartridgeIdentityEngineTests(unittest.TestCase):
         self.assertEqual(len(self._events()), 1)
 
     def test_identity_survives_restart_via_db(self):
+        """Verifies identity survives restart via db."""
         self._seed()
         self._poll(1000, ids={"black": "AAA-111"}, pages={"black": 32000})
-        # شبیه‌سازی ری‌استارت: کش حافظه پاک، prev از دیتابیس می‌آید
+        # Restart simulation: clear memory cache, prev comes from the database
         store._prev._cache.clear()
         prev = store._prev.get(self.IP) or {}
         self.assertEqual(prev.get("cartridge_ids"), {"black": "AAA-111"})
         self.assertEqual(prev.get("cart_supply_pages"), {"black": 32000})
-        # تعویض در زمان خاموشی → اولین poll بعد از روشن‌شدن رویداد می‌دهد
+        # switching during shutdown → the first poll after power-up gives the event
         self._poll(1001, ids={"black": "CCC-333"}, pages={"black": 10})
         evs = self._events()
         kinds = sorted(e["details"].get("detection") for e in evs)
@@ -212,29 +240,34 @@ class CartridgeIdentityEngineTests(unittest.TestCase):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# واحدهای خواننده (normalize / config-SNMP / HP web / کش)
+# reader units (normalize / config-SNMP / HP web / cache)
 # ═══════════════════════════════════════════════════════════════════════════
 class CartridgeIdReaderTests(unittest.TestCase):
 
+    """Tests for cartridge id reader."""
     def setUp(self):
+        """Prepare the fixtures that each test in this class uses."""
         cid_mod.clear_cache()
         self._orig_cfg = cid_mod.CONFIG_PATH
         self._orig_cache = dict(cid_mod._config_cache)
 
     def tearDown(self):
+        """Release the resources that each test in this class created."""
         cid_mod.CONFIG_PATH = self._orig_cfg
         cid_mod._config_cache.update(self._orig_cache)
         cid_mod.clear_cache()
 
     def test_normalize_id_rejects_junk(self):
+        """Verifies normalize id rejects junk."""
         for bad in (None, "", "  ", "0", "00", "Unknown", "N/A", "not available",
                     "-", "--", "abc", "x" * 60, "!!!####",
                     "Number", "number", "No", "ID"):
             self.assertIsNone(cid_mod.normalize_id(bad), repr(bad))
 
     def test_hp_web_parser_skips_bare_number_label(self):
-        # باگ واقعی ناوگان: برچسب دوپاره‌ی Serial</span><span>Number باعث می‌شد
-        # خودِ واژه‌ی «Number» به‌عنوان سریال گرفته شود.
+        # Actual fleet bug: Split Serial</span><span>Number tag was causing
+        # The word "Number" itself should be taken as a series.
+        """Verifies hp web parser skips bare number label."""
         html = """
         <html><body>
           <tr><td>Serial</td><td>Number</td><td>16846561</td></tr>
@@ -250,11 +283,13 @@ class CartridgeIdReaderTests(unittest.TestCase):
         self.assertEqual(out.get("identity_type", {}).get("black"), "serial")
 
     def test_normalize_id_accepts_real_serials(self):
+        """Verifies normalize id accepts real serials."""
         self.assertEqual(cid_mod.normalize_id("  ABC-1234-XZ "), "ABC-1234-XZ")
         self.assertEqual(cid_mod.normalize_id(b"SN:77F0ACE2"), "SN:77F0ACE2")
         self.assertEqual(cid_mod.normalize_id("011DTCHP2634"), "011DTCHP2634")
 
     def test_snmp_ids_read_from_config_map(self):
+        """Verifies snmp ids read from config map."""
         tmp = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")
         json.dump({
             "brands": {"hp": {"snmp": {"black": "1.3.6.1.4.1.99.1.1.0"}}},
@@ -267,6 +302,7 @@ class CartridgeIdReaderTests(unittest.TestCase):
         calls = []
 
         def fake_snmp(ip, oid, community, version=None, timeout=1.0, **kw):
+            """Helper: fake snmp."""
             calls.append(oid)
             return {"1.3.6.1.4.1.99.1.1.0": "HP-CART-0001",
                     "1.3.6.1.4.1.99.1.2.0": "Unknown"}.get(oid)
@@ -286,13 +322,14 @@ class CartridgeIdReaderTests(unittest.TestCase):
         finally:
             _snmp_mod.snmp_get_with_fallback = orig_snmp
         os.unlink(tmp.name)
-        # black معتبر است؛ cyan به‌دلیل مقدار «Unknown» حذف می‌شود
+        # black is valid; cyan is omitted because of the value 'Unknown'
         self.assertEqual(res["ids"], {"black": "HP-CART-0001"})
         self.assertEqual(res["identity_type"], {"black": "chip_id"})
         self.assertIn("snmp", res["source"])
         self.assertEqual(len(calls), 2)
 
     def test_hp_web_parser_extracts_serial_and_pages(self):
+        """Verifies hp web parser extracts serial and pages."""
         html = """
         <html><body>
           <h2 id="BlackCartridge1-Header">Black Cartridge</h2>
@@ -314,6 +351,7 @@ class CartridgeIdReaderTests(unittest.TestCase):
         self.assertEqual(out.get("identity_type", {}).get("black"), "serial")
 
     def test_reader_uses_ttl_cache(self):
+        """Verifies reader uses ttl cache."""
         tmp = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")
         json.dump({"brands": {"hp": {"snmp": {"black": "1.3.6.1.4.1.99.9.0"} } }}, tmp)
         tmp.close()
@@ -323,6 +361,7 @@ class CartridgeIdReaderTests(unittest.TestCase):
         counter = {"n": 0}
 
         def fake_snmp(ip, oid, community, version=None, timeout=1.0, **kw):
+            """Helper: fake snmp."""
             counter["n"] += 1
             return "KEEP-ME-77"
 
@@ -340,14 +379,15 @@ class CartridgeIdReaderTests(unittest.TestCase):
             _snmp_mod.snmp_get_with_fallback = orig_snmp
             cid_mod._read_hp_web_ids, cid_mod._read_other_web_ids = orig_hp, orig_other
             os.unlink(tmp.name)
-        # سه فراخوانی در پنجره‌ی TTL → فقط یک خواندن واقعی SNMP
+        # Three calls in the TTL window → only one actual SNMP read
         self.assertEqual(counter["n"], 1)
 
 
 class FallbackIdentityTests(unittest.TestCase):
-    """تست شناسه‌های جایگزین (Brother toner gen / HP part / Canon model)."""
+    """Test alternative identifiers (Brother toner gen / HP part / Canon model)."""
 
     def setUp(self):
+        """Prepare the fixtures that each test in this class uses."""
         import core.snmp.protocol as _snmp_mod
         self._orig_snmp_mod = _snmp_mod
         self._orig_cfg = cid_mod.CONFIG_PATH
@@ -373,6 +413,7 @@ class FallbackIdentityTests(unittest.TestCase):
         self._patcher = True
 
     def tearDown(self):
+        """Release the resources that each test in this class created."""
         if self._patcher:
             import core.snmp.protocol as _snmp_mod
             _snmp_mod.snmp_get_with_fallback = self._orig_sg_val
@@ -384,7 +425,9 @@ class FallbackIdentityTests(unittest.TestCase):
         os.unlink(self._tmp.name)
 
     def test_brother_toner_gen_count(self):
+        """Verifies brother toner gen count."""
         def fake_sg(ip, oid, community, version=None, timeout=1.0, **kw):
+            """Helper: fake sg."""
             if "2435" in oid:
                 return "5"
             return None
@@ -394,7 +437,9 @@ class FallbackIdentityTests(unittest.TestCase):
         self.assertEqual(r["source"], "brother_snmp_gen")
 
     def test_hp_part_number_fallback(self):
+        """Verifies hp part number fallback."""
         def fake_sg(ip, oid, community, version=None, timeout=1.0, **kw):
+            """Helper: fake sg."""
             if "43.11.1.1.6" in oid:
                 return "CC388A"
             return None
@@ -404,7 +449,9 @@ class FallbackIdentityTests(unittest.TestCase):
         self.assertEqual(r["source"], "hp_mib_part")
 
     def test_canon_model_fallback(self):
+        """Verifies canon model fallback."""
         def fake_sg(ip, oid, community, version=None, timeout=1.0, **kw):
+            """Helper: fake sg."""
             if "43.11.1.1.6" in oid:
                 return "Canon Cartridge 324 II"
             return None
@@ -414,13 +461,14 @@ class FallbackIdentityTests(unittest.TestCase):
         self.assertEqual(r["source"], "canon_mib_model")
 
     def test_fallback_not_used_when_ids_exist(self):
-        """اگر شناسه از SNMP معمولی پیدا شد، fallback فراخوانی نشود."""
-        # config با OID دستی تا _snmp_oids_for چیزی برگرداند
+        """If the ID is found from normal SNMP, do not call the fallback."""
+        # config with manual OID until _snmp_oids_for returns something
         with open(self._tmp.name, "w", encoding="utf-8") as fh:
             json.dump({"brands": {"hp": {"snmp": {"black": "1.3.6.1.4.1.99.9.0"}}}}, fh)
         cid_mod.load_id_config(force=True)
 
         def fake_sg(ip, oid, community, version=None, timeout=1.0, **kw):
+            """Helper: fake sg."""
             if "99.9.0" in oid:
                 return "SN123"
             if "43.11.1.1.6" in oid:
@@ -434,9 +482,10 @@ class FallbackIdentityTests(unittest.TestCase):
         self.assertNotIn("SHOULD-NOT-BE-USED", str(r))
 
     def test_brother_gen_change_detected(self):
-        """تغییر شمارشگر Brother ⇒ تشخیص تعویض کارتریج."""
+        """Change Brother counter ⇒ Cartridge replacement detection."""
         calls = {"n": 0}
         def fake_sg(ip, oid, community, version=None, timeout=1.0, **kw):
+            """Helper: fake sg."""
             if "2435" in oid:
                 calls["n"] += 1
                 return "3" if calls["n"] <= 1 else "4"
@@ -450,13 +499,15 @@ class FallbackIdentityTests(unittest.TestCase):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# تشخیص تعویض از روی تغییر نام supply
+# Detection of change from supply name change
 # ═══════════════════════════════════════════════════════════════════════════
 class SupplyNameChangeDetectionTests(unittest.TestCase):
+    """Tests for supply name change detection."""
     IP = "10.9.9.20"
     UP = 800_000_000
 
     def setUp(self):
+        """Prepare the fixtures that each test in this class uses."""
         self.tmp = tempfile.TemporaryDirectory()
         self.old_cwd = os.getcwd()
         os.chdir(self.tmp.name)
@@ -467,15 +518,18 @@ class SupplyNameChangeDetectionTests(unittest.TestCase):
         base_mod.add_event = _fake_add_event
 
     def tearDown(self):
+        """Release the resources that each test in this class created."""
         base_mod.add_event = self._orig_add_event
         store._prev._cache.clear()
         os.chdir(self.old_cwd)
         self.tmp.cleanup()
 
     def _events(self, etype="CARTRIDGE_CHANGED"):
+        """Helper: events."""
         return [e for e in recorded_events if e["type"] == etype]
 
     def _seed(self, total=1000):
+        """Helper: seed."""
         store._prev.set(self.IP, {
             "print_total": total, "full_color": 0, "black_white": total,
             "toner_level": 40, "alert_codes": [], "last_alert_codes": [],
@@ -484,6 +538,7 @@ class SupplyNameChangeDetectionTests(unittest.TestCase):
         recorded_events.clear()
 
     def _poll(self, total, supply_names=None, ids=None, sq=None):
+        """Helper: poll."""
         prev = store._prev.get(self.IP) or {}
         base_mod._counters_event(
             self.IP, total, prev, [], [],
@@ -497,12 +552,12 @@ class SupplyNameChangeDetectionTests(unittest.TestCase):
         )
 
     def test_supply_name_change_fires_event(self):
-        """تغییر نام supply از HP 87A به CC388A ⇒ رویداد (بعد از ۲ poll)."""
+        """Rename supply from HP 87A to CC388A ⇒ event (after 2 polls)."""
         self._seed()
         self._poll(1000, supply_names={"black": "Black Cartridge HP 87A (CF287A)"})
         self.assertEqual(self._events(), [])  # baseline
         self._poll(1001, supply_names={"black": "CC388A"})
-        self.assertEqual(self._events(), [])  # اولین تغییر → pending
+        self.assertEqual(self._events(), [])  # First change → pending
         self._poll(1002, supply_names={"black": "CC388A"})
         evs = self._events()
         self.assertEqual(len(evs), 1)
@@ -512,29 +567,29 @@ class SupplyNameChangeDetectionTests(unittest.TestCase):
         self.assertEqual(evs[0]["details"]["supply_name"], "CC388A")
 
     def test_supply_name_same_no_event(self):
-        """نام supply یکسان ⇒ رویداد نه."""
+        """Same supply name ⇒ event no."""
         self._seed()
         self._poll(1000, supply_names={"black": "Black Toner Cartridge"})
         self._poll(1001, supply_names={"black": "Black Toner Cartridge"})
         self.assertEqual(self._events(), [])
 
     def test_supply_name_case_insensitive(self):
-        """تغییر فقط در حروف بزرگ/کوچک ⇒ رویداد نه."""
+        """Change only in upper/lower case ⇒ event no."""
         self._seed()
         self._poll(1000, supply_names={"black": "Black Toner"})
         self._poll(1001, supply_names={"black": "black toner"})
         self.assertEqual(self._events(), [])
 
     def test_supply_name_first_observation_no_event(self):
-        """اولین مشاهده نام ⇒ فقط baseline، رویداد نه."""
+        """First name view ⇒ baseline only, not event."""
         self._seed()
         self._poll(1000, supply_names={"black": "CC388A"})
-        self.assertEqual(self._events(), [])  # اولین poll → baseline
+        self.assertEqual(self._events(), [])  # The first poll → baseline
         self._poll(1001, supply_names={"black": "CC388A"})
-        self.assertEqual(self._events(), [])  # بدون تغییر
+        self.assertEqual(self._events(), [])  # No change
 
     def test_supply_name_skipped_when_chip_id_genuine(self):
-        """اگر chip_id واقعی (genuine) فعال است، تغییر نام نادیده گرفته شود."""
+        """If genuine chip_id is enabled, ignore the name change."""
         self._seed()
         self._poll(1000, supply_names={"black": "HP 87A"},
                    ids={"black": "ABC123"}, sq={"black": "genuine"})
@@ -543,13 +598,13 @@ class SupplyNameChangeDetectionTests(unittest.TestCase):
         self.assertEqual(self._events(), [])  # genuine → skip name change
 
     def test_supply_name_fires_when_chip_id_static(self):
-        """اگر chip_id static است، تغییر نام باید رویداد بدهد (بعد از ۲ poll)."""
+        """If chip_id is static, renaming should throw an event (after 2 polls)."""
         self._seed()
         self._poll(1000, supply_names={"black": "HP 87A"},
                    ids={"black": "part:CC388A"}, sq={"black": "static"})
         self._poll(1001, supply_names={"black": "HP 87X"},
                    ids={"black": "part:CC388A"}, sq={"black": "static"})
-        self.assertEqual(self._events(), [])  # اولین تغییر → pending
+        self.assertEqual(self._events(), [])  # First change → pending
         self._poll(1002, supply_names={"black": "HP 87X"},
                    ids={"black": "part:CC388A"}, sq={"black": "static"})
         evs = self._events()
@@ -557,20 +612,20 @@ class SupplyNameChangeDetectionTests(unittest.TestCase):
         self.assertEqual(evs[0]["details"]["detection"], "supply_name_change")
 
     def test_supply_name_skipped_when_chip_id_changed(self):
-        """اگر قبلاً chip_id_changed ثبت شده، تغییر نام تکراری نیست."""
+        """If chip_id_changed is already registered, the name change is not duplicated."""
         self._seed()
         self._poll(1000, supply_names={"black": "HP 87A"},
                    ids={"black": "OLD123"})
-        # chip_id changed + supply_name changed → فقط chip_id event
+        # chip_id changed + supply_name changed → only chip_id event
         self._poll(1001, supply_names={"black": "HP 87X"},
                    ids={"black": "NEW456"})
         evs = self._events()
-        # باید فقط یک رویداد (chip_id) باشد، نه دو
+        # There should be only one event (chip_id), not two
         self.assertEqual(len(evs), 1)
         self.assertEqual(evs[0]["details"]["detection"], "chip_id")
 
     def test_supply_name_manual_override_skips(self):
-        """manual_override ⇒ تغییر نام نادیده گرفته شود."""
+        """manual_override ⇒ Ignore renaming."""
         store._prev.set(self.IP, {
             "print_total": 1000, "full_color": 0, "black_white": 1000,
             "toner_level": 40, "alert_codes": [], "last_alert_codes": [],
@@ -581,50 +636,52 @@ class SupplyNameChangeDetectionTests(unittest.TestCase):
         self.assertEqual(self._events(), [])
 
     def test_supply_name_flip_flop_no_event(self):
-        """تغییر نام و برگشت (flip-flop) ⇒ رویداد نه — دروازه ثبات."""
+        """Rename and flip-flop ⇒ event nine — stability gate."""
         self._seed()
         self._poll(1000, supply_names={"black": "HP 87A"})
         self._poll(1001, supply_names={"black": "black cartridge"})  # flip
         self.assertEqual(self._events(), [])  # pending
         self._poll(1002, supply_names={"black": "HP 87A"})  # flop back
-        self.assertEqual(self._events(), [])  # pending لغو شد
+        self.assertEqual(self._events(), [])  # pending was cancelled
         self._poll(1003, supply_names={"black": "black cartridge"})  # flip again
-        self.assertEqual(self._events(), [])  # دوباره pending
+        self.assertEqual(self._events(), [])  # Pending again
         self._poll(1004, supply_names={"black": "HP 87A"})  # flop again
-        self.assertEqual(self._events(), [])  # هیچ رویدادی
+        self.assertEqual(self._events(), [])  # No event
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# تست End-to-End: ذخیره‌ی رویداد در دیتابیس واقعی
+# End-to-End testing: event storage in real database
 # ═══════════════════════════════════════════════════════════════════════════
 class EndToEndDatabaseTests(unittest.TestCase):
-    """تست زنجیره‌ی کامل: collector → _counters_event → add_event → SQLite → get_log.
+    """Test the complete chain: collector → _counters_event → add_event → SQLite → get_log.
 
-    برخلاف تست‌های بالا که add_event را با fake جایگزین می‌کنند، اینجا از
-    add_event واقعی استفاده می‌شود تا تأیید شود رویداد با تمام جزئیات
-    در دیتابیس ذخیره و قابل بازیابی است.
+    Unlike the above tests that replace add_event with fake, here from
+    The actual add_event is used to confirm the event with all the details
+    It can be stored and retrieved in the database.
     """
     IP = "10.99.99.1"
     UP = 900_000_000
 
     def setUp(self):
+        """Prepare the fixtures that each test in this class uses."""
         self.tmp = tempfile.TemporaryDirectory()
         self.old_cwd = os.getcwd()
         os.chdir(self.tmp.name)
         init_db()
         store._prev._cache.clear()
-        # بدون patch کردن add_event — از مسیر واقعی دیتابیس استفاده می‌شود
-        # اما نیاز به راه‌اندازی PRINTERS store داریم تا add_event نام پرینتر را پیدا کند
+        # Without patching add_event — the actual database path is used
+        # But we need to set up PRINTERS store so that add_event can find the name of the printer
         store.PRINTERS = [{"ip": self.IP, "name": "Test HP M527"}]
 
     def tearDown(self):
+        """Release the resources that each test in this class created."""
         store._prev._cache.clear()
         store.PRINTERS = []
         os.chdir(self.old_cwd)
         self.tmp.cleanup()
 
     def _query_events(self, etype=None):
-        """خواندن رویدادها از SQLite با فیلتر نوع."""
+        """Read events from SQLite with type filter."""
         from core.database import get_log
         events = get_log(self.IP, limit=100)
         if etype:
@@ -632,6 +689,7 @@ class EndToEndDatabaseTests(unittest.TestCase):
         return events
 
     def _poll(self, total, ids=None, pages=None, supply_names=None, sq=None):
+        """Helper: poll."""
         prev = store._prev.get(self.IP) or {}
         base_mod._counters_event(
             self.IP, total, prev, [], [],
@@ -645,9 +703,9 @@ class EndToEndDatabaseTests(unittest.TestCase):
             uptime=self.UP + total * 100,
         )
 
-    # ─── ۱) تغییر نام supply ⇒ رویداد در دیتابیس ───
+    # ─── 1) Rename supply ⇒ event in the database ───
     def test_supply_name_change_stored_in_database(self):
-        """زنجیره‌ی کامل: seed → poll baseline → poll change → poll confirm → DB query."""
+        """Complete chain: seed → poll baseline → poll change → poll confirm → DB query."""
         # seed
         store._prev.set(self.IP, {
             "print_total": 1000, "full_color": 0, "black_white": 1000,
@@ -655,27 +713,27 @@ class EndToEndDatabaseTests(unittest.TestCase):
             "uptime": self.UP, "manual_override": 0,
         })
 
-        # poll 1: baseline — نام اولیه ثبت می‌شود
+        # poll 1: baseline — initial name is recorded
         self._poll(1000, supply_names={"black": "HP 87A (CF287A)"})
         self.assertEqual(self._query_events("CARTRIDGE_CHANGED"), [])
 
-        # poll 2: تغییر نام — pending ثبت می‌شود
+        # poll 2: Name change — pending is recorded
         self._poll(1001, supply_names={"black": "CC388A"})
         self.assertEqual(self._query_events("CARTRIDGE_CHANGED"), [])
 
-        # poll 3: تأیید — رویداد باید در SQLite ذخیره شده باشد
+        # poll 3: Verification — The event must be stored in SQLite
         self._poll(1002, supply_names={"black": "CC388A"})
         events = self._query_events("CARTRIDGE_CHANGED")
         self.assertEqual(len(events), 1, "باید دقیقاً یک رویداد CARTRIDGE_CHANGED ذخیره شود")
 
         e = events[0]
-        # بررسی فیلدهای top-level
+        # Check top-level fields
         self.assertEqual(e["printer_ip"], self.IP)
         self.assertEqual(e["printer_name"], "Test HP M527")
         self.assertEqual(e["severity"], "info")
         self.assertIn("نام supply تغییر کرد", e["message"])
 
-        # بررسی فیلدهای details (ذخیره‌شده به‌صورت JSON در ستون details)
+        # Checking the details fields (stored as JSON in the details column)
         self.assertEqual(e["detection"], "supply_name_change")
         self.assertEqual(e["color"], "black")
         self.assertEqual(e["color_fa"], "مشکی")
@@ -684,12 +742,13 @@ class EndToEndDatabaseTests(unittest.TestCase):
         self.assertEqual(e["prev_supply_name"], "HP 87A (CF287A)")
         self.assertEqual(e["supply_name"], "CC388A")
 
-        # timestamp باید معتبر باشد
+        # The timestamp must be valid
         self.assertIsNotNone(e["timestamp"])
         self.assertTrue(len(e["timestamp"]) > 10)
 
-    # ─── ۲) تغییر شناسه تراشه ⇒ رویداد با detection=chip_id ───
+    # ─── 2) Chip ID change ⇒ event with detection=chip_id ───
     def test_chip_id_change_stored_in_database(self):
+        """Verifies chip id change stored in database."""
         store._prev.set(self.IP, {
             "print_total": 5000, "full_color": 0, "black_white": 5000,
             "toner_level": 50, "alert_codes": [], "last_alert_codes": [],
@@ -706,8 +765,9 @@ class EndToEndDatabaseTests(unittest.TestCase):
         self.assertEqual(e["prev_cartridge_id"], "SN-OLD-123")
         self.assertEqual(e["cartridge_id"], "SN-NEW-456")
 
-    # ─── ۳) ریست صفحات کارتریج به‌تنهایی ⇒ بدون رویداد ───
+    # ─── 3) Reset cartridge pages alone ⇒ no event ───
     def test_pages_reset_stored_in_database(self):
+        """Verifies pages reset stored in database."""
         store._prev.set(self.IP, {
             "print_total": 1000, "full_color": 0, "black_white": 1000,
             "toner_level": 40, "alert_codes": [], "last_alert_codes": [],
@@ -716,14 +776,14 @@ class EndToEndDatabaseTests(unittest.TestCase):
 
         self._poll(1000, pages={"black": 30000})
         self._poll(1001, pages={"black": 30050})
-        self._poll(1002, pages={"black": 20})     # ریست!
+        self._poll(1002, pages={"black": 20})     # Reset!
 
         events = self._query_events("CARTRIDGE_CHANGED")
         self.assertEqual(events, [])
 
-    # ─── ۴) فیلتر کیفیت static در مسیر دیتابیس ───
+    # ─── 4) Static quality filter in the database path ───
     def test_static_quality_no_event_in_database(self):
-        """شناسه static نباید رویدادی در دیتابیس ایجاد کند."""
+        """A static identifier should not generate an event in the database."""
         store._prev.set(self.IP, {
             "print_total": 1000, "full_color": 0, "black_white": 1000,
             "toner_level": 40, "alert_codes": [], "last_alert_codes": [],
@@ -736,28 +796,28 @@ class EndToEndDatabaseTests(unittest.TestCase):
         events = self._query_events("CARTRIDGE_CHANGED")
         self.assertEqual(len(events), 0, "شناسه static نباید رویداد ثبت کند")
 
-    # ─── ۵) جستجوی متنی در دیتابیس — رویداد قابل فیلتر است ───
+    # ─── 5) Text search in the database — the event can be filtered ───
     def test_event_queryable_by_type_filter(self):
-        """رویدادهای CARTRIDGE_CHANGED از بقیه رویدادها قابل تفکیک هستند."""
+        """CARTRIDGE_CHANGED events are separable from other events."""
         store._prev.set(self.IP, {
             "print_total": 1000, "full_color": 0, "black_white": 1000,
             "toner_level": 40, "alert_codes": [], "last_alert_codes": [],
             "uptime": self.UP, "manual_override": 0,
         })
 
-        # poll اولیه + ثبت یک رویداد PRINT
+        # Initial poll + registration of a PRINT event
         self._poll(1000)
-        self._poll(1001)  # 1 صفحه چاپ
+        self._poll(1001)  # 1 printed page
         self._poll(1002, supply_names={"black": "HP 87A"})
         self._poll(1003, supply_names={"black": "HP 87A"})
         self._poll(1004, supply_names={"black": "CC388A"})
-        self._poll(1005, supply_names={"black": "CC388A"})  # تأیید
+        self._poll(1005, supply_names={"black": "CC388A"})  # confirmation
 
         all_events = self._query_events()
         cc_events = self._query_events("CARTRIDGE_CHANGED")
         print_events = self._query_events("PRINT")
 
-        # حداقل یک PRINT و یک CARTRIDGE_CHANGED باید باشد
+        # There must be at least one PRINT and one CARTRIDGE_CHANGED
         self.assertGreater(len(print_events), 0, "باید رویداد PRINT وجود داشته باشد")
         self.assertEqual(len(cc_events), 1, "باید دقیقاً یک CARTRIDGE_CHANGED وجود داشته باشد")
         self.assertIn(cc_events[0], all_events, "CARTRIDGE_CHANGED باید در همه رویدادها باشد")

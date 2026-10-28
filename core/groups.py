@@ -1,26 +1,38 @@
-"""
-مدیریت گروه‌های سفارشی پرینترها (groups.json).
+# =============================================================================
+# @file:         core/groups.py
+# @brief:        Management of custom printer groups stored in groups.json.
+# @details:      Responsibilities: Load, save and edit printer groups (create, rename, delete).
+#                Main API: load_groups(), save_groups(), create_group(), rename_group(),
+#                delete_group()
+#                Side effects: starts threads, file I/O
+# @dependencies: internal: core.time_utils
+# @notes:        None.
+# =============================================================================
 
-مدل داده:
+"""
+Management of custom printer groups (groups.json).
+
+Data model:
     [
-      {"id": "g_management", "name": "مدیریت", "icon": "🏢", "color": "cyan",
+      {"id": "g_management", "name": "Management", "icon": "🏢", "color": "cyan",
        "created_at": "...", "updated_at": "..."}
     ]
 
-نکته مهم: گروه‌های پیش‌فرض دفاتر (imamat/soroush/...) که بر اساس subnet هستند،
-در frontend هاردکد شده‌اند و اینجا نیستند. این ماژول فقط گروه‌های «سفارشی»
-کاربر را نگه می‌دارد تا:
-  ۱) گروه حتی بدون هیچ پرینتری هم وجود داشته باشد،
-  ۲) تغییر نام/حذف گروه ممکن شود،
-  ۳) id گروه (کلید پایدار برای ذخیره روی پرینتر) با نام نمایشی جدا باشد.
+Important note: the default groups of offices (imamat/soroush/...) which are based on subnet,
+They are hardcoded in the frontend and are not here. This module only "custom" groups.
+It keeps the user to:
+  1) The group exists even without any printer.
+  2) It is possible to change the name/delete the group.
+  3) The group id (permanent key to store on the printer) should be separate from the display name.
 """
 
 import json
+import logging
 import os
 import re
 import threading
-import logging
 from datetime import datetime
+
 from core.time_utils import utc_now_iso
 
 log = logging.getLogger("PrinterMonitor")
@@ -35,18 +47,20 @@ _slug_re = re.compile(r"[^a-z0-9_]+")
 
 
 def _slugify(name: str) -> str:
-    """ساخت id پایدار از نام گروه. برای نام‌های فارسی، کلید زمانی یکتا می‌سازیم."""
+    """Construct persistent id from group name. We create a unique time key for Persian names."""
     base = (name or "").strip().lower()
     base = _slug_re.sub("", base.replace(" ", "_").replace("-", "_")).strip("_")
     if base and base[0].isdigit():
         base = "g_" + base
     if not base:
-        # نام تماماً فارسی/غیرلاتین است → کلید یکتا از زمان بساز
+        # The name is all Farsi/non-Latin → make a unique key from time
         base = datetime.now().strftime("%H%M%S%f")[:12]
     return base if base.startswith("g_") else "g_" + base
 
 
 def load_groups() -> list:
+    """Load the printer groups from groups.json."""
+
     try:
         if os.path.exists(GROUPS_FILE):
             with open(GROUPS_FILE, encoding="utf-8") as f:
@@ -59,6 +73,8 @@ def load_groups() -> list:
 
 
 def save_groups(groups: list) -> list:
+    """Write the printer groups to groups.json."""
+
     with _groups_lock:
         clean = []
         seen = set()
@@ -71,7 +87,7 @@ def save_groups(groups: list) -> list:
             clean.append({
                 "id": gid,
                 "name": name,
-                
+
                 "created_at": g.get("created_at"),
                 "updated_at": g.get("updated_at"),
             })
@@ -81,6 +97,8 @@ def save_groups(groups: list) -> list:
 
 
 def create_group(name: str, icon: str = None, color: str = None) -> dict:
+    """Create a printer group with a unique id and return it."""
+
     name = (name or "").strip()
     if not name:
         raise ValueError("نام گروه الزامی است")
@@ -114,6 +132,8 @@ def create_group(name: str, icon: str = None, color: str = None) -> dict:
 
 
 def rename_group(group_id: str, new_name: str) -> bool:
+    """Rename a printer group; returns False when the group does not exist."""
+
     new_name = (new_name or "").strip()
     if not new_name or len(new_name) > 60:
         raise ValueError("نام گروه نامعتبر است")
@@ -130,7 +150,7 @@ def rename_group(group_id: str, new_name: str) -> bool:
 
 
 def delete_group(group_id: str) -> bool:
-    """حذف گروه؛ تخصیص گروه از پرینترها باید توسط caller پاک شود."""
+    """group deletion; The group assignment of printers must be cleared by the caller."""
     groups = load_groups()
     remaining = [g for g in groups if g["id"] != group_id]
     if len(remaining) == len(groups):

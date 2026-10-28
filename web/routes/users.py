@@ -1,15 +1,30 @@
-import os
-import logging
-import secrets
-import re
+# =============================================================================
+# @file:         web/routes/users.py
+# @brief:        Admin pages and API routes for managing users and their office access.
+# @details:      Responsibilities: Render the users page and handle user CRUD.
+#                Main API: users_page(), api_office_options(), api_users(), api_user_add(),
+#                api_user_reset_password(), api_user_role(), api_user_verify(), api_user_access()
+#                (+8 more)
+#                Side effects: network I/O, sends e-mail, defines HTTP routes, file I/O
+# @dependencies: internal: config, core.groups, core.security_audit, core.sensor_alert,
+#                core.time_utils, models, utils, web.auth | external: flask, flask_login
+# @notes:        None.
+# =============================================================================
+
+"""User management and system settings routes."""
+
 import json
+import logging
+import os
+import re
+import secrets
 from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, jsonify, render_template, request, url_for
 from flask_login import current_user
+
 from config import settings
 from core.groups import load_groups
-
 from models import User
 from web.auth import users_access_required
 from utils import generate_reset_token, hash_token, send_email
@@ -20,12 +35,14 @@ bp = Blueprint("users", __name__)
 log = logging.getLogger("PrinterMonitor")
 
 def _allowed_offices() -> set:
+    """Return the set of office IDs that are allowed."""
     office_ids = set((getattr(settings, "OFFICE_SUBNETS", {}) or {}).keys())
     office_ids.update(group["id"] for group in load_groups() if group.get("id"))
     return office_ids
 
 
 def _office_options() -> list:
+    """Return the office choices for the user form."""
     name_map = {
         "imamat": "دفتر امامت",
         "soroush": "دفتر سروش",
@@ -47,6 +64,7 @@ ALLOWED_MODULES = {"printers", "logs", "excel", "users"}
 
 
 def _audit_user_action(event_type, target, details, success=True):
+    """Write an audit log entry for a user-management action."""
     log_security_event(
         event_type,
         severity=Severity.INFO if success else Severity.WARNING,
@@ -67,6 +85,7 @@ USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]{3,32}$")
 
 
 def _validate_username(username: str):
+    """Validate a username and raise an error when it is invalid."""
     if not username:
         return "username الزامی است"
     if not USERNAME_RE.fullmatch(username):
@@ -75,6 +94,7 @@ def _validate_username(username: str):
 
 
 def _normalize_selection(values, allowed_values):
+    """Return the selected values that are allowed, with duplicates removed."""
     normalized = []
     for value in values or []:
         text = str(value).strip().lower()
@@ -84,6 +104,7 @@ def _normalize_selection(values, allowed_values):
 
 
 def _serialize_user(user: User) -> dict:
+    """Convert a user record to a JSON-serializable dictionary."""
     return {
         "id": user.id,
         "username": user.username,
@@ -102,18 +123,24 @@ def _serialize_user(user: User) -> dict:
 @bp.route("/users")
 @users_access_required
 def users_page():
+    """Render the user management page."""
+
     return render_template("users.html", load_dashboard_scripts=False, office_options=_office_options())
 
 
 @bp.route("/api/users/office-options", methods=["GET"])
 @users_access_required
 def api_office_options():
+    """Return the list of offices that can be assigned to users."""
+
     return jsonify({"offices": _office_options()})
 
 
 @bp.route("/api/users", methods=["GET"])
 @users_access_required
 def api_users():
+    """Return all users."""
+
     users = [u for u in User.all() if u]
     return jsonify({"users": [_serialize_user(u) for u in users], "total": len(users)})
 
@@ -121,6 +148,8 @@ def api_users():
 @bp.route("/api/users", methods=["POST"])
 @users_access_required
 def api_user_add():
+    """Create a user from the JSON body."""
+
     data = request.get_json(silent=True) or {}
     username = (data.get("username") or "").strip()
     email = (data.get("email") or "").strip().lower()
@@ -192,14 +221,14 @@ def api_user_add():
 @bp.route("/api/users/<int:user_id>/reset-password", methods=["POST"])
 @users_access_required
 def api_user_reset_password(user_id):
-    """ارسال ایمیل بازنشانی رمز عبور برای یک کاربر مشخص."""
+    """Send a password reset email to a specific user."""
     target = User.get(user_id)
     if not target:
         return jsonify({"error": "user not found"}), 404
 
-    # 🔒 P0-4: اثرگذاری روی حساب admin (نقش/حذف/بازنشانی رمز) فقط
-    # برای admin مجاز است؛ در غیر این صورت manager می‌توانست
-    # ادمین را تنزل دهد یا حذف کند.
+    # 🔒 P0-4: affect admin account (role/remove/reset password) only
+    # allowed for admin; Otherwise, the manager could
+    # demote or remove the admin.
     if target.role == "admin" and getattr(current_user, "role", None) != "admin":
         return jsonify({"error": "بازنشانی رمز admin فقط توسط admin مجاز است"}), 403
 
@@ -227,6 +256,8 @@ def api_user_reset_password(user_id):
 @bp.route("/api/users/<int:user_id>/role", methods=["POST"])
 @users_access_required
 def api_user_role(user_id):
+    """Change the role of a user."""
+
     data = request.get_json() or {}
     role = (data.get("role") or "").strip().lower()
     if role not in ("admin", "manager", "viewer"):
@@ -237,9 +268,9 @@ def api_user_role(user_id):
     target = User.get(user_id)
     if not target:
         return jsonify({"error": "user not found"}), 404
-    # 🔒 P0-4: اثرگذاری روی حساب admin (نقش/حذف/بازنشانی رمز) فقط
-    # برای admin مجاز است؛ در غیر این صورت manager می‌توانست
-    # ادمین را تنزل دهد یا حذف کند.
+    # 🔒 P0-4: affect admin account (role/remove/reset password) only
+    # allowed for admin; Otherwise, the manager could
+    # demote or remove the admin.
     if target.role == "admin" and getattr(current_user, "role", None) != "admin":
         return jsonify({"error": "تغییر نقش یک admin فقط توسط admin مجاز است"}), 403
     if int(target.id) == int(current_user.id):
@@ -263,6 +294,8 @@ def api_user_role(user_id):
 @bp.route("/api/users/<int:user_id>/verify", methods=["POST"])
 @users_access_required
 def api_user_verify(user_id):
+    """Set the verified flag of a user."""
+
     data = request.get_json(silent=True) or {}
     target = User.get(user_id)
     if not target:
@@ -287,6 +320,8 @@ def api_user_verify(user_id):
 @bp.route("/api/users/<int:user_id>/access", methods=["POST"])
 @users_access_required
 def api_user_access(user_id):
+    """Change the allowed offices and modules of a user."""
+
     data = request.get_json(silent=True) or {}
     target = User.get(user_id)
     if not target:
@@ -314,13 +349,15 @@ def api_user_access(user_id):
 @bp.route("/api/users/<int:user_id>", methods=["DELETE"])
 @users_access_required
 def api_delete_user(user_id):
+    """Delete a user."""
+
     target = User.get(user_id)
     if not target:
         return jsonify({"error": "user not found"}), 404
 
-    # 🔒 P0-4: اثرگذاری روی حساب admin (نقش/حذف/بازنشانی رمز) فقط
-    # برای admin مجاز است؛ در غیر این صورت manager می‌توانست
-    # ادمین را تنزل دهد یا حذف کند.
+    # 🔒 P0-4: affect admin account (role/remove/reset password) only
+    # allowed for admin; Otherwise, the manager could
+    # demote or remove the admin.
     if target.role == "admin" and getattr(current_user, "role", None) != "admin":
         return jsonify({"error": "حذف حساب admin فقط توسط admin مجاز است"}), 403
 
@@ -341,7 +378,7 @@ def api_delete_user(user_id):
 @bp.route("/api/users/<int:user_id>/sensor-alert", methods=["GET"])
 @users_access_required
 def api_user_sensor_alert_get(user_id):
-    """دریافت تنظیمات ایمیل هشدار سنسور برای یک کاربر."""
+    """Get sensor alert email settings for a user."""
     target = User.get(user_id)
     if not target:
         return jsonify({"error": "user not found"}), 404
@@ -361,7 +398,7 @@ def api_user_sensor_alert_get(user_id):
 @bp.route("/api/users/<int:user_id>/sensor-alert", methods=["POST"])
 @users_access_required
 def api_user_sensor_alert_set(user_id):
-    """ذخیره تنظیمات ایمیل هشدار سنسور برای یک کاربر."""
+    """Save sensor alert email settings for a user."""
     target = User.get(user_id)
     if not target:
         return jsonify({"error": "user not found"}), 404
@@ -403,6 +440,8 @@ def api_user_sensor_alert_set(user_id):
 @bp.route("/api/sensor-alert", methods=["GET"])
 @users_access_required
 def api_sensor_alert_get():
+    """Return the sensor-alert settings of a user."""
+
     from core.sensor_alert import load_config
     return jsonify(load_config())
 
@@ -410,6 +449,8 @@ def api_sensor_alert_get():
 @bp.route("/api/sensor-alert", methods=["POST"])
 @users_access_required
 def api_sensor_alert_set():
+    """Save the sensor-alert settings of a user."""
+
     from core.sensor_alert import save_config, load_config
     data = request.get_json(silent=True) or {}
     config = load_config()
@@ -439,6 +480,7 @@ _SYSTEM_FIELDS = [
 ]
 
 def _load_system_config():
+    """Load the system configuration from its JSON file."""
     import json
     try:
         if os.path.exists(_SYSTEM_CONFIG_FILE):
@@ -449,6 +491,7 @@ def _load_system_config():
     return {}
 
 def _save_system_config(cfg):
+    """Save the system configuration to its JSON file."""
     import json
     with open(_SYSTEM_CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(cfg, f, indent=2, ensure_ascii=False)
@@ -457,6 +500,8 @@ def _save_system_config(cfg):
 @bp.route("/api/system-settings", methods=["GET"])
 @users_access_required
 def api_system_settings_get():
+    """Return the system settings."""
+
     cfg = _load_system_config()
     # Return only the fields we allow editing (mask secrets partially)
     result = {}
@@ -476,8 +521,8 @@ def api_system_settings_get():
 @bp.route("/api/system-settings", methods=["POST"])
 @users_access_required
 def api_system_settings_set():
-    import json
-    from flask import current_app
+    """Save the system settings."""
+
     data = request.get_json(silent=True) or {}
     cfg = _load_system_config()
 

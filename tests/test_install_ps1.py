@@ -1,19 +1,29 @@
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tests/test_install_ps1.py
+# @brief:        Tests for windows/install-snmp-exporter.ps1 (step G.4.3).
+# @details:      Responsibilities: Check file encoding, PowerShell syntax and pinned versions.
+#                Main API: 13 test functions
+#                Side effects: runs external processes
+# @dependencies: stdlib only
+# @notes:        None.
+# =============================================================================
+
 """
-تست‌های `windows/install-snmp-exporter.ps1` (گام G.4.3).
+`windows/install-snmp-exporter.ps1` tests (step G.4.3).
 
-در این sandbox ویندوز نیست، `pwsh` هم نیست، و اجرای واقعی اسکریپت یا دانلود باینری
-ممنوع است. پس دو لایه داریم:
+In this sandbox there is no Windows, no pwsh, and no actual script execution or binary download
+It is forbidden. So we have two layers:
 
-  ۱) اگر `pwsh`/`powershell` روی PATH باشد: **parser check** رسمیِ خودِ PowerShell
-     (`System.Management.Automation.Language.Parser::ParseFile`) — بدون اجرای کد؛
-  ۲) همیشه (پس در CI و در این sandbox هم): چک متنیِ عناصری که نبودشان روی سرور مالک
-     یا خطای نصب می‌دهد یا بی‌سروصدا چیزی را که فاز G وعده داده انجام نمی‌دهد:
-     پینِ نسخه و URLها، bind address و قاعدهٔ فایروال، log rotation، exit codeها،
-     idempotent‌بودن، و BOM (بخوانده‌شدنِ کامنت‌های فارسی در Windows PowerShell 5.1).
+  1) If `pwsh`/`powershell` is on the PATH: PowerShell's own official **parser check**
+     (`System.Management.Automation.Language.Parser::ParseFile`) — no code execution;
+  2) Always (so in CI and in this sandbox as well): textual check of elements that are not on the owner's server
+     It either gives an installation error or quietly doesn't do what Phase G promises:
+     version pin and URLs, bind address and firewall rules, log rotation, exit codes,
+     Being idempotent, and BOM (reading Persian comments in Windows PowerShell 5.1).
 
-هیچ تستی اینجا skip نمی‌شود (قاعدهٔ فاز: گزارش باید «۰ skipped» بدهد) و هیچ‌جا
-اسکریپت **اجرا** نمی‌شود؛ لایهٔ ۱ وقتی pwsh نیست، همان ساختارِ متن را می‌سنجد.
+No tests are skipped here (phase rule: the report should give "0 skipped") and nowhere
+The script does not **execute**; Layer 1 measures the same text structure when not pwsh.
 """
 
 from __future__ import annotations
@@ -32,29 +42,31 @@ V3_ENV_VARS = ["SNMP_V3_USERNAME", "SNMP_V3_AUTH_PASSPHRASE", "SNMP_V3_PRIV_PASS
 
 
 def _src() -> str:
-    """متنِ کامل، با بلوکِ help (BOM حذف شده)."""
+    """Full text, with help block (BOM removed)."""
     return PS1.read_text(encoding="utf-8-sig")
 
 
 def _body() -> str:
-    """متنِ فایل بدونِ بلوکِ `<# … #>` اول — جایی که کدِ واقعی زندگی می‌کند."""
+    """The text of the file without the first `<# … #>` block — where the actual code lives."""
     return re.sub(r"^<#.*?#>\s*", "", _src(), count=1, flags=re.S)
 
 
 def _code_only() -> str:
-    """بدونِ خطوطِ تمام‌کامنت — برای چک‌های ساختاری."""
+    """Without all comment lines — for structural checks."""
     return "\n".join(l for l in _body().splitlines() if not l.strip().startswith("#"))
 
 
 def _shell():
+    """Helper: shell."""
     return shutil.which("pwsh") or shutil.which("powershell") or shutil.which("powershell.exe")
 
 
-# ── ۱) لایه‌ای که به PowerShell نیاز دارد ──────────────────────────────────────
+# ── 1) The layer that requires PowerShell
 def test_parser_check_with_powershell_or_structure_fallback():
+    """Verifies parser check with powershell or structure fallback."""
     body, shell = _body(), _shell()
     if shell is None:
-        # pwsh نیست ⇒ همان چیزی که در §۵ سند جایگزین شده است: ساختارِ متنِ سالم
+        # Not pwsh ⇒ Same thing as replaced in §5 of the document: Structure of healthy text
         assert body.count("{") == body.count("}"), "آکولادِ نامتوازن ⇒ ParserError"
         assert body.count('"') % 2 == 0, "تعدادِ \" فرد است ⇒ رشتهٔ بسته‌نشده"
         assert PS1.read_bytes()[:3] == b"\xef\xbb\xbf", "BOMِ لازمِ PowerShell 5.1 نیست"
@@ -67,8 +79,9 @@ def test_parser_check_with_powershell_or_structure_fallback():
     assert proc.returncode == 0, (proc.stdout + proc.stderr)[:4000]
 
 
-# ── ۲) رمزگشایی و ساختار فایل ────────────────────────────────────────────────
+# ── 2) Decoding and file structure
 def test_file_is_utf8_with_bom_and_no_crlf():
+    """Verifies file is utf 8 with bom and no crlf."""
     raw = PS1.read_bytes()
     assert raw[:3] == b"\xef\xbb\xbf", (
         "Windows PowerShell 5.1 بدونِ BOM فایلِ UTF-8 را با codepage سیستمی می‌خواند و "
@@ -81,6 +94,7 @@ def test_file_is_utf8_with_bom_and_no_crlf():
 
 
 def test_no_powershell7_only_syntax_and_braces_balance():
+    """Verifies no powershell 7 only syntax and braces balance."""
     code = _code_only()
     for pattern, why in [(r"\?\?", "null-coalescing فقط PS7"),
                          (r"(?<![-\w])\|\|(?!\|)", "or-else فقط PS7"),
@@ -94,8 +108,9 @@ def test_no_powershell7_only_syntax_and_braces_balance():
         "Set-ItemProperty پارامتر -Type ندارد؛ MultiString فقط با New-ItemProperty نوشته می‌شود")
 
 
-# ── ۳) پین‌ها و منابع دانلود ───────────────────────────────────────────────────
+# ── 3) Pins and download sources
 def test_pinned_versions_and_exact_release_urls():
+    """Verifies pinned versions and exact release urls."""
     body = _body()
     assert re.search(r'^\$SNMP_EXPORTER_VERSION = "0\.26\.0"$', body, re.M), "پینِ نسخهٔ exporter عوض شده"
     assert re.search(r'^\$NSSM_VERSION\s+= "2\.24"$', body, re.M), "پینِ NSSM عوض شده"
@@ -103,8 +118,8 @@ def test_pinned_versions_and_exact_release_urls():
             "v$SNMP_EXPORTER_VERSION/$ExporterZip") in body
     assert 'snmp_exporter-$SNMP_EXPORTER_VERSION.windows-amd64.zip' in body
     assert "https://nssm.cc/release/$NssmZip" in body and 'nssm-$NSSM_VERSION.zip' in body
-    # فقط دو میزبانِ بیرونی: منابعِ دانلود. `http://localhost` مجاز است چون پروبِ
-    # «سرویس بالا آمد؟» است و هیچ دانلودی از آن انجام نمی‌شود.
+    # Only two external hosts: download sources. ``http://localhost'' is allowed because the probe
+    # "Did the service come up?" and no download is made from it.
     hosts = set(re.findall(r"https?://([A-Za-z0-9.\-]+)", body))
     assert hosts == {"github.com", "nssm.cc", "localhost"}, f"میزبان‌های بیرونی: {sorted(hosts)}"
     for var in ("$ExporterUrl", "$NssmUrl"):
@@ -112,8 +127,9 @@ def test_pinned_versions_and_exact_release_urls():
         assert line, f"{var} باید یک URLِ https باشد"
 
 
-# ── ۴) سوئیچِ شبکه (تصمیم G.4.2) ─────────────────────────────────────────────
+# ── 4) Network switch (decision G.4.2)
 def test_switch_controls_listen_address_and_firewall_scope():
+    """Verifies switch controls listen address and firewall scope."""
     body = _body()
     assert re.search(r"^\s*\[switch\]\$AllowSubnetAccess,$", body, re.M), "سوئیچ نیست"
     assert '$ListenAddress  = "127.0.0.1:9116"' in body, "پیش‌فرض باید localhost باشد"
@@ -131,6 +147,7 @@ def test_switch_controls_listen_address_and_firewall_scope():
 
 
 def test_localhost_is_the_default_branch_of_the_switch():
+    """Verifies localhost is the default branch of the switch."""
     code = _code_only()
     at_switch = code.index("if ($AllowSubnetAccess)")
     at_subnet = code.index('"0.0.0.0:9116"')
@@ -139,8 +156,9 @@ def test_localhost_is_the_default_branch_of_the_switch():
     assert "} else {" in code[at_switch:at_local], "حالتِ پیش‌فرض باید در else باشد"
 
 
-# ── ۵) ادمین، مسیرها، exit codeها ─────────────────────────────────────────────
+# 5) Admin, routes, exit codes
 def test_admin_check_paths_and_exit_codes():
+    """Verifies admin check paths and exit codes."""
     body = _body()
     assert "[Security.Principal.WindowsIdentity]::GetCurrent()" in body
     assert "WindowsPrincipal" in body and "WindowsBuiltInRole]::Administrator" in body
@@ -157,8 +175,9 @@ def test_admin_check_paths_and_exit_codes():
     assert '"exit=" + $Code' in body, "کدِ خروج در لاگ ثبت نمی‌شود"
 
 
-# ── ۶) سرویس و چرخشِ لاگ ─────────────────────────────────────────────────────
+# ── 6) Service and log rotation
 def test_nssm_service_install_and_log_rotation():
+    """Verifies nssm service install and log rotation."""
     body = _body()
     for verb in ("install", "set", "start"):
         assert f'Invoke-Nssm @("{verb}"' in body, f"دستور nssm «{verb}» صدا زده نمی‌شود"
@@ -176,20 +195,22 @@ def test_nssm_service_install_and_log_rotation():
 
 
 def test_service_update_path_is_idempotent():
+    """Verifies service update path is idempotent."""
     body = _body()
     assert re.search(r"\$svc = Get-Service -Name \$ServiceName -ErrorAction SilentlyContinue", body), (
         "وجودِ سرویس چک نمی‌شود")
     assert "به‌روزرسانیِ تنظیمات" in body, "مسیرِ update (بدون install دوباره) نیست"
     assert "function Stop-ServiceQuiet" in body, "قبلِ بازنویسیِ باینری سرویس متوقف نمی‌شود"
     assert "Get-Command nssm.exe" in body, "nssmِ موجود در PATH دیده نمی‌شود"
-    # چهار مسیرِ «دوباره‌اجرا بی‌خطر باشد»: باینری، nssm، config، فایروال
+    # Four "safe to run again" paths: binary, nssm, config, firewall
     for phrase in ("از قبل نصب است ⇒ دانلود رد شد", "از قبل در مسیر نصب است ⇒ دانلود رد شد",
                    "عیناً همان فایلِ مخزن است ⇒ کپی نشد", "قاعدهٔ فایروال از قبل درست است"):
         assert phrase in body, f"مسیرِ idempotentِ «{phrase}» نیست"
 
 
-# ── ۷) config مخزن و فایروال ─────────────────────────────────────────────────
+# ── 7) Reservoir and firewall configuration
 def test_installs_repo_config_without_touching_it_when_identical():
+    """Verifies installs repo config without touching it when identical."""
     body = _body()
     assert re.search(r'\$SpecConfig   = Join-Path \$RepoRoot "monitoring\\snmp\.yml"', body), "منبعِ config"
     assert "Copy-Item -LiteralPath $SpecConfig -Destination $TargetConfig -Force" in body
@@ -200,6 +221,7 @@ def test_installs_repo_config_without_touching_it_when_identical():
 
 
 def test_firewall_rule_shape():
+    """Verifies firewall rule shape."""
     body = _body()
     m = re.search(r"New-NetFirewallRule[\s\S]{0,400}?\| Out-Null", body)
     assert m, "قاعدهٔ فایروال ساخته نمی‌شود"
@@ -212,8 +234,9 @@ def test_firewall_rule_shape():
         "شرطِ idempotencyِ قاعده سنجیده نمی‌شود")
 
 
-# ── ۸) رازها ─────────────────────────────────────────────────────────────────
+# 8) Secrets
 def test_v3_secrets_never_travel_on_the_command_line():
+    """Verifies v 3 secrets never travel on the command line."""
     body = _body()
     for var in V3_ENV_VARS:
         assert var in body, f"متغیر {var} به سرویس منتقل نمی‌شود"
@@ -227,6 +250,7 @@ def test_v3_secrets_never_travel_on_the_command_line():
 
 
 def test_verification_and_next_step_messages():
+    """Verifies verification and next step messages."""
     src, body = _src(), _body()
     assert "Invoke-WebRequest" in body and "StatusCode -eq 200" in body, "تأییدِ http انجام نمی‌شود"
     assert "Test-ServiceRunning" in body and 'Status -eq "Running"' in body, "وضعیتِ سرویس سنجیده نمی‌شود"

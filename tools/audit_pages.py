@@ -1,30 +1,40 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tools/audit_pages.py
+# @brief:        Page-compatibility audit that compares log pages with device counters.
+# @details:      Responsibilities: Audit each printer and render the results to console or Markdown.
+#                Main API: audit_printer(), render_console(), render_markdown(), main()
+#                Side effects: database access, file I/O
+# @dependencies: stdlib only
+# @notes:        Can be run directly as a script.
+# =============================================================================
+
 """
-ممیزی سازگاری لاگ صفحات با شمارنده‌ی دستگاه (tools/audit_pages.py)
+Log page compatibility audit with device counter (tools/audit_pages.py)
 
-منطق:
-  برای هر پرینتر، در یک بازه‌ی زمانی:
-    Δcounter = جمع دلتاهای مثبت شمارنده‌ی عمر دستگاه (از snapshotهای معتبر DB)
-    real     = جمع صفحات رویدادهای PRINT (غیرتخمینی) در همان بازه
-    est      = جمع صفحات رویدادهای تخمینی (PRINT_GAP / estimated)
+Logic:
+  For each printer, over a period of time:
+    Δcounter = sum of positive deltas of device life counter (from valid DB snapshots)
+    real = sum of pages of PRINT events (non-estimated) in the same interval
+    est = sum of pages of estimated events (PRINT_GAP / estimated)
     diff     = Δcounter - real - est
-  |diff| کوچک ⇒ دفترداری سازگار است؛ diff منفی بزرگ ⇒ لاگ بیش از واقعیت
-  (مانند باگ قدیمی بازگشت-شمارنده پس از ریبوت)؛ diff مثبت بزرگ ⇒ چاپ بدون لاگ.
+  |diff| Small ⇒ bookkeeping is consistent; Large negative diff ⇒ log more than reality
+  (like the old bug return-counter after reboot); Big positive diff ⇒ Logless printing.
 
-اجرا (از ریشه‌ی پروژه):
-    python tools/audit_pages.py                     # همه دستگاه‌ها، کل بازه
-    python tools/audit_pages.py --days 7            # بازه‌ی ۷ روز اخیر (نسبت به جدیدترین داده)
+Execution (from the root of the project):
+    python tools/audit_pages.py # All devices, entire range
+    python tools/audit_pages.py --days 7 # The last 7 days (relative to the most recent data)
     python tools/audit_pages.py --ip 172.16.25.36 --md audit.md
     python tools/audit_pages.py --json audit.json
 
-نکته: «شمارنده‌ی فعلی» = آخرین snapshot معتبر در DB (یعنی مقدار شمارنده‌ی
-دستگاه در آخرین پایش موفق؛ حداکثر POLL_INTERVAL قدمت دارد). برای خواندن زنده‌ی
-لحظه‌ای شمارنده از tools/diagnose_printer.py استفاده کنید.
+Note: "current counter" = the last valid snapshot in the DB (that is, the value of the counter
+The device was successful in the last monitoring; is at most POLL_INTERVAL old). To read live
+Use tools/diagnose_printer.py for a counter moment.
 
-مبنای دلتا (شکاف‌آگاه): آخرین snapshot معتبرِ *قبل* از شروع پنجره — چون رویدادهای
-داخل پنجره ممکن است حاصل حرکت شمارنده در زمانِ قبل از پنجره باشند (خاموشی چندساعته‌ی
-سرور → ثبت جبرانی در اولین پایش). شکاف‌های پایش >۱۵ دقیقه هم در گزارش دیده می‌شوند.
+Delta basis (gap aware): the last valid snapshot *before* the start of the window — such as events
+Inside the window may be the result of the counter movement in the time before the window (several hours shutdown).
+Server → compensatory registration in the first step). Tracking gaps >15 minutes are also seen in the report.
 """
 import argparse
 import datetime as _dt
@@ -33,19 +43,20 @@ import os
 import sqlite3
 import sys
 
-# امکان اجرا از هر پوشه‌ای
+# Ability to run from any folder
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-# آستانه‌ی سازگاری: حداکثر این مقدار اختلاف نادیده گرفته می‌شود
-TOL_ABS = 5           # صفحه (کف جبرانی برای نویز گردکردن لبه‌ی پنجره)
-TOL_RATIO = 0.005     # ۰٫۵٪ دلتای شمارنده
-EST_SHARE_WARN = 0.30 # هشدار اگر بیش از ۳۰٪ لاگ تخمینی باشد
-GAP_MIN_SECONDS = 900 # فاصله‌ی بیش از ۱۵ دقیقه بین دو خوانش = «شکاف پایش» (خاموشی سرور/قطعی)
+# Consistency Threshold: Maximum this amount of difference is ignored
+TOL_ABS = 5           # Screen (compensating floor for the noise of rounding the edge of the window)
+TOL_RATIO = 0.005     # 0.5% counter delta
+EST_SHARE_WARN = 0.30 # Warning if more than 30% of estimated log
+GAP_MIN_SECONDS = 900 # An interval of more than 15 minutes between two readings = "monitoring gap" (server shutdown/definite)
 
 PAGE_TYPES = ("PRINT", "PRINT_GAP")
 
 
 def _fmt(n):
+    """Format an integer with thousands separators."""
     try:
         return f"{int(n):,}"
     except Exception:
@@ -53,7 +64,7 @@ def _fmt(n):
 
 
 def _window_args(args, latest_ts):
-    """محاسبه‌ی t0/t1 از روی آرگومان‌ها. اگر چیزی داده نشده باشد → کل بازه."""
+    """Calculation of t0/t1 from the arguments. If nothing is given → whole interval."""
     t1 = None
     if args.until:
         t1 = args.until if "T" in args.until else args.until + "T23:59:59"
@@ -71,11 +82,11 @@ def _window_args(args, latest_ts):
 
 
 def audit_printer(conn, ip, t0=None, t1=None):
-    """ممیزی یک پرینتر در بازه [t0, t1]. خروجی: dict نتیجه."""
-    # مرجع شمارنده = همه‌ی خوانش‌هایی که print_total دارند — حتی سطرهایی که
-    # به‌خاطر ناخوانایی «سطح تونر» رد شده‌اند (valid=0). یافته‌ی واقعی ناوگان:
-    # دستگاه‌هایی مثل 25.34/0.45 که OID سطح تونرشان خوانده نمی‌شود ولی شمارنده‌ی
-    # صفحه در هر سطر سالم است؛ شرط valid=1 همان‌ها را بی‌دلیل ⛔ می‌کرد.
+    """Auditing a printer in the interval [t0, t1]. Output: result dict."""
+    # counter reference = all readings that have print_total — even rows that
+    # Rejected due to illegibility of "toner level" (valid=0). The real find of the fleet:
+    # devices such as 25.34/0.45 whose toner level OID is not read, but the counter
+    # The page is healthy on every line; The condition valid=1 would make them unnecessary.
     q_snap = (
         "SELECT timestamp, print_total, printer_model, valid FROM toner_snapshots_v2 "
         "WHERE printer_ip=? AND color='black' AND print_total IS NOT NULL"
@@ -88,13 +99,13 @@ def audit_printer(conn, ip, t0=None, t1=None):
     q_snap += " ORDER BY timestamp"
     snaps = conn.execute(q_snap, params).fetchall()
 
-    # ─── لنگر شکاف‌آگاه: مبنای دلتا = آخرین خوانش شمارنده *قبل* از شروع
-    # پنجره (با همان قاعده‌ی بالا: valid لازم نیست، فقط شمارنده). دلیل:
-    # رویدادهای داخل پنجره ممکن است حاصل حرکت شمارنده در زمان‌های *قبل* از
-    # پنجره باشند (مورد واقعی ۱۶ آگوست: سرور ۸۹ ساعت خاموش بود؛ در اولین خوانش
-    # یکشنبه، دلتای انباشته به‌عنوان PRINTِ داخل پنجره ثبت شد در حالی که مصرف
-    # شمارنده‌اش پیش از پنجره رخ داده بود — بدون این لنگر، ممیزی کاذب
-    # «لاگ بیش از شمارنده» گزارش می‌کرد). ───
+    # ─── Slot-aware anchor: delta basis = last counter reading *before* starting
+    # window (with the same rule as above: valid is not required, only the counter). Reason:
+    # Events inside the window may be the result of the counter moving at times *before*
+    # be windows (actual case Aug 16: server was down for 89 hours; on first read
+    # On Sunday, the cumulative delta was recorded as PRINT inside the window while the consumption
+    # His counter had occurred before the window — without this anchor, a false audit
+    # reported "log more than counter"). ───
     anchor = None
     if t0:
         anchor = conn.execute(
@@ -102,9 +113,10 @@ def audit_printer(conn, ip, t0=None, t1=None):
             "WHERE printer_ip=? AND color='black' AND print_total IS NOT NULL "
             "AND timestamp<? ORDER BY timestamp DESC LIMIT 1", (ip, t0)).fetchone()
 
-    # ─── شکاف‌های پایش (گپ‌های >GAP_MIN_SECONDS بین خوانش‌های معتبر) ───
+    # ─── monitoring gaps (>GAP_MIN_SECONDS gaps between valid readings) ───
     gaps = []
     def _gap(a, b):
+        """Return the number of seconds between two timestamps."""
         try:
             dt = (_dt.datetime.fromisoformat(str(b)[:19]) - _dt.datetime.fromisoformat(str(a)[:19])).total_seconds()
         except ValueError:
@@ -118,10 +130,10 @@ def audit_printer(conn, ip, t0=None, t1=None):
             gaps.append([str(snaps[i-1][0])[:19], str(snaps[i][0])[:19],
                          round(_gap(snaps[i-1][0], snaps[i][0]) / 3600, 1)])
 
-    # ─── دلتای شمارنده به روش قطعه‌ای (مصون از ریست/بازگشت NVRAM) ───
-    # بعد از افت شمارنده (ریبوت)، بازگشت تا «سطح قبل از افت» چاپ جدید حساب
-    # نمی‌شود (همان الگوی reboot-restore که کامیت COUNTER_RESTORED در کالکتور
-    # اصلاح کرد — اینجا همان معناشناسی در سمت ممیزی تکرار می‌شود).
+    # ─── Bitwise counter delta (protected from NVRAM reset/return) ───
+    # After the counter drops (reboot), it returns to the "pre-drop level" of the new account printout
+    # Can't (the same reboot-restore pattern as the COUNTER_RESTORED commit in the collector
+    # modified — here the same semantics is repeated on the audit side).
     counter_delta = 0
     resets = 0
     reset_ref = None
@@ -142,22 +154,22 @@ def audit_printer(conn, ip, t0=None, t1=None):
         last_total, last_ts = total, ts
         if prev is not None:
             if reset_ref is not None:
-                # ناحیه‌ی مرده‌ی بعد از افت: خوانش‌های پایین‌تر از مرجع (از جمله
-                # صفرهای مقطعی counter_decreased_anchor_reset) دور ریخته می‌شوند.
-                # به محض بازگشت شمارنده به نزدیکی سطح قبل از افت (بازگشت NVRAM
-                # پس از ریبوت) یا عبور از آن، از همان مرجع ادامه می‌دهیم.
+                # Post-fall dead zone: readings below reference (incl
+                # Intermittent zeros (counter_decreased_anchor_reset) are discarded.
+                # As soon as the counter returns to near the level before the drop (return to NVRAM
+                # After rebooting) or bypassing it, we continue from the same reference.
                 if total >= reset_ref - restore_tol:
                     counter_delta += max(0, total - reset_ref)
                     reset_ref = None
             elif total >= prev:
                 counter_delta += total - prev
             else:
-                resets += 1  # افت شمارنده (ریبوت واقعی/بازنویسی)
+                resets += 1  # counter drop (real reboot/rewrite)
                 reset_ref = prev
                 restore_tol = max(50, int(prev * 0.005))
         prev = total
 
-    # ─── جمع صفحات لاگ ───
+    # ─── Total log pages ───
     q_log = (
         "SELECT type, pages, timestamp, details FROM logs "
         "WHERE printer_ip=? AND type IN (?, ?) AND pages IS NOT NULL"
@@ -198,9 +210,9 @@ def audit_printer(conn, ip, t0=None, t1=None):
         verdict = "— بدون داده"
         ok = None
     elif len(snaps) == 0 or (len(snaps) < 2 and anchor is None):
-        # ⛔ بدون مرجع: هیچ خوانش شمارنده‌ای داخل پنجره نیست (حتی اگر لنگر
-        # قبل از پنجره هست، بدون نقطه‌ی داخل پنجره دلتای مصرفی ساخته نمی‌شود)،
-        # یا فقط یک نقطه و بدون لنگر → تطبیق ممکن نیست.
+        # ⛔ No Reference: There is no counter reading inside the window (even if the anchor
+        # It is before the window, it cannot be made without the point inside the window, the consumption delta)
+        # or only one point and no anchor → matching is not possible.
         verdict = "⛔ بدون مرجع (شمارنده‌ی قابل‌خواندن کافی نیست)"
         if est:
             verdict += f" · ⚠️ {_fmt(est)} صفحه تخمینی تاریخی"
@@ -217,7 +229,7 @@ def audit_printer(conn, ip, t0=None, t1=None):
     if ok and est_share > EST_SHARE_WARN:
         verdict += f" · ⚠️ سهم تخمین {est_share:.0%}"
         ok = None
-    # سلامت خوانش سطح تونر — جدا از راستی‌آزمایی صفحات (فقط اطلاع‌رسانی)
+    # Toner level reading health — separate from page verification (notification only)
     if snaps and toner_valid == 0:
         verdict += " · 🟡 سطح تونر ناخوانا"
     elif snaps and toner_valid * 2 < len(snaps):
@@ -247,23 +259,24 @@ def audit_printer(conn, ip, t0=None, t1=None):
     }
 
 
-_SERVER_PROBE_MIN_HITS = 20  # حداقل اسنپِ دستگاه‌های «خارج از خوشه» تا بگوییم سرور روشن بوده
+_SERVER_PROBE_MIN_HITS = 20  # At least the snap of the devices "outside the cluster" to say that the server is on
 
 
 def _cluster_gaps(results, min_fleet=5, bucket_hours=2, server_probe=None):
-    """شکاف‌هایی که لحظه‌ی پایانشان نزدیک هم است (±bucket_hours) و روی حداقل
-    min_fleet دستگاه دیده شوند → «شکاف همگانی».
-    بقیه → دستگاهی (احتمالاً دیر اضافه شدن دستگاه یا قطعی همان دستگاه).
+    """Gaps whose ending moments are close together (±bucket_hours) and on the minimum
+    min_fleet device to be seen → "public gap".
+    Others → device (probably late addition of the device or outage of the same device).
 
-    server_probe(start_iso, end_iso, member_ips) → True یعنی در آن بازه دستگاه‌های
-    دیگر اسنپ داشته‌اند (پس سرور روشن بوده و خاموشی سمتِ دستگاه‌هاست)؛ False یعنی
-    هیچ دستگاهی دیده نشده (خاموشی/قطعی خودِ سرور مانیتور). پنجره‌ی سنجش = از
-    میانه‌ی شروع‌ها تا میانه‌ی پایان‌های اعضا (نه گستره‌ی کامل، چون اعضای
-    زودقطع/دیروصل لبه‌ها را کش می‌دهند)."""
+    server_probe(start_iso, end_iso, member_ips) → True means in that range of devices
+    They have had another snap (so the server is on and the shutdown is on the side of the devices); False ie
+    No device seen (monitor server shut down/disabled itself). Measurement window = from
+    From the middle of the beginnings to the middle of the endings of the members (not the full range, such as members
+    early disconnection/late connection stretch the edges)."""
     all_gaps = [(g, r["ip"]) for r in results for g in r.get("monitor_gaps", [])]
     if not all_gaps:
         return [], []
     def _p(x):
+        """Parse the first 19 characters of a timestamp into a datetime."""
         return _dt.datetime.fromisoformat(str(x)[:19])
     remaining = sorted(all_gaps, key=lambda x: x[0][1])
     used = [False] * len(remaining)
@@ -300,6 +313,8 @@ def _cluster_gaps(results, min_fleet=5, bucket_hours=2, server_probe=None):
 
 
 def render_console(results, t0, t1, server_probe=None):
+    """Render the page-audit results as console text."""
+
     line = "═" * 118
     print(line)
     print("🧾 گزارش ممیزی سازگاری «لاگ صفحات» با «شمارنده‌ی دستگاه»")
@@ -328,7 +343,7 @@ def render_console(results, t0, t1, server_probe=None):
             for g in sorted(r["gap_events"], key=lambda x: -x["pages"])[:5]:
                 print(f"   [{str(g['ts'])[:19]}] {g['type']}: {_fmt(g['pages'])} صفحه")
 
-    # ─── شکاف‌های پایش سرور (خاموشی/قطعی) — خوشه‌بندی‌شده ───
+    # ─── Server monitoring slots (disabled/definite) — clustered ───
     fleet_gaps, dev_gaps = _cluster_gaps(results, server_probe=server_probe)
     if fleet_gaps:
         for fc in fleet_gaps:
@@ -355,6 +370,8 @@ def render_console(results, t0, t1, server_probe=None):
 
 
 def render_markdown(results, t0, t1, server_probe=None):
+    """Render the page-audit results as a Markdown report."""
+
     w0 = t0 or min((r["window"][0] for r in results if r["window"][0] != "—"), default="—")
     w1 = t1 or max((r["window"][1] for r in results if r["window"][1] != "—"), default="—")
     out = [
@@ -422,6 +439,8 @@ def render_markdown(results, t0, t1, server_probe=None):
 
 
 def main():
+    """Command-line entry point of the page audit."""
+
     ap = argparse.ArgumentParser(description="ممیزی سازگاری لاگ صفحات با شمارنده‌ی دستگاه")
     ap.add_argument("--db", default="logs.db", help="مسیر فایل دیتابیس (پیش‌فرض: logs.db)")
     ap.add_argument("--ip", action="append", help="فقط این پرینتر (قابل تکرار)")
@@ -452,6 +471,7 @@ def main():
         results = [audit_printer(conn, ip, t0, t1) for ip in ips]
 
         def _server_probe(a, b, excl_ips):
+            """Count server-side snapshot rows in a time range, excluding the given IPs."""
             q = ("SELECT COUNT(*) FROM toner_snapshots_v2 WHERE timestamp>=? AND timestamp<=?"
                  + (" AND printer_ip NOT IN (%s)" % ",".join("?" * len(excl_ips)) if excl_ips else ""))
             return conn.execute(q, [str(a), str(b), *excl_ips]).fetchone()[0] >= _SERVER_PROBE_MIN_HITS
@@ -469,7 +489,7 @@ def main():
             json.dump(results, f, ensure_ascii=False, indent=2, default=str)
         print(f"💾 خروجی JSON: {args.json_out}")
 
-    # کد خروج: ۰ اگر همه سازگار، ۱ اگر حداقل یک ناسازگاری جدی هست
+    # Exit code: 0 if all are compatible, 1 if there is at least one serious incompatibility
     sys.exit(1 if any(r["ok"] is False for r in results) else 0)
 
 

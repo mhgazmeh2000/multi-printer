@@ -595,7 +595,8 @@ def bootstrap_dashboard_tables(conn: Any) -> None:
             config TEXT,
             grid_pos TEXT,
             created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-            updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+            FOREIGN KEY (dashboard_id) REFERENCES dashboards(id) ON DELETE CASCADE
         )
     ''')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_panels_dashboard_id ON panels(dashboard_id)')
@@ -608,7 +609,8 @@ def bootstrap_dashboard_tables(conn: Any) -> None:
             user_id INTEGER,
             group_id TEXT,
             role TEXT NOT NULL,
-            created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+            FOREIGN KEY (dashboard_id) REFERENCES dashboards(id) ON DELETE CASCADE
         )
     ''')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_dash_perms_dash_id ON dashboard_permissions(dashboard_id)')

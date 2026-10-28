@@ -1,4 +1,12 @@
 @echo off
+REM ============================================================
+REM @file:         migrate.bat
+REM @brief:        Windows wrapper that backs up logs.db and migrates its data to PostgreSQL.
+REM @details:      Responsibilities: Choose a Python interpreter, back up logs.db, read PG_DSN from .env, run a dry run and then the migration.
+REM @dependencies: python, tools/migrate_sqlite_to_pg.py, .env PG_DSN, PostgreSQL binaries
+REM @notes:        Writes migration_error.txt when the connection test fails. Expects the PostgreSQL setup from setup.bat to be done first.
+REM ============================================================
+
 setlocal EnableDelayedExpansion
 
 chcp 65001 >nul
@@ -16,14 +24,14 @@ set "ERROR_LOG=migration_error.txt"
 set "SUCCESS_LOG=migration_success.txt"
 set "TEMP_LOG=~migration_temp.log"
 
-:: اضافه کردن باینری‌های درایو E به PATH
+:: Add E drive binaries to PATH
 if exist "E:\pgsql\binaries\bin" set "PATH=E:\pgsql\binaries\bin;!PATH!"
 if exist "E:\pgsql\binaries" set "PATH=E:\pgsql\binaries;!PATH!"
 
 if exist "!ERROR_LOG!" del /f /q "!ERROR_LOG!" >nul 2>&1
 if exist "!TEMP_LOG!" del /f /q "!TEMP_LOG!" >nul 2>&1
 
-:: ۱. انتخاب مفسر پایتون
+:: 1. Choosing a Python interpreter
 set "PY_CMD="
 if exist ".venv\Scripts\python.exe" set "PY_CMD=.venv\Scripts\python.exe"
 if not defined PY_CMD where python >nul 2>&1 && set "PY_CMD=python"
@@ -35,7 +43,7 @@ if not defined PY_CMD (
     pause & exit /b 1
 )
 
-:: ۲. بررسی وجود فایل پایگاه‌داده مبدأ (logs.db)
+:: 2. Checking the existence of the source database file logs.db
 if not exist "logs.db" (
     echo [خطا] فایل دیتابیس logs.db در این پوشه یافت نشد. > "!ERROR_LOG!"
     echo  [خطا] فایل logs.db پیدا نشد!
@@ -45,7 +53,7 @@ if not exist "logs.db" (
 for %%F in (logs.db) do set "DB_SIZE=%%~zF"
 echo  [1/5] دیتابیس مبدأ: logs.db (حجم: !DB_SIZE! بایت)
 
-:: ۳. تهیه نسخه پشتیبان در درایو E
+:: 3. Backup on drive E
 echo.
 echo  [2/5] تهیه نسخه پشتیبان از logs.db...
 set "BACKUP_DIR="
@@ -67,7 +75,7 @@ if errorlevel 1 (
     echo  [OK] نسخه پشتیبان ذخیره شد در: !BACKUP_FILE!
 )
 
-:: ۴. خواندن متغیر PG_DSN از .env
+:: 4. Read PG_DSN variable from.env
 echo.
 echo  [3/5] بررسی اتصال به PostgreSQL...
 set "PG_DSN="
@@ -81,7 +89,7 @@ if not defined PG_DSN (
     set "PG_DSN=postgresql://postgres:123456@127.0.0.1:5432/printguard"
 )
 
-:: تست اتصال پایتون به دیتابیس مقصد
+:: Python connection test to the destination database
 "!PY_CMD!" -c "import psycopg; conn=psycopg.connect('!PG_DSN!', connect_timeout=3); conn.close()" > "!TEMP_LOG!" 2>&1
 if errorlevel 1 (
     echo [خطا] ارتباط با دیتابیس PostgreSQL برقرار نشد. > "!ERROR_LOG!"
@@ -91,7 +99,7 @@ if errorlevel 1 (
 )
 echo  [OK] اتصال به پایگاه‌داده printguard تأیید شد.
 
-:: ۵. اجرای آزمایشی (Dry-Run)
+:: 5. Dry-Run
 echo.
 echo  [4/5] ارزیابی اولیه داده‌ها (Dry-Run)...
 "!PY_CMD!" tools\migrate_sqlite_to_pg.py --source logs.db --target "!PG_DSN!" --dry-run > "!TEMP_LOG!" 2>&1
@@ -105,7 +113,7 @@ if not "!DRY_EXIT!"=="3" if not "!DRY_EXIT!"=="0" (
 )
 echo  [OK] ساختار جداول آماده انتقال است.
 
-:: ۶. انتقال قطعی داده‌ها با تصحیح ساعت به UTC Z
+:: 6. Definite transfer of data with time correction to UTC Z
 echo.
 echo  [5/5] در حال انتقال قطعی داده‌ها و همگام‌سازی توالی‌ها...
 echo        (تبدیل خودکار ساعت محلی تهران به UTC Z و محاسبه چک‌سام)
@@ -127,7 +135,7 @@ if errorlevel 1 (
 type "!TEMP_LOG!" > "!SUCCESS_LOG!"
 del /f /q "!TEMP_LOG!" >nul 2>&1
 
-:: تنظیم DB_BACKEND در .env
+:: Setting DB_BACKEND in.env
 powershell -NoProfile -Command "(Get-Content .env) -replace '^DB_BACKEND=.*', 'DB_BACKEND=postgresql' | Set-Content .env"
 
 echo.

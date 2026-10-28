@@ -1,30 +1,41 @@
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tests/test_metrics_pg.py
+# @brief:        Tests for the printer_name label on /metrics on both backends (E.4.9b).
+# @details:      Responsibilities: Check label output and query shapes.
+#                Main API: _MetricsAppMixin, SqliteMetricsSeriesTests, PostgresMetricsTests,
+#                QueryShapeTests
+#                Side effects: database access
+# @dependencies: internal: core, core.database, core.db, web | external: psycopg, pytest
+# @notes:        Can be run directly as a script.
+# =============================================================================
+
 """
-تست‌های E.4.9b — برچسب ``printer_name`` در ``/metrics`` روی هر دو backend.
+E.4.9b tests — ``printer_name'' tag in ``/metrics'' on both backends.
 
-مسئله
+the problem
 -----
-کوئری ``cartridge_changes_total`` روی ``logs`` گروه‌بندی
-``(printer_ip, detection, color)`` دارد و ``printer_name`` را بدون ``GROUP BY``
-برمی‌گرداند. SQLite این را می‌پذیرد (مقدارش غیرقطعی است: «هر ردیفی که افتاد»)،
-PostgreSQL نه: خطای **42803** «column logs.printer_name must appear in the
-GROUP BY clause or be used in an aggregate function» (سنجیده‌شده، E.4.9 روی
-PG ۱۶؛ ``/metrics`` آن‌جا ۲۰۰ برمی‌گرداند ولی با کامنت
-``# ERROR generating metrics`` و بدون نمونه — یعنی شکست بی‌صدا).
+Query ``cartridge_changes_total'' on ``logs'' grouping
+has ``(printer_ip, detection, color)'' and ``printer_name'' without ``GROUP BY''
+returns SQLite accepts this (its value is indeterminate: "any row dropped"),
+PostgreSQL not: error **42803** "column logs.printer_name must appear in the
+GROUP BY clause or be used in an aggregate function" (measured, E.4.9 on
+PG 16; ``/metrics'' returns 200 there, but with comments
+``# ERROR generating metrics'' and no examples — that is, silent failure).
 
-تصمیم (مالک، E.4.9b)
+Decision (Owner, E.4.9b)
 --------------------
-``MAX(printer_name) AS printer_name`` با ``GROUP BY`` بدون تغییر، تا **تعداد سری
-امروز ثابت بماند**؛ افزودن ``printer_name`` به ``GROUP BY`` اگر پرینتری تغییر نام
-داده باشد سری اضافه می‌کند. مزیت جانبی: مقدار برچسب قطعی می‌شود. بدهی باقی‌مانده
-(«نام تاریخی» به‌جای «نام زنده») در ``docs/tech-debt.md`` به‌عنوان TD-010 ثبت شده.
+``MAX(printer_name) AS printer_name'' with ``GROUP BY'' unchanged, up to **number of series
+Stay constant today**; Add ``printer_name'' to ``GROUP BY'' if the printer is renamed
+It adds series. Side benefit: The amount of the label becomes definitive. outstanding debt
+('historical name' instead of 'living name') is registered in ``docs/tech-debt.md'' as TD-010.
 
-چه چیزی قفل می‌شود
+What is locked?
 ------------------
-۱) شاهد معکوس: همان کوئری **بدون** ``MAX`` روی PG واقعی ``DatabaseError`` می‌دهد؛
-۲) شمارش سری‌ها روی هر دو backend یکسان است (برابر تعداد متمایزهای
-   ``(printer_ip, detection, color)``) — یعنی تصمیم، رفتار مصرف‌کننده را عوض نکرد؛
-۳) مقدار برچسب با دادهٔ نام‌دار متفاوت قطعی است (``MAX``، نه «هر ردیفی که افتاد»).
+1) Reverse witness: the same query **without** ``MAX'' on real PG gives ``DatabaseError'';
+2) The number of series on both backends is the same (equal to the number of distinct
+   ``(printer_ip, detection, color)'') — that is, the decision did not change the consumer's behavior;
+3) The tag value is definite with different named data (``MAX'', not ``every row dropped'').
 """
 import os
 import tempfile
@@ -38,9 +49,9 @@ from core.db import ENV_PG_DSN, DatabaseError, connect_postgres
 
 ROOT = Path(__file__).resolve().parent.parent
 IP = "203.0.113.77"
-#: همان کوئری امروز **منهای ``MAX(...)``** — برای شاهد معکوس. قطعهٔ ``detection``
-#: عمداً از هِلپر cross-backend می‌آید (E.4.9)، تا تنها تفاوتِ کوئری همان
-#: ``printer_name`` بدون تابع تجمعی باشد و خطای مشاهده‌شده دقیقاً 42803 شود.
+#: Same query as today **minus ``MAX(...)''** — for reverse witness. ``detection'' fragment
+#: intentionally comes from the cross-backend helper (E.4.9), until the only difference is the same query
+#: ``printer_name'' without cumulative function and the observed error becomes exactly 42803.
 RAW_SQL_TEMPLATE = """
     SELECT printer_ip, printer_name,
            {detection} as detection,
@@ -53,7 +64,7 @@ RAW_SQL_TEMPLATE = """
 
 
 def _pg_target():
-    """``(dsn, None)`` اگر PG در دسترس باشد، وگرنه ``(None, دلیلِ skip)``."""
+    """``(dsn, None)'' if PG is available, otherwise ``(None, skip reason)''."""
     dsn = (os.getenv(ENV_PG_DSN, "") or "").strip()
     if not dsn:
         return None, (f"{ENV_PG_DSN} ست نشده است ⇒ تست‌های PGِ زنده‌ی این فایل اجرا "
@@ -73,16 +84,16 @@ _PG_DSN, _PG_SKIP = _pg_target()
 
 def _seed_two_names(ip=IP):
     """
-    دو رخداد ``CARTRIDGE_CHANGED`` با همان ``(ip, detection, color)`` ولی دو نام
-    متفاوت می‌سازد (شبیه‌سازی تغییر نام پرینتر بین دو رخداد).
+    Two ``CARTRIDGE_CHANGED'' events with the same ``(ip, detection, color)'' but two names
+    Makes it different (simulating changing the printer name between two events).
 
     Returns:
-        ``(نام کوچک‌تر, نام بزرگ‌تر)`` طبق ترتیب رشته‌ای.
+        ``(smaller name, larger name)'' according to string order.
     """
     from core import store
     from core.database import add_event
 
-    names = ["Zeta", "Alpha"]                    # MAX ⇒ "Zeta" (ترتیب ASCII)
+    names = ["Zeta", "Alpha"]                    # MAX ⇒ "Zeta" (ASCII format)
     for i, name in enumerate(names):
         with mock.patch.object(store, "PRINTERS", [{"ip": ip, "name": name}]):
             add_event(ip, "CARTRIDGE_CHANGED",
@@ -91,7 +102,7 @@ def _seed_two_names(ip=IP):
 
 
 def _parse_series(body):
-    """سری‌های ``cartridge_changes_total`` را از بدنهٔ Prometheus بیرون می‌کشد."""
+    """Extracts the ``cartridge_changes_total'' series from the Prometheus body."""
     series = []
     for line in body.splitlines():
         if line.startswith("cartridge_changes_total{") and "printer_ip=" in line:
@@ -106,9 +117,10 @@ def _parse_series(body):
 
 
 class _MetricsAppMixin:
-    """اپلیکیشن Flask واقعی + کلاینت تست (بدون توکن: ``METRICS_TOKEN`` خالی)."""
+    """Real Flask app + test client (no token: empty ``METRICS_TOKEN'')."""
 
     def _make_client(self):
+        """Helper: make client."""
         from core.database import init_db
         from web import create_app
         init_db()
@@ -120,30 +132,33 @@ class _MetricsAppMixin:
         self.addCleanup(patcher.stop)
 
     def _get_metrics(self):
+        """Helper: get metrics."""
         response = self.client.get("/metrics")
         self.assertEqual(response.status_code, 200)
         return response.get_data(as_text=True)
 
 
 # ─────────────────────────────────────────────────────────────────────
-# A) SQLite — تعداد سری و مقدار برچسب
+# A) SQLite — serial number and tag value
 # ─────────────────────────────────────────────────────────────────────
-# marker `sqlite_only`: این تست SQL/اسکیمای مختص SQLite می‌نویسد ⇒ زیر
-# `DB_BACKEND=postgresql` با auto-skip رد می‌شود (tests/conftest.py، docs/phase-e-plan.md §۵.۳).
+# marker `sqlite_only`: This test writes SQLite/schema specific to SQLite ⇒ below
+# `DB_BACKEND=postgresql` is skipped with auto-skip (tests/conftest.py, docs/phase-e-plan.md §5.3).
 @pytest.mark.sqlite_only
 class SqliteMetricsSeriesTests(_MetricsAppMixin, unittest.TestCase):
-    """روی SQLite: شمارش سری‌ها همان تعریف ``GROUP BY`` است و مقدار قطعی شده."""
+    """On SQLite: the series count is the same as the ``GROUP BY'' definition and the value is fixed."""
 
     def setUp(self):
+        """Prepare the fixtures that each test in this class uses."""
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.old_cwd = os.getcwd()
-        os.chdir(self.tmp.name)                  # DB_PATH نسبی ⇒ DB موقت
+        os.chdir(self.tmp.name)                  # Relative DB_PATH ⇒ Temporary DB
         self.addCleanup(lambda: os.chdir(self.old_cwd))
         self._make_client()
         self.expected_name = _seed_two_names()
 
     def _distinct_groups(self, ip=IP):
+        """Helper: distinct groups."""
         from core.database import db_connection
         with db_connection() as conn:
             rows = conn.execute(
@@ -153,14 +168,14 @@ class SqliteMetricsSeriesTests(_MetricsAppMixin, unittest.TestCase):
         return len(rows)
 
     def test_series_count_equals_distinct_groups(self):
-        """تعداد سری = تعداد متمایزهای ``(ip, detection, color)`` (تصمیم: ثابت بماند)."""
+        """Number of series = number of distinct ``(ip, detection, color)'' (decision: keep constant)."""
         series = [s for s, _ in _parse_series(self._get_metrics())
                   if s.get("printer_ip") == IP]
         self.assertEqual(len(series), 1, series)
         self.assertEqual(len(series), self._distinct_groups())
 
     def test_label_uses_max_printer_name(self):
-        """برچسب = ``MAX(نام‌ها)`` ⇒ قطعی، نه «هر ردیفی که افتاد»."""
+        """label = ``MAX(names)'' ⇒ deterministic, not "every row that falls"."""
         series = [s for s, _ in _parse_series(self._get_metrics())
                   if s.get("printer_ip") == IP]
         self.assertEqual(series[0]["printer_name"], self.expected_name)
@@ -168,20 +183,21 @@ class SqliteMetricsSeriesTests(_MetricsAppMixin, unittest.TestCase):
         self.assertEqual(series[0]["color"], "black")
 
     def test_counter_value_counts_all_events(self):
-        """هر دو رخداد در ``count`` همان یک سری شمرده می‌شوند."""
+        """Both occurrences are counted in ``count'' of the same series."""
         values = [v for s, v in _parse_series(self._get_metrics())
                   if s.get("printer_ip") == IP]
         self.assertEqual(values, [2.0])
 
 
 # ─────────────────────────────────────────────────────────────────────
-# B) PostgreSQL واقعی
+# B) Real PostgreSQL
 # ─────────────────────────────────────────────────────────────────────
 @unittest.skipUnless(_PG_DSN, _PG_SKIP or "")
 class PostgresMetricsTests(_MetricsAppMixin, unittest.TestCase):
-    """روی PG ۱۶ واقعی: بدون ``GroupingError``، با همان تعداد سری و همان برچسب."""
+    """On real PG 16: no ``GroupingError'', with the same number of series and the same label."""
 
     def setUp(self):
+        """Prepare the fixtures that each test in this class uses."""
         if not _PG_DSN:
             self.skipTest(_PG_SKIP or "PG در دسترس نیست")
         self.env = mock.patch.dict(os.environ, {
@@ -193,6 +209,7 @@ class PostgresMetricsTests(_MetricsAppMixin, unittest.TestCase):
         self.expected_name = _seed_two_names()
 
     def _cleanup_logs(self, ip=IP):
+        """Helper: cleanup logs."""
         conn = connect_postgres(_PG_DSN)
         try:
             conn.rollback()
@@ -202,15 +219,16 @@ class PostgresMetricsTests(_MetricsAppMixin, unittest.TestCase):
             conn.close()
 
     def tearDown(self):
+        """Release the resources that each test in this class created."""
         self._cleanup_logs()
 
     def test_metrics_has_no_generation_error(self):
-        """بدنه نباید کامنت ``# ERROR generating metrics`` داشته باشد (شکست بی‌صدای قبلی)."""
+        """The body should not have the comment ``# ERROR generating metrics'' (previous silent failure)."""
         body = self._get_metrics()
         self.assertNotIn("# ERROR generating metrics", body)
 
     def test_series_matches_sqlite_semantics(self):
-        """یک سری با مقدار ۲ و برچسب ``MAX(نام)`` — همان چیزی که SQLite می‌دهد."""
+        """A string with a value of 2 and a label of ``MAX(name)'' — the same as SQLite gives."""
         series = [(s, v) for s, v in _parse_series(self._get_metrics())
                   if s.get("printer_ip") == IP]
         self.assertEqual(len(series), 1, series)
@@ -220,7 +238,7 @@ class PostgresMetricsTests(_MetricsAppMixin, unittest.TestCase):
         self.assertEqual(value, 2.0)
 
     def test_raw_sql_still_fails_on_pg(self):
-        """شاهد معکوس: همان کوئری **بدون** ``MAX`` روی PG خطای 42803 می‌دهد."""
+        """Reverse witness: the same query **without** ``MAX'' on PG gives error 42803."""
         conn = connect_postgres(_PG_DSN)
         self.addCleanup(conn.close)
         raw_sql = RAW_SQL_TEMPLATE.format(
@@ -232,19 +250,21 @@ class PostgresMetricsTests(_MetricsAppMixin, unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────
-# C) قفل روی متن کوئری (بدون DB)
+# C) lock on the query text (without DB)
 # ─────────────────────────────────────────────────────────────────────
 class QueryShapeTests(unittest.TestCase):
-    """``printer_name`` باید در قالب ``MAX(...)`` بیاید و ``GROUP BY`` دست‌نخورده بماند."""
+    """``printer_name'' must come in the form ``MAX(...)'' and leave ``GROUP BY'' intact."""
 
     def setUp(self):
+        """Prepare the fixtures that each test in this class uses."""
         self.source = (ROOT / "web" / "routes" / "metrics.py").read_text(encoding="utf-8")
 
     def test_printer_name_is_aggregated(self):
+        """Verifies printer name is aggregated."""
         self.assertIn("MAX(printer_name) AS printer_name", self.source)
 
     def test_group_by_columns_unchanged(self):
-        """``printer_name`` به ``GROUP BY`` اضافه **نشده** (تصمیم: حفظ تعداد سری)."""
+        """``printer_name'' **not** added to ``GROUP BY'' (decision: preserve serial number)."""
         self.assertIn("GROUP BY printer_ip, detection, color", self.source)
         self.assertNotIn("GROUP BY printer_ip, printer_name", self.source)
 

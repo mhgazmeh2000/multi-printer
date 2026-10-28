@@ -1,20 +1,28 @@
 @echo off
+REM ============================================================
+REM @file:         tools/install-weekly-audit.bat
+REM @brief:        Installs a weekly Scheduled Task that audits log and counter consistency.
+REM @details:      Responsibilities: Register the Saturday 08:00 audit and append its output to logs\audit-history.log.
+REM @dependencies: schtasks, tools/audit_pages.py
+REM @notes:        Requires administrator rights. Run the audit manually with schtasks /Run /TN PrintGuardWeeklyAudit.
+REM ============================================================
+
 chcp 65001 >nul
 rem =====================================================================
-rem  install-weekly-audit.bat — ممیزی هفتگی خودکار سازگاری لاگ/شمارنده
+rem  install-weekly-audit.bat — Automatic weekly log/counter consistency audit
 rem
-rem  یک Scheduled Task می‌سازد که هر شنبه ساعت ۸ صبح ممیزی ۷روز اخیر را
-rem  اجرا کند و خروجی را در logs\audit-history.log الحاق نماید.
+rem  Creates a Scheduled Task that audits the last 7 days every Saturday at 8 AM
+rem  Run and append the output to logs\audit-history.log.
 rem
-rem  اجرا: روی فایل راست‌کلیک → Run as administrator
-rem  اجرای دستی ممیزی: schtasks /Run /TN "PrintGuardWeeklyAudit"
-rem  حذف تسک:        schtasks /Delete /TN "PrintGuardWeeklyAudit" /F
+rem  Run: right click on the file → Run as administrator
+rem  Run the audit manually: schtasks /Run /TN PrintGuardWeeklyAudit
+rem  Delete task: schtasks /Delete /TN PrintGuardWeeklyAudit /F
 rem =====================================================================
 setlocal
 
 set "APP_DIR=%~dp0"
 set "APP_DIR=%APP_DIR:~0,-1%"
-rem اگر اسکریپت داخل tools\ است، ریشه‌ی برنامه = والد آن است
+rem If the script is inside tools\, the program root = its parent
 if not exist "%APP_DIR%\run.py" if exist "%APP_DIR%\..\run.py" set "APP_DIR=%APP_DIR%\.."
 if not exist "%APP_DIR%\tools\audit_pages.py" (
   echo [FAIL] این فایل باید کنار tools\audit_pages.py ^(ریشه‌ی برنامه^) باشد

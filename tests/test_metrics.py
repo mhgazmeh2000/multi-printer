@@ -1,23 +1,33 @@
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tests/test_metrics.py
+# @brief:        Tests for the Prometheus-compatible /metrics endpoint.
+# @details:      Responsibilities: Check metric names and values.
+#                Main API: MetricsEndpointTests
+#                Side effects: none at import time
+# @dependencies: internal: core, core.database, web
+# @notes:        Can be run directly as a script.
+# =============================================================================
+
 """
-تست‌های endpoint /metrics سازگار با Prometheus.
+Endpoint / metrics tests compatible with Prometheus.
 
-⚠ شکل داده: fixtureها با **شکل واقعی خروجی ``collect_enhanced``** ساخته شده‌اند
-(همان چیزی که در golden fixtureهای ``tests/fixtures/golden/enhanced_*.json`` ثبت
-شده است):
-    - ``online``  بولی است (نه ``status`` رشته‌ای)
-    - شمارنده‌ها زیر ``counters`` هستند: ``counters.total`` (نه ``print_total``)
-    - ``toners`` یک دیکشنری ``{color: {"level": …, "name": …}}`` است (نه لیست)
+⚠ Data shape: Fixtures are built with the actual shape of ``collect_enhanced'' output
+(The same as recorded in golden fixtures ``tests/fixtures/golden/enhanced_*.json'')
+has been):
+    - ``online'' is boolean (not string ``status'')
+    - Counters are under ``counters'': ``counters.total'' (not ``print_total'')
+    - ``toners'' is a ``{color: {"level": …, "name": …}}" dictionary (not a list)
 
-پوشش (۸ تست):
-  ۱) فرمت خروجی (Content-Type, HELP/TYPE) + نبود خط خطا با داده‌ی واقعی
-  ۲) خالی بودن در صورت نبود رویداد
-  ۳) شمارنده cartridge_changes_total با برچسب‌های صحیح
-  ۴) گیج printer_online (آنلاین/آفلاین)
-  ۵) گیج printer_toner_level (چند رنگ، از دیکشنری واقعی)
-  ۶) scrape_timestamp_seconds
-  ۷) گیج printer_total_pages (از counters.total)
-  ۸) گیج printer_cartridge_chip_id_known
+Coverage (8 tests):
+  1) Output format (Content-Type, HELP/TYPE) + no error line with real data
+  2) Being empty if there is no event
+  3) cartridge_changes_total counter with correct labels
+  4) printer_online gauge (online/offline)
+  5) printer_toner_level gauge (multicolor, from real dictionary)
+  6) scrape_timestamp_seconds
+  7) gauge printer_total_pages (from counters.total)
+  8) gauge printer_cartridge_chip_id_known
 """
 import os
 import tempfile
@@ -54,7 +64,7 @@ def _parse_metrics(body: str) -> dict:
 
 def _live_printer(*, online=True, total=None, toners=None, cartridge_ids=None,
                   signal_quality=None, brand="hp"):
-    """داده‌ی زنده به **شکل واقعی** خروجی ``collect_enhanced``."""
+    """Live data in **real form** output of ``collect_enhanced''."""
     data = {
         "online": bool(online),
         "brand": brand,
@@ -74,7 +84,7 @@ def _live_printer(*, online=True, total=None, toners=None, cartridge_ids=None,
     return data
 
 
-# نمونه‌ی واقعی Toner (کلید = رنگ، مقدار = دیکشنری)
+# Actual example of Toner (key = color, value = dictionary)
 _REAL_TONERS = {
     "black": {"level": 75, "status": "ok", "name": "Black Cartridge HP CF287A"},
     "cyan": {"level": 40, "status": "low", "name": "Cyan Cartridge HP CF031A"},
@@ -84,9 +94,10 @@ _REAL_TONERS = {
 
 
 class MetricsEndpointTests(unittest.TestCase):
-    """تست endpoint /metrics با Flask test client (بدون توکن: رفتار پیش‌فرض)."""
+    """Testing endpoint /metrics with Flask test client (no token: default behavior)."""
 
     def setUp(self):
+        """Prepare the fixtures that each test in this class uses."""
         self.tmp = tempfile.TemporaryDirectory()
         self.old_cwd = os.getcwd()
         os.chdir(self.tmp.name)
@@ -96,6 +107,7 @@ class MetricsEndpointTests(unittest.TestCase):
         store.PRINTERS = []
 
     def tearDown(self):
+        """Release the resources that each test in this class created."""
         store._prev._cache.clear()
         store.printer_data = {}
         store.PRINTERS = []
@@ -103,18 +115,19 @@ class MetricsEndpointTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def _client(self):
+        """Helper: client."""
         from web import create_app
         app = create_app()
         app.config["TESTING"] = True
         app.config["LOGIN_DISABLED"] = True
-        # خروجی /metrics نباید به تصادفِ وجود METRICS_TOKEN در محیط گره بخورد
+        # The output of /metrics should not be tied to the coincidence of METRICS_TOKEN in the environment
         os.environ.pop("METRICS_TOKEN", None)
         return app.test_client()
 
-    # ─── ۱) فرمت خروجی ───
+    # ─── 1) Output format ───
     def test_metrics_content_type_and_format(self):
-        """Content-Type باید text/plain باشد، خطوط HELP/TYPE داشته باشد و با
-        داده‌ی واقعی هیچ خط خطایی تولید نشود (باگ قبلی: 'str' has no attribute 'get')."""
+        """Content-Type should be text/plain, have lines HELP/TYPE and with
+        Real data should not generate any error line (previous bug: 'str' has no attribute 'get')."""
         store.PRINTERS = [{"ip": "10.1.1.1", "name": "HP M527"}]
         store.printer_data = {"10.1.1.1": _live_printer(total=50000, toners=_REAL_TONERS)}
 
@@ -131,17 +144,17 @@ class MetricsEndpointTests(unittest.TestCase):
         self.assertNotIn("# ERROR generating metrics", body,
                          "با شکل واقعی داده نباید خطا تولید شود")
 
-    # ─── ۲) خالی بودن بدون داده ───
+    # ─── 2) Being empty without data ───
     def test_metrics_empty_when_no_events(self):
-        """بدون رویداد CARTRIDGE_CHANGED، شمارنده وجود ندارد."""
+        """Without the CARTRIDGE_CHANGED event, there is no counter."""
         client = self._client()
         resp = client.get("/metrics")
         body = resp.data.decode("utf-8")
         self.assertNotIn("cartridge_changes_total{", body)
 
-    # ─── ۳) شمارنده cartridge_changes_total ───
+    # ─── 3) counter cartridge_changes_total ───
     def test_cartridge_changes_total_counter(self):
-        """رویداد CARTRIDGE_CHANGED باید شمارنده را افزایش دهد."""
+        """The CARTRIDGE_CHANGED event should increment the counter."""
         add_event("10.1.1.1", "CARTRIDGE_CHANGED", {
             "message": "test change",
             "severity": "info",
@@ -174,7 +187,7 @@ class MetricsEndpointTests(unittest.TestCase):
         cc = metrics.get("cartridge_changes_total", [])
         self.assertGreater(len(cc), 0, "cartridge_changes_total باید وجود داشته باشد")
 
-        # چک کن: 10.1.1.1 + chip_id + black = 2
+        # Check: 10.1.1.1 + chip_id + black = 2
         found = False
         for labels, value in cc:
             if (labels.get("printer_ip") == "10.1.1.1"
@@ -184,7 +197,7 @@ class MetricsEndpointTests(unittest.TestCase):
                 found = True
         self.assertTrue(found, "شمارنده برای 10.1.1.1/chip_id/black باید 2 باشد")
 
-        # چک کن: 10.2.2.2 + supply_name_change + cyan = 1
+        # Check: 10.2.2.2 + supply_name_change + cyan = 1
         found2 = False
         for labels, value in cc:
             if (labels.get("printer_ip") == "10.2.2.2"
@@ -194,16 +207,16 @@ class MetricsEndpointTests(unittest.TestCase):
                 found2 = True
         self.assertTrue(found2, "شمارنده برای 10.2.2.2/supply_name_change/cyan باید 1 باشد")
 
-    # ─── ۴) گیج printer_online ───
+    # ─── 4) printer_online gauge ───
     def test_printer_online_gauge(self):
-        """پرینتر آنلاین 1 و پرینتر آفلاین (بدون پاسخ SNMP) صفر."""
+        """Online printer 1 and offline printer (no SNMP response) zero."""
         store.PRINTERS = [
             {"ip": "10.1.1.1", "name": "HP M527"},
             {"ip": "10.2.2.2", "name": "Canon MF220"},
         ]
         store.printer_data = {
             "10.1.1.1": _live_printer(online=True, total=50000),
-            "10.2.2.2": _live_printer(online=False),      # شکل واقعی دستگاه خاموش
+            "10.2.2.2": _live_printer(online=False),      # The actual form of the device is turned off
         }
 
         client = self._client()
@@ -219,9 +232,9 @@ class MetricsEndpointTests(unittest.TestCase):
         self.assertEqual(seen.get("10.1.1.1"), "1")
         self.assertEqual(seen.get("10.2.2.2"), "0")
 
-    # ─── ۵) گیج printer_toner_level ───
+    # ─── 5) printer_toner_level gauge ───
     def test_toner_level_gauge(self):
-        """سطح تونر باید از دیکشنری واقعی toners خوانده شود (چند رنگ)."""
+        """The toner level should be read from the actual dictionary of toners (multi-color)."""
         store.PRINTERS = [{"ip": "10.1.1.1", "name": "HP M527"}]
         store.printer_data = {"10.1.1.1": _live_printer(total=50000, toners=_REAL_TONERS)}
 
@@ -237,9 +250,9 @@ class MetricsEndpointTests(unittest.TestCase):
         self.assertEqual(by_color.get("cyan"), "40")
         self.assertEqual(by_color.get("yellow"), "0")
 
-    # ─── ۶) scrape_timestamp_seconds ───
+    # ─── 6) scrape_timestamp_seconds ───
     def test_scrape_timestamp(self):
-        """scrape_timestamp_seconds باید عدد Unix timestamp باشد."""
+        """scrape_timestamp_seconds must be a Unix timestamp number."""
         client = self._client()
         resp = client.get("/metrics")
         body = resp.data.decode("utf-8")
@@ -249,9 +262,9 @@ class MetricsEndpointTests(unittest.TestCase):
         value = int(ts[0][1])
         self.assertGreater(value, 1_700_000_000)  # after 2023
 
-    # ─── ۷) printer_total_pages ───
+    # ─── 7) printer_total_pages ───
     def test_total_pages_gauge(self):
-        """تعداد کل صفحات از counters.total خوانده شود."""
+        """Read the total number of pages from counters.total."""
         store.PRINTERS = [{"ip": "10.1.1.1", "name": "HP M527"}]
         store.printer_data = {"10.1.1.1": _live_printer(total=123456)}
 
@@ -268,9 +281,9 @@ class MetricsEndpointTests(unittest.TestCase):
                 found = True
         self.assertTrue(found, "printer_total_pages برای 10.1.1.1 باید 123456 باشد")
 
-    # ─── ۸) printer_cartridge_chip_id_known ───
+    # ─── 8) printer_cartridge_chip_id_known ───
     def test_chip_id_known_gauge(self):
-        """اگر chip ID موجود باشد، مقدار 1 باید نمایش داده شود."""
+        """If the chip ID is present, the value 1 should be displayed."""
         store.PRINTERS = [{"ip": "10.1.1.1", "name": "HP M527"}]
         store.printer_data = {"10.1.1.1": _live_printer(
             total=50000,

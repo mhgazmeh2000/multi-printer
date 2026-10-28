@@ -1,13 +1,28 @@
+# =============================================================================
+# @file:         web/auth.py
+# @brief:        Authentication blueprint for login, registration, password reset and Google OAuth.
+# @details:      Responsibilities: Handle sessions, safe redirects, user loading and auth routes.
+#                Main API: init_auth(), load_user(), same_site_next_target(),
+#                login_redirect_url(), has_role(), office_for_ip(), user_allowed_offices(),
+#                user_allowed_modules() (+13 more)
+#                Side effects: network I/O, defines HTTP routes
+# @dependencies: internal: config, core, core.security_audit, core.time_utils, models, utils,
+#                web.security | external: authlib, flask, flask_login, requests
+# @notes:        Redirect targets are validated to stay on the same site (open-redirect guard).
+#                Reads environment variables: ADMIN_SETUP_TOKEN.
+# =============================================================================
+
 """Authentication blueprint for login, registration, reset, and Google OAuth."""
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from functools import wraps
 import json
+import logging
 import os
 import re
 import secrets
+from datetime import datetime, timedelta, timezone
+from functools import wraps
 
 from authlib.integrations.flask_client import OAuth
 from flask import Blueprint, abort, current_app, flash, jsonify, redirect, render_template, request, url_for
@@ -17,7 +32,6 @@ from flask_login import LoginManager
 from config import settings
 from models import User
 from utils import generate_reset_token, hash_token, send_email, verify_recaptcha, verify_reset_token
-import logging
 from web.security import limiter
 log = logging.getLogger("PrinterMonitor")
 
@@ -31,7 +45,7 @@ from core.time_utils import as_utc_datetime, to_utc_z
 
 
 def _audit_context():
-    """خواندن اطلاعات context برای audit log."""
+    """Reading context information for audit log."""
     return {
         "ip_address": request.remote_addr,
         "user_agent": (request.headers.get("User-Agent") or "")[:200],
@@ -44,6 +58,7 @@ oauth = OAuth()
 
 
 def _api_unauthorized():
+    """Return a JSON 401 response for API calls that are not authenticated."""
     login_url = login_redirect_url()
     if request.path.startswith("/api/") or request.is_json or "application/json" in request.headers.get("Accept", ""):
         return jsonify({"error": "unauthorized", "login_url": login_url}), 401
@@ -51,6 +66,8 @@ def _api_unauthorized():
 
 
 def init_auth(app):
+    """Configure Flask-Login and the authentication settings for the app."""
+
     app.config.setdefault("SECRET_KEY", settings.SECRET_KEY)
     app.config.setdefault("MAIL_SERVER", settings.MAIL_SERVER)
     app.config.setdefault("MAIL_PORT", settings.MAIL_PORT)
@@ -73,6 +90,7 @@ def init_auth(app):
 
     @login_manager.unauthorized_handler
     def unauthorized():
+        """Login manager callback: return the unauthorized response."""
         return _api_unauthorized()
 
     oauth.init_app(app)
@@ -88,32 +106,34 @@ def init_auth(app):
 
 @login_manager.user_loader
 def load_user(user_id):
+    """Flask-Login user loader: return the user for a session id."""
+
     return User.get(user_id)
 
 
 def _is_safe_next_url(target: str) -> bool:
     r"""
-    بررسی امن بودن URL مقصد برای جلوگیری از Open Redirect attack.
-    فقط مسیرهای نسبی داخلی مجاز هستند (مثل /dashboard، /printers).
-    مسیرهای زیر رد می‌شوند:
-      - URL مطلق (http://...، https://...)
-      - URLهای protocol-relative (//evil.com)
-      - URLهای با scheme (javascript:، data:)
-      - هر مقدار شامل `\` — از جمله `/\evil.com`
-      - مقادیر خالی یا None
+    Checking the security of the destination URL to prevent Open Redirect attack.
+    Only internal relative paths are allowed (eg /dashboard, /printers).
+    The following routes are skipped:
+      - Absolute URL (http://..., https://...)
+      - protocol-relative URLs (//evil.com)
+      - URLs with scheme (javascript:, data:)
+      - Any value containing `\` — including `/\evil.com`
+      - Empty values or None
 
-    **چرا `\` هم رد می‌شود (E.6.6):** در URL‌های «special scheme» مرورگرها (طبق
-    WHATWG URL) `\` معادل `/` خوانده می‌شود؛ پس `/\evil.example.com` در ظاهر یک
-    مسیر داخلی است، ولی `Location: /\evil.example.com` عملاً به
-    `//evil.example.com` — یعنی **بیرون از سایت** — باز می‌شود. پیش از این اصلاح،
-    همین حالت در `tests/test_auth_next_redirect.py::SafeNextUrlValidationTests`
-    پذیرفته می‌شد (شاهدِ زندهٔ حفره، نه فرض).
+    **Why `\` is also rejected (E.6.6):** In "special scheme" URLs of browsers (according to
+    WHATWG URL) `\` is read as `/`; So `/\evil.example.com` looks like one
+    The path is internal, but ``Location: /\evil.example.com'' actually goes to
+    `//evil.example.com` — i.e. **offsite** — opens. Before this modification,
+    The same mode in `tests/test_auth_next_redirect.py::SafeNextUrlValidationTests`
+    It was accepted (a living witness of the hole, not an assumption).
     """
     if not target:
         return False
     from urllib.parse import urlparse
     parsed = urlparse(target)
-    # نه scheme داشته باشد، نه netloc؛ و باید با '/' شروع شود اما نه '//'
+    # not have scheme, not netloc; and must start with '/' but not '//'
     return (
         not parsed.scheme
         and not parsed.netloc
@@ -124,9 +144,9 @@ def _is_safe_next_url(target: str) -> bool:
 
 
 def _next_url(default_endpoint: str = "dashboard.index") -> str:
-    """دریافت امن URL بعد از login/register.
-    اگر پارامتر `next` معتبر بود از آن استفاده می‌کند، در غیر این صورت
-    به endpoint پیش‌فرض هدایت می‌کند.
+    """Get secure URL after login/register.
+    Uses the `next' parameter if it is valid, otherwise
+    Redirects to the default endpoint.
     """
     target = request.values.get("next", "")
     if _is_safe_next_url(target):
@@ -136,42 +156,45 @@ def _next_url(default_endpoint: str = "dashboard.index") -> str:
 
 def same_site_next_target():
     """
-    مقدار `next` برای URL صفحهٔ ورود — **فقط مسیر همین سایت** (E.6.6 / TD-002).
+    `next' value for login page URL — **only the path to this site** (E.6.6 / TD-002).
 
-    چرا `request.url` نه: آن مقدار (۱) scheme+host را در بدنهٔ پاسخ ۴۰۱ و در لاگ‌ها
-    بازتاب می‌دهد، (۲) در صفحهٔ ورود دوباره رندر می‌شود، و (۳) هیچ تضمینی ندارد
-    `_is_safe_next_url` بپذیردش؛ یعنی کاربر بی‌هویت `next`-ای می‌بیند که پس از ورود
-    **نادیده گرفته می‌شود**. این هلپر همان UX (بازگشت به همان صفحه، با query string)
-    را می‌دهد و نتیجه یا None است یا چیزی که همان validator پذیرفته است.
+    Why not `request.url`: that value (1) scheme+host in the 401 response body and in the logs
+    reflects, (2) is re-rendered on the login page, and (3) has no guarantees
+    `_is_safe_next_url` accept it; That is, the anonymous user sees ``next'' after logging in
+    **Ignored**. This helper is the same UX (back to the same page, with query string)
+    and the result is either None or something accepted by the same validator.
 
-    `query_string` خام (percent-encoded) برداشته می‌شود، پس کاراکتر کنترلی یا
-    newline از این مسیر وارد پاسخ/سردر Location نمی‌شود.
+    The raw (percent-encoded) `query_string' is removed, so the control character or
+    newline does not enter the answer/location header from this route.
 
-    منطق ساخت در `_same_site_next_target(path, raw_query)` نشسته است تا بدون
-    request هم قابل آزمون باشد (Werkzeug مسیر خام `/\…` را نرمال می‌کند، پس برای
-    آزمودن حالت خطرناک به تابع خالص نیاز است).
+    The build logic is sitting in `_same_site_next_target(path, raw_query)` rather than without
+    request can also be tested (Werkzeug normalizes the raw `/\\...` path, so for
+    Testing dangerous mode requires pure function).
     """
     raw_query = (request.query_string or b"").decode("latin-1", "replace")
     return _same_site_next_target(request.path or "/", raw_query)
 
 
 def _same_site_next_target(path: str, raw_query: str):
-    """`(path, query)` خام را به `next` هم‌سایت تبدیل می‌کند؛ یا None."""
+    """``(path, query)'' converts raw to `next' of the same site; or None."""
     candidate = f"{path}?{raw_query}" if raw_query else path
     return candidate if _is_safe_next_url(candidate) else None
 
 
 def login_redirect_url() -> str:
-    """`/login` با `next` هم‌سایت — تنها نقطهٔ ساخت این URL در گاردهای احراز هویت."""
+    """`/login' with `next' same site — the only point of making this URL in authentication guards."""
     target = same_site_next_target()
     return url_for("auth.login", next=target) if target else url_for("auth.login")
 
 
 def has_role(user, *roles):
+    """Return True when the user has one of the given roles."""
+
     return bool(user and getattr(user, "role", None) in roles)
 
 
 def _clean_list(value, *, lower: bool = True):
+    """Normalize a list value: strip items and drop empty ones (lower-cased by default)."""
     if not value:
         return []
     if isinstance(value, str):
@@ -192,6 +215,8 @@ def _clean_list(value, *, lower: bool = True):
 
 
 def office_for_ip(ip: str) -> str:
+    """Return the office name that a printer IP belongs to."""
+
     ip = (ip or "").strip()
     if not ip:
         return "other"
@@ -202,14 +227,20 @@ def office_for_ip(ip: str) -> str:
 
 
 def user_allowed_offices(user):
+    """Return the list of offices this user may access."""
+
     return _clean_list(getattr(user, "allowed_offices", []), lower=True)
 
 
 def user_allowed_modules(user):
+    """Return the list of modules this user may access."""
+
     return _clean_list(getattr(user, "allowed_modules", []), lower=True)
 
 
 def user_can_access_module(user, module_name: str) -> bool:
+    """Return True when the user may access a module."""
+
     if not user or not getattr(user, "is_authenticated", False):
         return False
     if getattr(user, "role", None) == "admin":
@@ -220,6 +251,8 @@ def user_can_access_module(user, module_name: str) -> bool:
 
 
 def user_can_access_office(user, ip: str) -> bool:
+    """Return True when the user may access the office of a printer IP."""
+
     if not user or not getattr(user, "is_authenticated", False):
         return False
     if getattr(user, "role", None) == "admin":
@@ -237,6 +270,8 @@ def user_can_access_office(user, ip: str) -> bool:
 
 
 def allowed_printer_ips(user):
+    """Return the printer IPs this user may see."""
+
     if not user or not getattr(user, "is_authenticated", False):
         return []
     if getattr(user, "role", None) == "admin":
@@ -261,10 +296,14 @@ def allowed_printer_ips(user):
 
 
 def role_required(*roles):
+    """Decorator factory: allow the view only for users with one of the given roles."""
+
     def decorator(view):
+        """Wrap a view so that only users with one of the given roles can access it."""
         @wraps(view)
         @login_required
         def wrapper(*args, **kwargs):
+            """Call the wrapped view when the current user has one of the required roles; otherwise return 403."""
             if not has_role(current_user, *roles):
                 abort(403)
             return view(*args, **kwargs)
@@ -275,6 +314,8 @@ def role_required(*roles):
 
 
 def admin_required(view):
+    """Decorator: allow the view only for administrators."""
+
     return role_required("admin")(view)
 
 
@@ -283,6 +324,7 @@ def users_access_required(view):
     @wraps(view)
     @login_required
     def wrapper(*args, **kwargs):
+        """Call the wrapped view for admins and for managers of the users module; deny others."""
         if getattr(current_user, "role", None) == "admin":
             return view(*args, **kwargs)
         if getattr(current_user, "role", None) == "manager" and user_can_access_module(current_user, "users"):
@@ -292,6 +334,7 @@ def users_access_required(view):
 
 
 def _unique_username(base_name: str) -> str:
+    """Return a username that is not used yet, based on the given name."""
     cleaned = "".join(ch for ch in base_name.lower() if ch.isalnum()) or "user"
     candidate = cleaned
     suffix = 1
@@ -307,6 +350,8 @@ USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]{3,32}$")
 @auth_bp.route("/login", methods=["GET", "POST"])
 @limiter.limit("10 per minute; 30 per 5 minutes", methods=["POST"])
 def login():
+    """Show the login form and sign the user in."""
+
     if current_user.is_authenticated:
         return redirect(_next_url())
 
@@ -315,7 +360,7 @@ def login():
         ctx = _audit_context()
         identifier = (request.form.get("identifier") or "").strip()
 
-        # بررسی brute-force بر اساس IP/کاربر
+        # Brute-force checking based on IP/user
         ip_attempts = count_recent_failed_logins(
             ip_address=ctx["ip_address"], minutes=FAILED_ATTEMPT_WINDOW_MINUTES,
         )
@@ -354,7 +399,7 @@ def login():
                 )
                 flash("با موفقیت وارد شدید", "success")
                 return redirect(_next_url())
-            # تلاش ناموفق
+            # Failed attempt
             log_security_event(
                 SecurityEvent.FAILED_LOGIN, severity=Severity.WARNING,
                 user_identifier=identifier,
@@ -381,12 +426,14 @@ def login():
 @auth_bp.route("/register", methods=["GET", "POST"])
 @limiter.limit("5 per minute; 10 per hour", methods=["POST"])
 def register():
+    """Show the registration form and create a new account."""
+
     if current_user.is_authenticated:
         return redirect(_next_url())
 
     error = None
-    # 🔒 اگر ADMIN_SETUP_TOKEN تنظیم شده باشد، فرم باید فیلد توکن را نشان دهد
-    # (همان شرطی که در POST برای اولین کاربر اعمال می‌شود).
+    # 🔒 If ADMIN_SETUP_TOKEN is set, the form should show the token field
+    # (The same condition applied in POST for the first user).
     admin_setup_token_required = bool((os.getenv("ADMIN_SETUP_TOKEN") or "").strip())
     if request.method == "POST":
         if not verify_recaptcha(request.form.get("g-recaptcha-response", ""), request.remote_addr):
@@ -408,11 +455,11 @@ def register():
             elif User.find_by_email(email):
                 error = "ایمیل قبلاً ثبت شده است"
             else:
-                # ✅ خودکارسازی: اولین کاربر = ادمین تأیید‌شده
+                # Automate: first user = verified admin
                 is_first_user = User.total_count() == 0
-                # 🔒 گارد راه‌اندازی: اگر ADMIN_SETUP_TOKEN تنظیم شده باشد، ثبت‌نام
-                # «اولین کاربر» (که خودکار admin می‌شود) فقط با همان توکن ممکن است.
-                # اگر تنظیم نشده باشد، رفتار قبلی حفظ می‌شود (با هشدار در لاگ).
+                # 🔒 Setup Guard: Register if ADMIN_SETUP_TOKEN is set
+                # "First user" (which automatically becomes admin) is only possible with the same token.
+                # If not set, the previous behavior is preserved (with a warning in the log).
                 setup_token = (os.getenv("ADMIN_SETUP_TOKEN") or "").strip()
                 if is_first_user and setup_token:
                     provided_token = (request.form.get("admin_setup_token") or "").strip()
@@ -469,13 +516,15 @@ def register():
 @auth_bp.route("/forgot-password", methods=["GET", "POST"])
 @limiter.limit("3 per minute; 5 per hour", methods=["POST"])
 def forgot_password():
+    """Show the forgot-password form and send a reset link."""
+
     message = None
     error = None
     if request.method == "POST":
         email = (request.form.get("email") or "").strip().lower()
         user = User.find_by_email(email)
         ctx = _audit_context()
-        # همیشه log می‌کنیم (موفق یا نه) — برای detection حملات email enumeration
+        # We always log (successful or not) — for detection of email enumeration attacks
         log_security_event(
             SecurityEvent.PASSWORD_RESET_REQUESTED,
             severity=Severity.INFO,
@@ -515,6 +564,8 @@ def forgot_password():
 @auth_bp.route("/reset-password/<token>", methods=["GET", "POST"])
 @limiter.limit("10 per minute", methods=["POST"])
 def reset_password(token):
+    """Show the reset form for a token and set the new password."""
+
     payload = verify_reset_token(token)
     token_hash = hash_token(token)
     user = User.find_by_reset_token_hash(token_hash)
@@ -526,10 +577,10 @@ def reset_password(token):
         expires_at = user.reset_token_expires
         if expires_at:
             try:
-                # فاز E.3: نویسنده‌ی همین مقدار (بالاتر در همین فایل) از utc_now_iso
-                # استفاده می‌کند ⇒ خواننده هم باید آگاه به UTC مقایسه کند. قبلاً
-                # «naive < naive» بود؛ با فرمت Z هر دو طرف باید آگاه باشند وگرنه
-                # مقایسه TypeError می‌دهد و لینک معتبر «نامعتبر» اعلام می‌شود.
+                # Phase E.3: Author of the same value (above in the same file) from utc_now_iso
+                # uses ⇒ the reader should also be aware of the UTC comparison. already
+                # was "naive < naive"; With Z format both sides must be aware or else
+                # The comparison throws a TypeError and the valid link is declared "invalid".
                 if as_utc_datetime(expires_at) < datetime.now(timezone.utc):
                     error = "لینک بازنشانی منقضی شده است"
             except Exception:
@@ -564,10 +615,12 @@ def reset_password(token):
 
 @auth_bp.route("/auth/google")
 def google_login():
+    """Start the Google OAuth sign-in flow."""
+
     if not hasattr(oauth, "google"):
         flash("ورود با گوگل فعال نشده است", "error")
         return redirect(url_for("auth.login"))
-    # nonce برای جلوگیری از replay attack (OIDC requirement)
+    # nonce to prevent replay attack (OIDC requirement)
     import secrets
     from flask import session
     nonce = secrets.token_urlsafe(32)
@@ -578,12 +631,14 @@ def google_login():
 
 @auth_bp.route("/auth/google/callback")
 def google_callback():
+    """Handle the Google OAuth callback and sign the user in."""
+
     if not hasattr(oauth, "google"):
         flash("ورود با گوگل فعال نشده است", "error")
         return redirect(url_for("auth.login"))
     ctx = _audit_context()
     try:
-        # توکن را مستقیماً از Google دریافت کن (بدون JWK verification)
+        # Get the token directly from Google (without JWK verification)
         import requests as _requests
         token_resp = _requests.post(
             "https://oauth2.googleapis.com/token",
@@ -602,7 +657,7 @@ def google_callback():
         if not access_token:
             raise ValueError("No access_token in token response")
 
-        # اطلاعات کاربر را از userinfo endpoint بگیر (بدون نیاز به JWK)
+        # Get user information from userinfo endpoint (no need for JWK)
         userinfo_resp = _requests.get(
             "https://www.googleapis.com/oauth2/v3/userinfo",
             headers={"Authorization": f"Bearer {access_token}"},
@@ -664,6 +719,8 @@ def google_callback():
 @auth_bp.route("/logout")
 @login_required
 def logout():
+    """Sign the current user out."""
+
     user_id = current_user.id
     username = current_user.username
     logout_user()

@@ -1,4 +1,4 @@
-# تصمیم‌های فاز G — ماتریسِ OID تا مقایسهٔ دو منبع
+# Phase G decisions — from the OID matrix to comparing the two sources
 
 **مخزن:** شاخه‌ی `phase-c` · **تاریخ:** ۲۰۲۶-۱۰-۰۶ · **دامنه:** G.1 … G.6 + TD-016
 **کامیت‌ها:** ۲۴ کامیت در `77d2a73..HEAD` (از `b426a53` تا `0124e0a`؛ رفعِ TD-016 = `37e78f2`)
@@ -21,7 +21,7 @@
 
 ---
 
-## جدول خلاصه
+## Summary table
 
 | # | موضوع | تصمیم | کامیت | اثر بر production |
 |---|---|---|---|---|
@@ -35,7 +35,7 @@
 
 ---
 
-## G.1 — ماتریس OID از کد، نه از پلان
+## G.1 — OID matrix from the code, not from the plan
 
 **تصمیم:** مرجعِ شمارشِ OID، خروجیِ `tools/build_oid_matrix.py` است که خودِ کد را
 source-scan می‌کند (نقشهٔ فایل→ماژول: `MODULE_BY_FILE` در `tools/build_oid_matrix.py:72`)؛ عددِ مبنای فاز **۱۳۶**
@@ -60,7 +60,7 @@ walk، `890d3d1`)؛ این‌ها نشان داد خروجیِ ابزار هم �
 
 ---
 
-## G.2 — `monitoring/generator.yml` با ۶ ماژول
+## G.2 — `monitoring/generator.yml` with 6 modules
 
 **تصمیم:** specِ شش‌ماژوله (`printer_std/hp/canon/brother/toshiba` + `sensor_ecs100g`) با
 ۱۳۶ ردیف، **۹۸ get** و **۷ walk-table**، ۳۱ `ignore_values`، و ۱۰ ردیفِ probe-only که
@@ -87,7 +87,7 @@ sentinelِ تازه به spec بدونِ به‌روزرسانیِ adapter تس�
 
 ---
 
-## G.3 — `snmp.yml` دستی، ولی بازتولیدشدنی
+## G.3 — `snmp.yml` by hand, but reproducible
 
 **تصمیم:** `monitoring/snmp.yml` (۸۵۴ خط، ۱۳۶ متریک، صفر کلیدِ `ignore_values` زنده) **دستی
 نوشته نشد که دستی بماند**: `tools/build_snmp_yml.py` آن از `generator.yml` می‌سازد و
@@ -142,7 +142,7 @@ not_attempted` و `load_test_planned: end of project on owner server` — یعن
 
 ---
 
-## G.5 — `ExporterClient` + شاخهٔ hybrid در poller
+## G.5 — `ExporterClient` + the hybrid branch in the poller
 
 **تصمیم:** خوانندهٔ `core/exporter_client.py` (۲۸۰ خط: پارسرِ متنِ exposition،
 `query_brand` برای دو module، `is_available()` با timeout ۲ ثانیه، localhost پیش‌فرض) +
@@ -175,7 +175,7 @@ reportها) می‌شکستند؛ (ج) fallbackِ `try/except` روی هر مت�
 
 ---
 
-## G.6 — `tools/compare_snmp_sources.py` (ابزار، نه عدد)
+## G.6 — `tools/compare_snmp_sources.py` (a tool, not a number)
 
 **تصمیم (مالک):** «ابزار ساخته شود، سنجش روی سرورِ مالک». پس repo این‌ها را دارد: ابزار
 (۳۹۱ خط)، سه fixtureِ مصنوعی (`tests/fixtures/compare_snmp_pair_{ok,diff,canon}.json`)،
@@ -204,7 +204,7 @@ project on owner server"}` در manifest؛ **۱۲ جهش**: ۱۱ تا همان �
 
 ---
 
-## TD-016 — باگِ کلیدِ تونرِ HP که همان آینه بیرون داد
+## TD-016 — the HP toner-key bug that the mirror exposed
 
 **تصمیم:** رفع در **کامیتِ جدا** (`37e78f2`) بیرونِ ترتیبِ گام‌ها، به تشخیصِ مالک، با
 تستِ مستقل؛ آینه `_hp_toner_key` را import می‌کند، پس رفع **خودکار** به مسیرِ exporter هم
@@ -232,7 +232,7 @@ project on owner server"}` در manifest؛ **۱۲ جهش**: ۱۱ تا همان �
 
 ---
 
-## چه چیزی موکول به سرورِ مالک است (و هیچ‌جا ادعا نشده)
+## What is deferred to the owner's server (and not claimed anywhere)
 
 | موکول | کجا سنجیده می‌شود | وضعیتِ فعلی |
 |---|---|---|
@@ -243,7 +243,7 @@ project on owner server"}` در manifest؛ **۱۲ جهش**: ۱۱ تا همان �
 | تأییدِ ۶۰ typeِ استنتاجی | §۵ (مقایسهٔ `snmp.yml` با پاسخِ واقعی) | ۷۶ اعلامی / ۶۰ استنتاجی، تأیید نشده |
 | اجرای سوئیت در حالتِ PG | `tests/conftest.py` با `PG_DSN` | در فاز G تکرار نشد؛ عددِ موثق در `docs/phase-e-decisions.md` (۴۸۴/۷۱ skip) — و کدِ فاز G backend-agnostic است: `grep -c sqlite3` روی پنج فایلِ تازه = ۰، و diffِ poller صفر کلمهٔ SQL/نوشتن دارد |
 
-## چه چیزی موکول است، ولی **زمان‌بندی نشده**
+## What is deferred but **not scheduled**
 
 سه موردِ زیر در برنامه‌ی فاز G قرار داشتند و عمداً انجام نشدند. تذکرِ دقت: در اسنادِ مخزن،
 «فاز L» تنها برای **سرویسِ ویندوزی** و **اجرای واقعیِ اسکریپت‌ها** نام برده شده
@@ -265,7 +265,7 @@ project on owner server"}` در manifest؛ **۱۲ جهش**: ۱۱ تا همان �
   امروز همان‌ها آزمونِ واژگونی را قرمز می‌کنند.
 - **NSSM برای `printguard-flask`** (الگوی G.4، با همان `AppRotateBytes` و env برای رمز).
 
-## نقشهٔ بازگشت (per-step revert)
+## Rollback plan (per-step revert)
 
 | گام | چه چیزی برمی‌گردد | ریسک |
 |---|---|---|

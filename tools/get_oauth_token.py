@@ -1,14 +1,24 @@
-"""
-اسکریپت کمکی دریافت Refresh Token برای Gmail OAuth 2.0 SMTP
+# =============================================================================
+# @file:         tools/get_oauth_token.py
+# @brief:        Helper that obtains a Gmail OAuth 2.0 refresh token for SMTP.
+# @details:      Responsibilities: Run the OAuth flow and print the refresh token.
+#                Main API: main()
+#                Side effects: network I/O
+# @dependencies: external: requests
+# @notes:        Can be run directly as a script.
+# =============================================================================
 
-مراحل:
-1. Gmail API را در Google Cloud Console فعال کنید
-2. OAuth Consent Screen بسازید (Test user = ایمیل فرستنده)
-3. OAuth Client ID (Web application) بسازید
-4. این اسکریپت را اجرا کنید
-5. URL نمایش داده شده را در مرورگر باز کنید
-6. Authorization Code را کپی و Paste کنید
-7. Refresh Token نمایش داده می‌شود
+"""
+Helper script to get Refresh Token for Gmail OAuth 2.0 SMTP
+
+Steps:
+1. Enable Gmail API in Google Cloud Console
+2. Create OAuth Consent Screen (Test user = sender's email)
+3. Create OAuth Client ID (Web application).
+4. Run this script
+5. Open the displayed URL in the browser
+6. Copy and paste the Authorization Code
+7. Refresh Token is displayed
 
 Usage:
     python tools/get_oauth_token.py
@@ -16,10 +26,13 @@ Usage:
 
 import sys
 import urllib.parse
+
 import requests
 
 
 def main():
+    """Run the Gmail OAuth flow and print the refresh token."""
+
     print("=" * 60)
     print("Gmail OAuth 2.0 — Refresh Token Generator")
     print("=" * 60)
@@ -101,10 +114,10 @@ def main():
     print("SUCCESS! Add these to your .env file:")
     print("=" * 60)
     print()
-    print(f"MAIL_SERVER=smtp.gmail.com")
-    print(f"MAIL_PORT=587")
-    print(f"MAIL_USE_TLS=1")
-    print(f"MAIL_USE_OAUTH=1")
+    print("MAIL_SERVER=smtp.gmail.com")
+    print("MAIL_PORT=587")
+    print("MAIL_USE_TLS=1")
+    print("MAIL_USE_OAUTH=1")
     print(f"MAIL_USERNAME={gmail_address}")
     print(f"MAIL_OAUTH_CLIENT_ID={client_id}")
     print(f"MAIL_OAUTH_CLIENT_SECRET={client_secret}")

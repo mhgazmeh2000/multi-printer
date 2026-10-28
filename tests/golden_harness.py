@@ -1,73 +1,85 @@
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tests/golden_harness.py
+# @brief:        Shared infrastructure for recording and replaying golden fixtures.
+# @details:      Responsibilities: Freeze time, seed the database and snapshot results for
+#                comparison.
+#                Main API: _FrozenDatetime, _ClockState, FakeHttp
+#                Side effects: database access, network I/O, file I/O
+# @dependencies: internal: config.settings, core, core.collectors, core.database, core.db,
+#                core.enhanced_collector, core.yield_engine, tests.fake_snmp,
+#                tests.golden_profiles, tests.golden_scenarios
+# @notes:        Reads environment variables: PG_FROZEN_TZ.
+# =============================================================================
+
 """
-Golden harness — زیرساخت مشترک «ضبط» و «بازپخش» fixtureهای طلایی.
+Golden harness — shared infrastructure for "recording" and "playback" of golden fixtures.
 
-این ماژول توسط دو مصرف‌کننده استفاده می‌شود:
-  • ``tools/record_golden.py``  → ضبط fixtureها (حالت hermetic یا --with-simulator)
-  • ``tests/test_golden.py``    → بازپخش hermetic و مقایسه‌ی تفاضل-صفر
+This module is used by two consumers:
+  • ``tools/record_golden.py'' → record fixtures (hermetic mode or --with-simulator)
+  • ``tests/test_golden.py'' → hermetic replay and zero-difference comparison
 
-قواعد قطعی‌بودن (determinism):
-  • زمان قفل می‌شود (``time.time``، ``time.monotonic`` و **کلاس ``datetime``** در
-    همه‌ی ماژول‌های دامنه) → هیچ مقداری به ساعت واقعی وابسته نیست.
-    (کار E.0.3: کلاس وصله می‌شود، نه فقط ``now``؛ تا ``utcnow``/``today``/
-    ``fromisoformat`` هم از همان مسیر قفل‌شده بگذرند.)
-  • دیتابیس: یک SQLite موقت در هر اجرا (چون ``DB_PATH="logs.db"`` نسبی است،
-    با ``os.chdir`` به پوشه‌ی موقت می‌رود) + ``init_db()`` + جداول yield.
-  • SNMP: فقط ``core.snmp.protocol.snmp_get`` / ``snmp_getnext`` وصله می‌شوند.
-  • HTTP: فقط لایه‌ی انتقال (``requests.get`` و ``urllib.request.urlopen``).
+Determinism rules:
+  • Time locks (``time.time'', ``time.monotonic'' and **class ``datetime''** in
+    all domain modules) → no value depends on actual clock.
+    (E.0.3 work: class gets patched, not just ``now''; to ``utcnow''/``today''/
+    ``fromisoformat'' also pass through the same locked path.)
+  • Database: a temporary SQLite per run (because ``DB_PATH="logs.db"'' is relative,
+    goes to temporary folder with ``os.chdir'') + ``init_db()'' + yield tables.
+  • SNMP: Only ``core.snmp.protocol.snmp_get'' / ``snmp_getnext'' are patched.
+  • HTTP: transport layer only (``requests.get'' and ``urllib.request.urlopen'').
 
-قواعد نرمال‌سازی خروجی (طبق تصمیم فاز C؛ تکمیل در E.0.3):
-  • فیلدهای زمان → ``"<TS_LOCAL>"`` (naive، بدون offset) یا ``"<TS_UTC>"``
-    (پس از فاز E.3 نویسنده‌ها UTC/Z می‌نویسند ⇒ همهٔ برچسب‌ها ``<TS_UTC>`` می‌شوند)
-    (دارای ``Z``/offset). **مقدار** ساعت حذف می‌شود ولی **جنسِ** آن (naive/aware)
-    عمداً حفظ می‌شود: فاز E می‌خواهد نویسنده‌ها را به aware-UTC ببرد و همین
-    تفکیک باعث می‌شود آن تغییر، golden را صریح بشکند (و بی‌صدا از قلم نیفتد).
-  • شناسه‌ی خودکار (``id``/``rowid``) → حذف
-  • مسیر فایل → حذف/جایگزینی با ``"<PATH>"``
-  • ردیف‌های DB → مرتب‌شده بر اساس کلید معنادار، حداکثر ۱۰ ردیف آخر هر جدول
+Output normalization rules (according to phase C decision; completed in E.0.3):
+  • Time fields → ``"<TS_LOCAL>"`` (naive, without offset) or ``"<TS_UTC>"``
+    (After phase E.3 the authors write UTC/Z ⇒ all tags become ``<TS_UTC>'')
+    (with ``Z''/offset). The **value** of the clock is removed, but its **kind** (naive/aware)
+    Deliberately maintained: Phase E wants to make authors UTC-aware and that's it
+    Dissociation makes that change explicitly break golden (and not be silently missed).
+  • Automatic ID (``id``/``rowid``) → delete
+  • File path → remove/replace with ``"<PATH>"``
+  • DB rows → sorted by meaningful key, maximum last 10 rows of each table
 """
 from __future__ import annotations
 
 import contextlib
-import copy
 import json
 import os
 import re
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
-from core.db import UndefinedColumn, UndefinedTable  # فاز E.4.4: نوع مشترک خطا
+from core.db import UndefinedColumn, UndefinedTable  # Phase E.4.4: Common type of error
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures" / "golden"
 
-# ─── زمان قفل‌شده (کار E.0.3) ──────────────────────────────────────────────
-# لحظه‌ی ثابتِ همه‌ی fixtureها: ۲۰۲۶-۱۰-۰۳ ساعت ۱۲:۰۰:۰۰ **UTC** (aware).
-# این لحظه یک «instant» واقعی است، نه یک ساعت محلی؛ پس:
-#   • now(tz) / now(timezone.utc) → همان لحظه با پوشش منطقه‌زمانی خواسته‌شده
-#   • now()  (بدون tz)            → نمایش *محلیِ* همان لحظه (naive) — مثل پایتون واقعی
-#   • utcnow()                    → نمایش naive-UTC همان لحظه — مثل پایتون واقعی
-# فاز E می‌خواهد writers را به aware-UTC ببرد؛ با این قفل، ثابت می‌شود که
-# تغییر مبنا (محلی ⇒ UTC) رفتار دامنه را عوض نمی‌کند و فقط *نمایش* عوض می‌شود.
+# ─── Locked Time (Work E.0.3) ─────────────────────────────────────────────
+# Fixed moment of all fixtures: 2026-10-03 at 12:00:00 **UTC** (aware).
+# This moment is a real instant, not a local time; So:
+# • now(tz) / now(timezone.utc) → the same moment covering the requested time zone
+# • now() (without tz) → display *local* at the same moment (naive) — like real Python
+# • utcnow() → Display naive-UTC instantly — like real Python
+# Phase E wants to take writers to aware-UTC; With this lock, it is proven that
+# Changing the datum (local ⇒ UTC) does not change the behavior of the domain, only the *display* changes.
 FROZEN_INSTANT = datetime(2026, 10, 3, 12, 0, 0, tzinfo=timezone.utc)
 FROZEN_EPOCH = FROZEN_INSTANT.timestamp()
 FROZEN_ISO = FROZEN_INSTANT.isoformat()               # «2026-10-03T12:00:00+00:00»
 
-# «محلی» در این هارنس یعنی منطقه‌زمانیِ **قرارداد پروژه** (Asia/Tehran — بخش ۲ سند
-# قرارداد زمان)، نه TZ ماشینی که تست روی آن اجرا می‌شود. چرا؟
-#   • داده‌های موجود برنامه naive local‌اند و معنی «local» برایشان از پیش
-#     Asia/Tehran است؛ قفل‌کردنِ همین معنا، هارنس را به قرارداد گره می‌زند.
-#   • نتیجه: ضبط fixtureها روی هر ماشینی (CI با TZ=UTC یا سرور تهران) بیت‌به‌بیت
-#     یکسان می‌شود و «drift بین CI و سرور» ممکن نیست.
-# با متغیر محیطی ``PG_FROZEN_TZ`` می‌توان منطقه‌زمانیِ محلی را برای آزمایش عوض کرد.
+# "Local" in this harness means the **project contract** time zone (Asia/Tehran - Section 2 of the document
+# time contract), not the TZ of the machine on which the test is run. why
+# • The existing data of the naive program are local and the meaning of "local" is already there for them
+# Asia/Tehran is; Locking the same meaning ties the harness to the contract.
+# • Result: recording fixtures on any machine (CI with TZ=UTC or Tehran server) bit by bit
+# It becomes the same and "drift between CI and server" is not possible.
+# The local time zone for testing can be changed with the ``PG_FROZEN_TZ'' environment variable.
 def _local_tz():
+    """Helper: local tz."""
     name = os.environ.get("PG_FROZEN_TZ", "Asia/Tehran")
     try:
         from zoneinfo import ZoneInfo
         return ZoneInfo(name)
-    except Exception:                       # بدون tzdata/zoneinfo (ویندوز لخت)
+    except Exception:                       # no tzdata/zoneinfo (bare windows)
         if name == "Asia/Tehran":
             from datetime import timedelta
             return timezone(timedelta(hours=3, minutes=30), "Asia/Tehran")
@@ -76,19 +88,18 @@ def _local_tz():
 
 FROZEN_TZ = _local_tz()
 FROZEN_NOW_LOCAL = (FROZEN_INSTANT.astimezone(FROZEN_TZ).replace(tzinfo=None))
-FROZEN_NOW = FROZEN_INSTANT.replace(tzinfo=None)      # naive-UTC (سازگاری عقب‌رو)
-# فاز E.3: خروجی استانداردِ «الآن» (فرمت پروژه: ۶ رقم میکروثانیه + Z).
+# Phase E.3: "Now" standard output (project format: 6 microsecond digits + Z).
 FROZEN_UTC_Z = FROZEN_INSTANT.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 def _frozen_utc_now():
-    """جانشین ``core.time_utils.utc_now_iso`` در زمان قفل‌شده."""
+    """Substitute for ``core.time_utils.utc_now_iso'' in time locked."""
     return FROZEN_UTC_Z
 
 DB_TABLES = ["logs", "printer_counters", "cartridge_state",
              "yield_samples", "toner_snapshots_v2"]
 
-# کلید معنادار مرتب‌سازی هر جدول (طبق تصمیم فاز C)
+# The meaningful key to sort each table (according to phase C decision)
 ORDER_BY = {
     "logs": "rowid",
     "printer_counters": "rowid",
@@ -97,9 +108,9 @@ ORDER_BY = {
     "toner_snapshots_v2": "ip, color",
 }
 
-# برچسب‌های زمان (E.0.3): جنس زمان حفظ می‌شود، مقدارش نه.
-TS_LOCAL = "<TS_LOCAL>"      # naive local (بدون Z/offset)
-TS_UTC = "<TS_UTC>"          # aware (Z یا offset)
+# Time tags (E.0.3): The type of time is preserved, not its value.
+TS_LOCAL = "<TS_LOCAL>"      # naive local (without Z/offset)
+TS_UTC = "<TS_UTC>"          # aware (Z or offset)
 _TS_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?"
     r"(?P<tz>Z|[+-]\d{2}:?\d{2})?$")
@@ -108,46 +119,50 @@ _ISO_IN_TEXT_RE = re.compile(
 
 
 def _ts_tag(match) -> str:
-    """برچسب مناسب برای یک تطبیق زمانی: aware (Z/offset) یا naive."""
+    """Appropriate label for a timing match: aware (Z/offset) or naive."""
     return TS_UTC if match.group("tz") else TS_LOCAL
-# TD-003 (فاز E.3): الگو نباید **وسط یک واژه** فعال شود. بدون این lookbehind،
-# مقدار «N/A» (سنسور برای «نامعلوم») به «N<PATH>» تبدیل می‌شد و fixture دیگر
-# عیناً خروجی واقعی را نشان نمی‌داد. مسیر واقعی («/tmp/x»، «C:\\x») یا با
-# کاراکتر غیرالفبایی پیش از خودش می‌آید (فاصله، کوتیشن، `=`، `:`) یا در ابتدای رشته است.
+# TD-003 (Phase E.3): Pattern should not be activated **in the middle of a word**. Without this lookbehind,
+# The value "N/A" (sensor for "unknown") would be converted to "N<PATH>" and another fixture
+# It did not show the actual output. actual path ('/tmp/x', 'C:\\x') or with
+# A non-alphabetic character comes before itself (space, quote, `=`, `:`) or is at the beginning of the string.
 _PATH_RE = re.compile(r"(?<![A-Za-z0-9])(/[^\s'\"]+|[A-Za-z]:\\\\[^\s'\"]+)")
 
 
 class _FrozenDatetime(datetime):
-    """کلاس ``datetime`` قفل‌شده — رفتارش مثل کلاس واقعی است، فقط «حالا» ثابت.
+    """Locked ``datetime'' class — behaves like a real class, only fixed ``now''.
 
-    چرا کلاس و نه فقط ``now``؟ چون کد product ممکن است ``utcnow``، ``today``،
-    ``fromtimestamp`` یا ``fromisoformat`` را هم صدا بزند؛ وصله‌کردن کلاس تضمین
-    می‌کند هیچ‌کدام به ساعت واقعی نرسند:
+    Why class and not just ``now''? Because the product code may be ``utcnow'', ``today'',
+    Also call ``fromtimestamp'' or ``fromisoformat''; Patching the assurance class
+    makes none of them reach the real time:
 
-      • ``now(tz)``        → همان ``FROZEN_INSTANT`` با همان منطقه‌زمانی
-      • ``now()``          → نمایش محلیِ naive همان لحظه (مثل پایتون واقعی)
-      • ``utcnow()``       → naive-UTC همان لحظه (مثل پایتون واقعی؛ deprecated)
-      • ``today()``        → همان ``now()``
-      • ``fromtimestamp``  → از لحظه‌ی داده‌شده (UTC)، سپس مثل واقعی ترجمه
-      • ``fromisoformat``  → به ارث می‌رسد از ``datetime`` (تجزیه‌ی واقعی)
+      • ``now(tz)'' → same as ``FROZEN_INSTANT'' with same time zone
+      • ``now()'' → display the local naive at that moment (like real Python)
+      • ``utcnow()'' → naive-UTC right now (like real Python; deprecated)
+      • ``today()'' → the same as ``now()''
+      • ``fromtimestamp'' → from the given moment (UTC), then the actual translation
+      • ``fromisoformat'' → inherits from ``datetime'' (the actual parser)
     """
 
     @classmethod
     def now(cls, tz=None):
+        """Helper: now."""
         if tz is None:
             return FROZEN_NOW_LOCAL
         return FROZEN_INSTANT.astimezone(tz)
 
     @classmethod
     def utcnow(cls):
+        """Helper: utcnow."""
         return FROZEN_INSTANT.replace(tzinfo=None)
 
     @classmethod
     def today(cls):
+        """Helper: today."""
         return cls.now()
 
     @classmethod
     def fromtimestamp(cls, t, tz=None):
+        """Helper: fromtimestamp."""
         base = datetime.fromtimestamp(t, timezone.utc)
         if tz is not None:
             return base.astimezone(tz)
@@ -155,12 +170,14 @@ class _FrozenDatetime(datetime):
 
 
 class _ClockState:
-    """شمارنده‌ی قطعی برای time.time()/monotonic()."""
+    """Deterministic counter for time.time()/monotonic()."""
 
     def __init__(self):
+        """Initialize the instance."""
         self.n = 0
 
     def tick(self):
+        """Helper: tick."""
         self.n += 1
         return self.n
 
@@ -169,16 +186,18 @@ _CLOCK = _ClockState()
 
 
 def _fake_time():
+    """Helper: fake time."""
     return FROZEN_EPOCH + _CLOCK.tick() * 0.5
 
 
 def _fake_monotonic():
+    """Helper: fake monotonic."""
     return 1000.0 + _CLOCK.tick() * 0.5
 
 
 @contextlib.contextmanager
 def frozen_time():
-    """time.time/time.monotonic و datetime ماژول‌های دامنه را قفل می‌کند."""
+    """The time.time/time.monotonic and datetime modules lock the domain."""
     import config.settings as settings
     from core import database, store
     from core import yield_engine, cartridge_change_engine
@@ -190,7 +209,7 @@ def frozen_time():
         from core.collectors import (hp, canon, brother, toshiba, sensor,
                                     cartridge_id, cartridge_discovery)
         mods += [hp, canon, brother, toshiba, sensor, cartridge_id, cartridge_discovery]
-    except Exception:  # pragma: no cover - ماژول اختیاری
+    except Exception:  # pragma: no cover - optional module
         pass
     try:
         import core.enhanced_collector as ec
@@ -205,24 +224,24 @@ def frozen_time():
     patches = [mock.patch("time.time", side_effect=_fake_time),
                mock.patch("time.monotonic", side_effect=_fake_monotonic)]
     for m in mods:
-        # ⚠ استثنای عمدی: کلاس ``datetime`` داخل خودِ ``core.time_utils`` وصله
-        # نمی‌شود. ``to_utc_z`` با ``isinstance`` کار می‌کند و جانشین‌کردن کلاس با
-        # زیرکلاس، نمونه‌های واقعیِ datetime را رد می‌کرد
-        # («to_utc_z فقط datetime می‌پذیرد، نه datetime» — در ضبط E.3.6 دیده شد).
-        # «الآن»ی این ماژول از راه وصلهٔ ``utc_now_iso`` قفل می‌شود (پایین).
+        # ⚠ Intentional exception: ``datetime'' class inside ``core.time_utils'' patch itself
+        # can't ``to_utc_z'' works with ``isinstance'' and substituting the class with
+        # The subclass rejects actual datetime instances
+        # ("to_utc_z only accepts datetime, not datetime" — seen in recording E.3.6).
+        # The "now" of this module is locked by the ``utc_now_iso'' patch (below).
         if m is time_utils:
             continue
         if getattr(m, "datetime", None) is datetime:
             patches.append(mock.patch.object(m, "datetime", _FrozenDatetime))
-        # فاز E.3: «الآن» نویسنده‌ها از ``utc_now_iso`` می‌آید و هر ماژول آن را با
-        # نام خودش import کرده (``from core.time_utils import utc_now_iso``)؛ پس
-        # وصله باید روی همان ماژولِ مصرف‌کننده بنشیند، نه فقط روی core.time_utils.
-        # بدون این، ساعتِ واقعی وارد fixture می‌شد و «ثابتِ» golden به لحظه‌ی ضبط
-        # گره می‌خورد.
+        # Phase E.3: Authors' "now" comes from ``utc_now_iso'' and each module uses it with
+        # imported its own name (``from core.time_utils import utc_now_iso''); so
+        # The patch should sit on the same consumer module, not just core.time_utils.
+        # Without this, the actual clock would be entered into the fixture and the golden "fixed" to the recording moment
+        # It gets tied.
         if getattr(m, "utc_now_iso", None) is time_utils.utc_now_iso:
             patches.append(mock.patch.object(m, "utc_now_iso", _frozen_utc_now))
-    # لایه‌ی داده هم نباید ساعت واقعی ببیند (sqlite3 از datetime ساخته می‌شود
-    # و ممکن است برای «حالا» استفاده شود؛ وصله فقط اگر ماژول کلاس را import کرده باشد).
+    # The data layer should not see the real time either (sqlite3 is made from datetime
+    # and may be used for "now"; patch only if the module has imported the class).
     if hasattr(_sqlite3, "datetime") and _sqlite3.datetime is datetime:
         patches.append(mock.patch.object(_sqlite3, "datetime", _FrozenDatetime))
     with contextlib.ExitStack() as stack:
@@ -233,14 +252,14 @@ def frozen_time():
 
 @contextlib.contextmanager
 def isolated_db(tmpdir: str):
-    """DB موقت + ریست کش‌های in-memory + جداول کامل (init_db + yield)."""
+    """Temporary DB + in-memory cache resets + complete tables (init_db + yield)."""
     import core.database as database
     from core import store
     from core.yield_engine import ensure_yield_tables
 
     old_cwd = os.getcwd()
     os.chdir(tmpdir)
-    # ── گارد ایمنی: DB موقت باید داخل tmpdir باشد، هرگز logs.db خودِ مخزن ──
+    # ── Safety guard: temp db should be in tmpdir, never logs.db of repository itself ──
     db_path = os.path.abspath(getattr(database, "DB_PATH", "logs.db"))
     root = os.path.abspath(tmpdir)
     if os.path.commonpath([db_path, root]) != root:
@@ -253,7 +272,7 @@ def isolated_db(tmpdir: str):
         store._prev._cache.clear()
         with store.printers_lock:
             store.PRINTERS[:] = []
-        # حالت جهانی دیگری که بین اجراها باقی می‌ماند و نتیجه را تغییر می‌دهد
+        # Another global state that persists between runs and changes the result
         with store.data_lock:
             store.printer_data.clear()
         store.poll_stats.update({"count": 0, "last": None, "errors": 0, "is_polling": False})
@@ -264,15 +283,16 @@ def isolated_db(tmpdir: str):
         os.chdir(old_cwd)
 
 
-# ─── دیتابیس: seed / snapshot / normalize ──────────────────────────────────
+# ─── Database: seed / snapshot / normalize
 def _rows(conn, sql, params=()):
+    """Helper: rows."""
     cur = conn.execute(sql, params)
     cols = [c[0] for c in cur.description]
     return [dict(zip(cols, r)) for r in cur.fetchall()]
 
 
 def capture_seed(tables=None):
-    """وضعیت *خام* جدول‌ها (با id) برای بازسازی DB در بازپخش مستقل."""
+    """*Raw* status of tables (with id) for DB reconstruction in stand-alone replay."""
     import core.database as database
 
     tables = tables or DB_TABLES
@@ -281,16 +301,16 @@ def capture_seed(tables=None):
         for t in tables:
             try:
                 seed[t] = _rows(conn, f"SELECT * FROM {t}")
-            except (UndefinedTable, UndefinedColumn):   # فاز E.4.4: نوع مشترک
+            except (UndefinedTable, UndefinedColumn):   # Phase E.4.4: Common type
                 seed[t] = []
     return seed
 
 
 def seed_db(seed):
-    """DB تازه را با ردیف‌های خام (شامل id) پر می‌کند."""
+    """Fills the new DB with raw rows (including id)."""
     import core.database as database
 
-    # ستون‌های lazy (مسیر واقعی production: هنگام load/save اضافه می‌شوند)
+    # Lazy columns (real production path: added when load/save)
     try:
         database.ensure_printer_counters_columns()
     except Exception:  # pragma: no cover
@@ -310,7 +330,7 @@ def seed_db(seed):
 
 
 def snapshot_db(tables=None, limit=10):
-    """وضعیت *نرمال‌شده*ی جدول‌ها برای بخش ``db_state_after``."""
+    """The *normalized* state of the tables for the ``db_state_after'' section."""
     import core.database as database
 
     tables = tables or DB_TABLES
@@ -320,10 +340,10 @@ def snapshot_db(tables=None, limit=10):
             order = ORDER_BY.get(t, "rowid")
             try:
                 rows = _rows(conn, f"SELECT * FROM {t} ORDER BY {order} DESC LIMIT {limit}")
-            except (UndefinedTable, UndefinedColumn):   # فاز E.4.4: نوع مشترک
+            except (UndefinedTable, UndefinedColumn):   # Phase E.4.4: Common type
                 out[t] = []
                 continue
-            rows.reverse()                      # مرتب‌سازی معنادار صعودی
+            rows.reverse()                      # Ascending significant order
             cleaned = []
             for r in rows:
                 r.pop("id", None)
@@ -333,24 +353,25 @@ def snapshot_db(tables=None, limit=10):
     return out
 
 
-# ─── نرمال‌سازی ────────────────────────────────────────────────────────────
+# - Normalization - Normalization
 def normalize_value(v):
+    """Helper: normalize value."""
     if isinstance(v, str):
         m = _TS_RE.match(v)
         if m:
             return _ts_tag(m)
         text = v
-        # ستون‌های TEXT که JSON ذخیره می‌کنند (cartridge_id_state، toner_overrides، details):
-        # ترتیب کلیدها بین «ساخت تازه» و «load→dump مجدد» فرق می‌کند ولی نرمال‌سازی
-        # آن را قطعی می‌کند (محتوای معنایی یکسان ⇒ رشته‌ی یکسان).
+        # TEXT columns that store JSON (cartridge_id_state, toner_overrides, details):
+        # The order of the keys is different between "build new" and "load→dump again", but normalization
+        # makes it definite (same semantic content ⇒ same string).
         stripped = text.strip()
         if stripped[:1] in ("{", "["):
             try:
                 text = json.dumps(json.loads(stripped), ensure_ascii=False, sort_keys=True)
             except Exception:
                 text = v
-        # نکته: الگو باید خودِ offset/`Z` را هم ببلعد، وگرنه آرتیفکت‌هایی مثل
-        # «<TS_LOCAL>+00:00» تولید می‌شود (باگ کشف‌شده در آزمایش E.0.3).
+        # Note: The template must also swallow the offset/`Z' itself, otherwise artifacts like
+        # "<TS_LOCAL>+00:00" is generated (bug discovered in test E.0.3).
         text = _ISO_IN_TEXT_RE.sub(_ts_tag, text)
         text = _PATH_RE.sub("<PATH>", text)
         return text
@@ -362,7 +383,7 @@ def normalize_value(v):
 
 
 def normalize_tree(obj):
-    """نرمال‌سازی بازگشتی + حذف کلیدهای غیرقطعی."""
+    """Recursive normalization + removal of indeterminate keys."""
     if isinstance(obj, dict):
         return {k: normalize_tree(v) for k, v in sorted(obj.items())
                 if k not in ("id", "rowid")}
@@ -371,33 +392,39 @@ def normalize_tree(obj):
     return normalize_value(obj)
 
 
-# ─── HTTP جعلی (لایه‌ی انتقال) ──────────────────────────────────────────────
+# Fake HTTP (Transport Layer)
 class FakeHttp:
-    """پاسخ‌های HTTP قطعی بر اساس URL (regex → محتوا)."""
+    """Deterministic HTTP responses based on URL (regex → content)."""
 
     def __init__(self, responses=(), default_status=404):
+        """Initialize the instance."""
         self.responses = list(responses)
         self.default_status = default_status
         self.calls = []
 
     def _match(self, url):
+        """Helper: match."""
         for pattern, body in self.responses:
             if re.search(pattern, url or ""):
                 return body
         return None
 
     class _Resp:
+        """Helper class: resp."""
         def __init__(self, status, text):
+            """Initialize the instance."""
             self.status_code = status
             self.text = text
             self.content = (text or "").encode("utf-8")
             self.ok = 200 <= status < 300
 
         def raise_for_status(self):
+            """Helper: raise for status."""
             if not self.ok:
                 raise RuntimeError(f"HTTP {self.status_code}")
 
     def get(self, url, *a, **kw):
+        """Helper: get."""
         self.calls.append(url)
         body = self._match(url)
         if body is None:
@@ -406,9 +433,11 @@ class FakeHttp:
 
     @contextlib.contextmanager
     def installed(self):
+        """Helper: installed."""
         import urllib.request as _ur
 
         def _urlopen(req, *a, **kw):
+            """Helper: urlopen."""
             url = getattr(req, "full_url", req)
             self.calls.append(url)
             body = self._match(url) or ""
@@ -420,37 +449,13 @@ class FakeHttp:
             yield self
 
 
-# ─── ضبط/بازپخش یک fixture ────────────────────────────────────────────────
-def execute_steps(steps, transport=None, http=None):
-    """گام‌ها را روی محیط ایزوله اجرا می‌کند و برای هر گام خروجی مشاهده‌شده می‌دهد.
-
-    ``steps``: [{"call": callable} ...] — هر گام یک تابع بدون آرگومان که خروجی تابع
-    تحت آزمون را برمی‌گرداند (یا None).
-    """
-    observed = []
-    for st in steps:
-        before = capture_seed() if st.get("capture_before") else None
-        if before:
-            seed_db(before)
-        if transport is not None:
-            transport.calls.clear()
-        ret = st["call"]()
-        observed.append({
-            "return_value": normalize_tree(ret),
-            "expected_events": normalize_tree(st["events_fn"]()),
-            "new_prev": normalize_tree(st["prev_fn"]()),
-            "db_state_after": snapshot_db(),
-            "snmp_call_sequence": (transport.call_sequence() if transport else []),
-        })
-    return observed
-
-
+# ─── recording/playback of a fixture
 @contextlib.contextmanager
 def event_recorder():
-    """هر ``add_event`` را ثبت می‌کند و *سپس* نسخه‌ی واقعی را صدا می‌زند.
+    """It logs every ``add_event'' and *then* calls the actual version.
 
-    نکته: این وصله در لایه‌ی ذخیره‌سازی است (نه منطق دامنه)؛ ``_counters_event``
-    و موتورهای دامنه دست‌نخورده اجرا می‌شوند و ردیف‌های واقعی در DB نوشته می‌شود.
+    Note: This patch is in the storage layer (not domain logic); ``_counters_event''
+    And the domain engines run intact and the actual rows are written to the DB.
     """
     import core.database as database
 
@@ -458,6 +463,7 @@ def event_recorder():
     recorded = []
 
     def wrapper(ip, etype, details=None):
+        """Helper: wrapper."""
         recorded.append({
             "ip": ip,
             "type": etype,
@@ -484,7 +490,7 @@ def event_recorder():
 
 
 def replay_counters(fixture):
-    """بازپخش hermetic یک fixture از نوع counters_event (مستقل از سایر گام‌ها)."""
+    """Hermetic playback of a fixture of type counters_event (independent of other steps)."""
     from tests.golden_scenarios import build_counters_call
 
     ip = fixture["input"]["ip"]
@@ -500,12 +506,13 @@ def replay_counters(fixture):
 
 
 def store_get_prev(ip):
+    """Helper: store get prev."""
     from core import store
     return store._prev.get(ip)
 
 
 def replay_enhanced(fixture):
-    """بازپخش hermetic یک fixture از نوع collect_enhanced (همه‌ی فازها، یک DB)."""
+    """Hermetic playback of a collect_enhanced fixture (all phases, one DB)."""
     import copy
 
     import core.enhanced_collector as ec
@@ -532,7 +539,7 @@ def replay_enhanced(fixture):
 
 
 def first_diff(a, b, path="$"):
-    """اولین تفاوت دو ساختار JSON-مانند (برای گزارش دقیق عدم‌تطابق)."""
+    """The first difference is the two JSON-like structures (to accurately report mismatches)."""
     if type(a) is not type(b):
         return f"{path}: type {type(a).__name__} != {type(b).__name__}"
     if isinstance(a, dict):
@@ -557,14 +564,14 @@ def first_diff(a, b, path="$"):
 
 
 def clear_module_caches():
-    """کش‌های in-memory ماژول‌ها را پاک می‌کند تا هر سناریو/بازپخش از حالت تمیز شروع شود."""
+    """Clears in-memory caches of modules so that each scenario/replay starts clean."""
     try:
         from core.collectors import cartridge_discovery
         cartridge_discovery._stability.clear()
         cartridge_discovery._last_attempt.clear()
-        # صف/worker کشف کارتریج: thread پس‌زمینه در حین ضبط، walkهای SNMP اضافه و
-        # *غیرقطعی* تولید می‌کند (۵ فراخوانی اضافه در اندازه‌گیری واقعی همین نشست).
-        # با فعال‌گذاشتن پرچم، thread هرگز شروع نمی‌شود ⇒ ضبط/بازپخش قطعی می‌ماند.
+        # Cartridge discovery queue/worker: background thread during recording, additional SNMP walks and more
+        # produces *inconclusive* (5 extra calls in the actual measurement of this session).
+        # With the flag enabled, the thread will never start ⇒ recording/playback will stop.
         cartridge_discovery._queue.clear()
         cartridge_discovery._queue_set.clear()
         cartridge_discovery._worker_started = True
@@ -589,17 +596,14 @@ def clear_module_caches():
 
 
 def json_safe(obj):
-    """تبدیل هر شیء به شکل JSON-پذیر قطعی (برای مقایسه‌ی تفاضل-صفر)."""
+    """Convert each object to a definitive JSON-acceptable form (for zero-difference comparisons)."""
     return json.loads(json.dumps(obj, ensure_ascii=False, sort_keys=True, default=str))
 
 
 def write_fixture(name, payload):
+    """Helper: write fixture."""
     FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
     path = FIXTURE_DIR / f"{name}.json"
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
                     encoding="utf-8")
     return path
-
-
-def load_fixture(path):
-    return json.loads(Path(path).read_text(encoding="utf-8"))

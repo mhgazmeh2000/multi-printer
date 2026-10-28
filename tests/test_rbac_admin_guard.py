@@ -1,19 +1,29 @@
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tests/test_rbac_admin_guard.py
+# @brief:        Tests for role-based access control on admin routes (task 3, phase C).
+# @details:      Responsibilities: Verify that admin-only routes reject non-admin users.
+#                Main API: RbacAdminGuardTests
+#                Side effects: none at import time
+# @dependencies: internal: core.database, models, web | external: pytest
+# @notes:        Can be run directly as a script.
+# =============================================================================
+
 """
-تست‌های سخت‌سازی RBAC (کار ۳ فاز C).
+RBAC hardening tests (task 3 phase C).
 
-سه نقص بسته‌شده:
-  ۳.۱) manager می‌توانست ادمین را تنزل دهد / حذف کند / رمزش را بازنشانی کند
-       (در `web/routes/users.py` گارد «اثر روی admin فقط با admin» اضافه شد).
-  ۳.۲) `toner_reset` هیچ decorator محافظی نداشت (اکنون `@admin_required`).
-  ۳.۳) اولین ثبت‌نام خودکار admin می‌شد؛ اکنون با `ADMIN_SETUP_TOKEN` قابل قفل‌کردن است.
+Three defects closed:
+  3.1) The manager could demote/remove/reset the admin
+       (In `web/routes/users.py` added guard "Effect on admin only with admin").
+  3.2) `toner_reset` had no guard decorator (now `@admin_required`).
+  3.3) The first automatic registration was admin; Now lockable with `ADMIN_SETUP_TOKEN`.
 
-پنج تست طبق قرارداد کار ۳:
-  ۱) manager → تنزل ادمین ⇒ 403
-  ۲) admin → تنزل ادمین (با ۲ ادمین) ⇒ 200
-  ۳) viewer → toner_reset ⇒ 403
-  ۴) اولین ثبت‌نام با ADMIN_SETUP_TOKEN اشتباه ⇒ 403
-  ۵) اولین ثبت‌نام بدون ADMIN_SETUP_TOKEN ⇒ admin (رفتار فعلی)
+Five tests according to work contract 3:
+  1) manager → demote admin ⇒ 403
+  2) admin → demoting admin (with 2 admins) ⇒ 200
+  3) viewer → toner_reset ⇒ 403
+  4) First registration with wrong ADMIN_SETUP_TOKEN ⇒ 403
+  5) First registration without ADMIN_SETUP_TOKEN ⇒ admin (current behavior)
 """
 import os
 import tempfile
@@ -26,18 +36,19 @@ from core.database import init_db
 from models import User
 from web import create_app
 
-# این فایل فقط با pytest اجرا میشود (به‌عنوان بخشی از مسیر ۲۱ تستی CI).
-# load_tests خالی ⇒ `python -m unittest discover` این فایل را کنار میگذارد و
-# تستها دوبار شمرده نمیشوند.
+# This file is only run with pytest (as part of CI test path 21).
+# load_tests is empty ⇒ `python -m unittest discover` ignores this file and
+# Tests are not counted twice.
 pytestmark = pytest.mark.pytest_only
 
 
-def load_tests(loader, tests, pattern):  # noqa: ARG001 - امضای پروتکل unittest
-    """پروتکل unittest: این فایل با unittest کشف/اجرا نمیشود."""
+def load_tests(loader, tests, pattern):  # noqa: ARG001 - unittest protocol signature
+    """Unittest protocol: This file is not detected/executed by unittest."""
     return unittest.TestSuite()
 
 
 def _login(client, user):
+    """Helper: login."""
     with client.session_transaction() as sess:
         sess["_user_id"] = str(user.id)
         sess["_fresh"] = True
@@ -45,10 +56,12 @@ def _login(client, user):
 
 class RbacAdminGuardTests(unittest.TestCase):
 
+    """Tests for rbac admin guard."""
     def setUp(self):
+        """Prepare the fixtures that each test in this class uses."""
         self.tmp = tempfile.TemporaryDirectory()
         self.old_cwd = os.getcwd()
-        os.chdir(self.tmp.name)                 # DB_PATH نسبی ⇒ DB موقت
+        os.chdir(self.tmp.name)                 # Relative DB_PATH ⇒ Temporary DB
         init_db()
         self.app = create_app()
         self.app.config["WTF_CSRF_ENABLED"] = False
@@ -64,21 +77,24 @@ class RbacAdminGuardTests(unittest.TestCase):
                                   password="secret123", role="viewer", is_verified=True)
 
     def tearDown(self):
+        """Release the resources that each test in this class created."""
         os.chdir(self.old_cwd)
         self.tmp.cleanup()
 
     def _fresh(self, user_id):
+        """Helper: fresh."""
         return User.get(user_id)
 
-    # ── ۱) manager نمی‌تواند ادمین را تنزل دهد ─────────────────────────────
+    # ── 1) manager cannot demote admin
     def test_1_manager_cannot_demote_admin(self):
+        """Verifies 1 manager cannot demote admin."""
         _login(self.client, self.manager)
         r = self.client.post(f"/api/users/{self.admin.id}/role", json={"role": "viewer"})
         self.assertEqual(r.status_code, 403, r.get_data(as_text=True))
         self.assertEqual(self._fresh(self.admin.id).role, "admin",
                          "نقش ادمین نباید تغییر کرده باشد")
 
-        # حذف و بازنشانی رمز ادمین هم برای manager ممنوع است
+        # Deleting and resetting the admin password is also prohibited for the manager
         r = self.client.delete(f"/api/users/{self.admin.id}")
         self.assertEqual(r.status_code, 403, r.get_data(as_text=True))
         self.assertIsNotNone(self._fresh(self.admin.id), "ادمین نباید حذف شده باشد")
@@ -86,37 +102,40 @@ class RbacAdminGuardTests(unittest.TestCase):
         r = self.client.post(f"/api/users/{self.admin.id}/reset-password", json={})
         self.assertEqual(r.status_code, 403, r.get_data(as_text=True))
 
-    # ── ۲) admin می‌تواند ادمین را تنزل دهد (با ≥۲ ادمین) ────────────────────
+    # ── 2) admin can demote admin (with ≥2 admins) ─────────────────────
     def test_2_admin_can_demote_admin_when_multiple_admins(self):
+        """Verifies 2 admin can demote admin when multiple admins."""
         _login(self.client, self.admin)
         r = self.client.post(f"/api/users/{self.admin2.id}/role", json={"role": "manager"})
         self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
         self.assertEqual(r.get_json()["user"]["role"], "manager")
         self.assertEqual(self._fresh(self.admin2.id).role, "manager")
 
-    # ── ۳) viewer نمی‌تواند toner_reset کند ─────────────────────────────────
+    # ── 3) viewer can't reset toner
     def test_3_viewer_cannot_reset_toner(self):
+        """Verifies 3 viewer cannot reset toner."""
         _login(self.client, self.viewer)
         r = self.client.post("/api/printer/10.0.0.5/toner_reset",
                              json={"color": "black", "level": 100})
         self.assertEqual(r.status_code, 403, r.get_data(as_text=True))
 
-        # کنترل مثبت: همان درخواست با manager هم 403 است (سیاست فعلی: admin-only)
+        # Positive control: the same request with manager is also 403 (current policy: admin-only)
         _login(self.client, self.manager)
         r = self.client.post("/api/printer/10.0.0.5/toner_reset",
                              json={"color": "black", "level": 100})
         self.assertEqual(r.status_code, 403, r.get_data(as_text=True))
 
-    # ── ۴) ثبت‌نام اولین کاربر با توکن اشتباه ⇒ 403 ──────────────────────────
-    # «اولین ثبت‌نام» فرض می‌کند DB خالی است؛ روی PG همهٔ تست‌ها یک اسکیمای
-    # جلسه‌ای را می‌بینند (setUp همین کلاس ۴ کاربر ساخته) ⇒ sqlite_only.
+    # ── 4) First user registration with wrong token ⇒ 403 ────────────────────────────
+    # "first registration" assumes the DB is empty; On PG, all tests are one scheme
+    # They see a session (setUp this class created 4 users) ⇒ sqlite_only.
     @pytest.mark.sqlite_only
     def test_4_first_register_requires_matching_setup_token(self):
+        """Verifies 4 first register requires matching setup token."""
         with tempfile.TemporaryDirectory() as tmp2:
             old = os.getcwd()
             os.chdir(tmp2)
             try:
-                init_db()                        # DB خالی ⇒ هیچ کاربری وجود ندارد
+                init_db()                        # DB is empty ⇒ no user exists
                 app = create_app()
                 app.config["WTF_CSRF_ENABLED"] = False
                 client = app.test_client()
@@ -143,11 +162,12 @@ class RbacAdminGuardTests(unittest.TestCase):
             finally:
                 os.chdir(old)
 
-    # ── ۵) بدون ADMIN_SETUP_TOKEN: رفتار فعلی (اولین کاربر = admin) ─────────
-    # «اولین ثبت‌نام» فرض می‌کند DB خالی است؛ روی PG همهٔ تست‌ها یک اسکیمای
-    # جلسه‌ای را می‌بینند (setUp همین کلاس ۴ کاربر ساخته) ⇒ sqlite_only.
+    # ── 5) Without ADMIN_SETUP_TOKEN: current behavior (first user = admin) ─────────
+    # "first registration" assumes the DB is empty; On PG, all tests are one scheme
+    # They see a session (setUp this class created 4 users) ⇒ sqlite_only.
     @pytest.mark.sqlite_only
     def test_5_first_register_without_token_keeps_current_behaviour(self):
+        """Verifies 5 first register without token keeps current behaviour."""
         with tempfile.TemporaryDirectory() as tmp2:
             old = os.getcwd()
             os.chdir(tmp2)
@@ -172,8 +192,9 @@ class RbacAdminGuardTests(unittest.TestCase):
                 os.chdir(old)
 
 
-    # ── ۶) فرم ثبت‌نام با ADMIN_SETUP_TOKEN: فیلد توکن نمایش داده می‌شود ─────
+    # ── 6) Registration form with ADMIN_SETUP_TOKEN: Token field is displayed ─────
     def test_6_register_form_shows_setup_token_field_when_configured(self):
+        """Verifies 6 register form shows setup token field when configured."""
         with tempfile.TemporaryDirectory() as tmp2:
             old = os.getcwd()
             os.chdir(tmp2)
@@ -193,8 +214,9 @@ class RbacAdminGuardTests(unittest.TestCase):
             finally:
                 os.chdir(old)
 
-    # ── ۷) بدون ADMIN_SETUP_TOKEN: فیلد توکن نمایش داده نمی‌شود ─────────────
+    # ── 7) Without ADMIN_SETUP_TOKEN: The token field is not displayed ─────────────
     def test_7_register_form_hides_setup_token_field_without_token(self):
+        """Verifies 7 register form hides setup token field without token."""
         with tempfile.TemporaryDirectory() as tmp2:
             old = os.getcwd()
             os.chdir(tmp2)

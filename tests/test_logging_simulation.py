@@ -1,13 +1,24 @@
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tests/test_logging_simulation.py
+# @brief:        End-to-end simulation with a virtual printer to prove log correctness.
+# @details:      Responsibilities: Simulate printer activity and check the generated log rows.
+#                Main API: VirtualToshiba, SimBase, LoggingSimulationTests
+#                Side effects: network I/O
+# @dependencies: internal: core, core.collectors.base, core.database, core.enhanced_collector,
+#                core.snmp.oid_map
+# @notes:        Can be run directly as a script.
+# =============================================================================
+
 """
-شبیه‌ساز سرتاسری «چاپگر مجازی» برای اثبات درستی لاگ‌ها.
+End-to-end "virtual printer" emulator to prove the correctness of logs.
 
-ایده: به‌جای تکیه بر تست واحد، یک دستگاه Toshiba مجازی می‌سازیم که رفتار چند
-هفته‌ای واقعی را پخش می‌کند (چاپ A4/A3/کپی/رنگی، خرابی SNMP، قطعی مانیتور،
-ریبوت، فکتوری‌ریست، تعویض کارتریج، poll تکراری) و رویدادهای ثبت‌شده را با
-حقیقت زمینی (Ground Truth) مقایسه می‌کنیم.
+Idea: Instead of relying on unit testing, we create a virtual Toshiba device that behaves multiple times
+Plays a real week (A4/A3 print/copy/color, SNMP failure, monitor failure,
+reboot, factory reset, cartridge replacement, repeated poll) and recorded events with
+We compare ground truth.
 
-این تست از همان مسیر کد production عبور می‌کند:
+This test goes through the same path as the production code:
 _collect_toshiba_job_data  →  attribute_paper_size  →  _counters_event
 """
 import os
@@ -25,53 +36,62 @@ recorded_events = []
 
 
 def _fake_add_event(ip, etype, details):
+    """Helper: fake add event."""
     recorded_events.append({"ip": ip, "type": etype, "details": dict(details or {})})
 
 
 class VirtualToshiba:
-    """چاپگر مجازی با شمارنده‌های سازگار (a3_total + a4_total == print_total)."""
+    """Virtual printer with compatible counters (a3_total + a4_total == print_total)."""
 
     def __init__(self, large=40_000, small=160_000, fc_from_large=0):
-        self.a3 = large            # شاخه ۲۰۷: کل کاغذ بزرگ
-        self.a4 = small            # شاخه ۲۰۸: کل کاغذ کوچک
-        self.fc = 0                # مونو پیش‌فرض
+        """Initialize the instance."""
+        self.a3 = large            # Branch 207: Whole large paper
+        self.a4 = small            # Branch 208: Whole small paper
+        self.fc = 0                # Default mono
         self.toner = 60
-        self.uptime = 900_000_000  # sysUpTime (صدم ثانیه)
-        self.fail_keys = set()     # کلیدهایی که این poll باید None برگردند (خرابی SNMP)
+        self.uptime = 900_000_000  # sysUpTime (hundreds of seconds)
+        self.fail_keys = set()     # Keys that this poll should return None (SNMP failure)
         self.uptime_fail = False
-        # حقیقت زمینی
+        # ground truth
         self.truth = {"large": 0, "small": 0, "color": 0}
 
     @property
     def total(self):
+        """Helper: total."""
         return self.a3 + self.a4
 
     @property
     def bw(self):
+        """Helper: bw."""
         return self.total - self.fc
 
     def print_job(self, large=0, small=0, color_pages=0):
+        """Helper: print job."""
         self.a3 += large
         self.a4 += small
         self.fc += color_pages
         self.truth["large"] += large
         self.truth["small"] += small
         self.truth["color"] += color_pages
-        self.toner = max(5, self.toner)  # مصرف تونر در تست‌ها ثابت نگه داشته می‌شود
+        self.toner = max(5, self.toner)  # Toner consumption is kept constant in the tests
 
     def poll_uptime(self):
+        """Helper: poll uptime."""
         if self.uptime_fail:
             return None
         return self.uptime
 
     def tick(self, seconds=60):
+        """Helper: tick."""
         self.uptime += seconds * 100
 
 
 class SimBase(unittest.TestCase):
+    """Helper class: sim base."""
     IP = "192.168.1.99"
 
     def setUp(self):
+        """Prepare the fixtures that each test in this class uses."""
         self.tmp = tempfile.TemporaryDirectory()
         self.old_cwd = os.getcwd()
         os.chdir(self.tmp.name)
@@ -87,14 +107,16 @@ class SimBase(unittest.TestCase):
         ec.snmp_get_with_fallback = self._snmp
 
     def tearDown(self):
+        """Release the resources that each test in this class created."""
         base_mod.add_event = self._orig_add_event
         ec.snmp_get_with_fallback = self._orig_snmp
         store._prev._cache.clear()
         os.chdir(self.old_cwd)
         self.tmp.cleanup()
 
-    # ── SNMP مجازی: فقط OIDهایی که _collect_toshiba_job_data می‌خواند ──
+    # ── Virtual SNMP: Only OIDs that _collect_toshiba_job_data reads ──
     def _snmp(self, ip, oid, community, **kw):
+        """Helper: snmp."""
         d = self.dev
         table = {
             OIDS["a3_total"]: d.a3, OIDS["a4_total"]: d.a4,
@@ -108,14 +130,14 @@ class SimBase(unittest.TestCase):
             OIDS["a5_total"]: 0, OIDS["a5_fc"]: 0, OIDS["a5_bw"]: 0,
             OIDS["b4_total"]: 0, OIDS["b4_fc"]: 0, OIDS["b4_bw"]: 0,
         }
-        # نگاشت معکوس OIDS[key] → key برای fail_keys
+        # Reverse mapping OIDS[key] → key for fail_keys
         key = next((k for k, v in OIDS.items() if v == oid), None)
         if key in d.fail_keys:
             return None
         return table.get(oid, 0)
 
     def poll(self):
-        """دقیقاً معادل بلاک رویداد collect_enhanced روی دستگاه مجازی."""
+        """Exactly equivalent to the collect_enhanced event block on the virtual machine."""
         d = self.dev
         prev = store._prev.get(self.IP) or {}
         total = None if "print_total" in d.fail_keys else d.total
@@ -140,12 +162,15 @@ class SimBase(unittest.TestCase):
 
     # helpers ────────────────────────────────────────────────
     def events_of(self, etype):
+        """Helper: events of."""
         return [e for e in recorded_events if e["type"] == etype]
 
     def pages(self, etype="PRINT"):
+        """Helper: pages."""
         return sum((e["details"].get("pages") or 0) for e in self.events_of(etype))
 
     def split_sums(self):
+        """Helper: split sums."""
         large = small = 0
         for e in recorded_events:
             s = e["details"].get("paper_split")
@@ -155,16 +180,18 @@ class SimBase(unittest.TestCase):
         return large, small
 
     def unattributed_pages(self):
+        """Helper: unattributed pages."""
         return sum((e["details"].get("pages") or 0)
                    for e in self.events_of("PRINT") + self.events_of("PRINT_GAP")
                    if not e["details"].get("paper_split"))
 
     def assert_no_fake_reset(self):
+        """Helper: assert no fake reset."""
         self.assertEqual(self.events_of("COUNTER_RESET"), [],
                          "COUNTER_RESET کاذب نباید ثبت شود")
 
     def assert_page_integrity(self, note=""):
-        """جمع صفحات لاگ‌شده (PRINT برای چاپ آنلاین) باید دقیقاً برابر حقیقت باشد."""
+        """The sum of logged pages (PRINT for online printing) must be exactly equal to the truth."""
         d = self.dev
         self.assertEqual(self.pages("PRINT"), d.truth["large"] + d.truth["small"],
                          f"pages mismatch {note}: logged={self.pages('PRINT')} "
@@ -177,8 +204,10 @@ class SimBase(unittest.TestCase):
 
 class LoggingSimulationTests(SimBase):
 
+    """Tests for logging simulation."""
     def test_01_first_poll_baseline_no_fake_giant_print(self):
-        # باگ مشهور قدیم: اولین poll نباید ۲۰۰هزار صفحه لاگ کند
+        # The old famous bug: the first poll should not log 200,000 pages
+        """Verifies 01 first poll baseline no fake giant print."""
         self.poll()
         self.assertEqual(recorded_events, [], "اولین poll باید فقط baseline بگیرد")
         self.dev.print_job(small=5)
@@ -186,6 +215,7 @@ class LoggingSimulationTests(SimBase):
         self.assertEqual(self.pages("PRINT"), 5)
 
     def test_02_normal_office_week_exact_pages_and_labels(self):
+        """Verifies 02 normal office week exact pages and labels."""
         self.poll()  # baseline
         for i in range(80):
             self.dev.print_job(small=7)
@@ -197,7 +227,7 @@ class LoggingSimulationTests(SimBase):
         self.assertEqual((lg, sm), (self.dev.truth["large"], self.dev.truth["small"]),
                          "تفکیک بزرگ/کوچک باید یک‌به‌یک با حقیقت باشد")
         self.assert_no_fake_reset()
-        # اختلاط: رویدادهای Mixed باید تفکیک دقیق داشته باشند
+        # Mixing: Mixed events must have strict segregation
         mixed = [e for e in self.events_of("PRINT")
                  if e["details"].get("paper_size") == "Mixed"]
         self.assertTrue(mixed, "حداقل چند رویداد Mixed انتظار داریم")
@@ -205,60 +235,63 @@ class LoggingSimulationTests(SimBase):
             self.assertTrue(e["details"].get("paper_split"))
 
     def test_03_uptime_read_failure_never_triggers_counter_reset(self):
-        # باگ تولیدی: ۲۷۶ COUNTER_RESET کاذب با current_uptime=0
+        # Production bug: 276 false COUNTER_RESET with current_uptime=0
+        """Verifies 03 uptime read failure never triggers counter reset."""
         self.poll()
         for _ in range(30):
             self.dev.print_job(small=4)
-            self.dev.uptime_fail = True     # uptime اصلاً خوانده نمی‌شود
+            self.dev.uptime_fail = True     # Uptime is not read at all
             self.poll()
         self.assert_no_fake_reset()
         self.assertEqual(self.events_of("COUNTER_ANOMALY"), [])
         self.assert_page_integrity("uptime-fail")
 
     def test_04_vendor_total_failure_keeps_snapshot_no_spike(self):
-        # باگ تولیدی: نوسان print_total (160,432 → 2,124 → 160,503)
+        # Production bug: print_total fluctuation (160,432 → 2,124 → 160,503)
+        """Verifies 04 vendor total failure keeps snapshot no spike."""
         self.poll()
         self.dev.print_job(small=10)
-        self.dev.fail_keys.add("print_total")      # OID vendor این poll خوانده نمی‌شود
+        self.dev.fail_keys.add("print_total")      # OID vendor of this poll is not read
         self.poll()
         self.assertEqual(self.pages("PRINT"), 0)
         self.assertTrue(self.events_of("SNMP_COUNTER_READ_ERROR"))
         self.dev.print_job(small=10)
-        self.poll()                                 # ۲۰ صفحه در دو بازه، یک لاگ درست
+        self.poll()                                 # 20 pages in two intervals, a correct log
         self.assertEqual(self.pages("PRINT"), 20)
         self.assertEqual(self.events_of("PRINT_OVERFLOW"), [])
         self.assert_no_fake_reset()
 
     def test_05_genuine_reboot_without_counter_reset_logs_normally(self):
-        # ریبوت واقعی: uptime ریست می‌شود ولی شمارنده در NVRAM حفظ است
+        # Actual reboot: uptime is reset, but the counter is saved in NVRAM
+        """Verifies 05 genuine reboot without counter reset logs normally."""
         self.poll()
-        base = self.dev.uptime
         self.dev.print_job(small=6)
-        self.dev.uptime = 2_000                     # دستگاه ریبوت شد
+        self.dev.uptime = 2_000                     # The device rebooted
         self.poll()
         self.assert_no_fake_reset()
         self.assertEqual(self.events_of("COUNTER_ANOMALY"), [])
         self.assert_page_integrity("reboot")
-        # ادامه چاپ بعد از ریبوت هم دقیق است
+        # Continue printing after reboot is also accurate
         self.dev.print_job(small=6)
         self.poll()
         self.assert_page_integrity("after-reboot")
 
     def test_06_mild_counter_drop_with_reboot_is_anomaly_not_reset(self):
-        # کاهش جزئی + ریبوت بدون شواهد ریست واقعی → COUNTER_ANOMALY + حفظ snapshot
+        # Partial reduction + reboot without evidence of actual reset → COUNTER_ANOMALY + snapshot retention
+        """Verifies 06 mild counter drop with reboot is anomaly not reset."""
         self.poll()
         self.dev.print_job(small=1)
         self.poll()
-        # دستگاه ریبوت شد و شمارنده کمی عقب افتاد (منابع SNMP ناپایدار)
+        # Device rebooted and the counter lags a bit (unstable SNMP resources)
         self.dev.a4 -= 5
         self.dev.uptime = 3_000
         self.poll()
         self.assert_no_fake_reset()
         self.assertEqual(len(self.events_of("COUNTER_ANOMALY")), 1)
-        # snapshot حفظ شده؛ ادامه چاپ بدون دوبارشماری.
-        # نکته‌ی فیزیکی (نه باگ): ۵ صفحه‌ای که خودِ شمارنده‌ی دستگاه «فراموش»
-        # کرده قابل لاگ نیست — آن‌ها از هیچ منبعی قابل بازیابی نیستند. سیستم به‌جای
-        # لاگ دروغین، COUNTER_ANOMALY شفاف ثبت کرده تا گمشدگی حسابرسی‌پذیر باشد.
+        # saved snapshot; Continue printing without double counting.
+        # Physical point (not a bug): 5 pages that the counter of the device "forgets"
+        # cannot be logged — they cannot be retrieved from any source. system instead
+        # The false log has registered a clear COUNTER_ANOMALY so that the loss is auditable.
         self.dev.print_job(small=8)
         self.poll()
         truth = self.dev.truth["large"] + self.dev.truth["small"]
@@ -268,11 +301,12 @@ class LoggingSimulationTests(SimBase):
                              "لاگ هرگز نباید بیشتر از واقعیت باد شود")
 
     def test_07_factory_reset_logs_exactly_one_counter_reset(self):
+        """Verifies 07 factory reset logs exactly one counter reset."""
         self.poll()
         self.dev.print_job(small=10)
         self.poll()
         before = self.pages("PRINT")
-        # فکتوری‌ریست: شمارنده صفر + uptime ریست
+        # Factory reset: zero counter + uptime reset
         self.dev.a3 = self.dev.a4 = self.dev.fc = 0
         self.dev.uptime = 5_000
         self.poll()
@@ -284,14 +318,15 @@ class LoggingSimulationTests(SimBase):
                          "چاپ بعد از ریست باید از baseline جدید درست حساب شود")
 
     def test_08_monitor_downtime_gap_becomes_print_gap_not_inflated_print(self):
-        # جهش غیرفیزیکی شمارنده (همان spikeهای +۱۲۳هزار صفحه‌ای تولید: منبع
-        # شمارنده نوسان کرد) → pending و سپس PRINT_GAP، نه PRINT بادکرده.
+        # Non-physical jump of the counter (the same spikes + 123 thousand production pages: source
+        # counter oscillated) → pending and then PRINT_GAP, not inflated PRINT.
+        """Verifies 08 monitor downtime gap becomes print gap not inflated print."""
         self.poll()
-        self.dev.print_job(small=400, large=100)      # جهش ۵۰۰ تایی در یک بازه
+        self.dev.print_job(small=400, large=100)      # A leap of 500 in one interval
         self.poll()                                   # pending overflow
         self.assertEqual(self.pages("PRINT"), 0)
         self.assertTrue(self.events_of("PRINT_OVERFLOW"))
-        self.poll()                                   # تأیید → PRINT_GAP
+        self.poll()                                   # Confirm → PRINT_GAP
         gaps = self.events_of("PRINT_GAP")
         self.assertEqual(len(gaps), 1)
         self.assertEqual(gaps[0]["details"]["pages"], 500)
@@ -301,8 +336,9 @@ class LoggingSimulationTests(SimBase):
         self.assert_no_fake_reset()
 
     def test_08b_reasonable_gap_is_normal_print_not_pending(self):
-        # قطعی مانیتور با چاپ «فیزیکی» (۶۰ صفحه در چند ساعت) باید PRINT عادی
-        # ثبت شود — این صفحات واقعاً چاپ شده‌اند و حذفشان یعنی گم‌کردن حقیقت.
+        # Failure of the monitor with "physical" printing (60 pages in a few hours) should be normal PRINT
+        # Record — these pages were actually printed, and to omit them would be to lose the truth.
+        """Verifies 08 b reasonable gap is normal print not pending."""
         self.poll()
         self.dev.print_job(small=60)
         self.poll()
@@ -313,28 +349,30 @@ class LoggingSimulationTests(SimBase):
         self.assertEqual((lg, sm), (0, 60))
 
     def test_09_paper_read_failure_suppresses_label_honestly_then_recovers(self):
+        """Verifies 09 paper read failure suppresses label honestly then recovers."""
         self.poll()
         self.dev.print_job(small=4, large=1)
-        self.dev.fail_keys.add("a3_total")            # خواندن شاخه بزرگ fail
+        self.dev.fail_keys.add("a3_total")            # Reading large branch fail
         self.poll()
         last = self.events_of("PRINT")[-1]
         self.assertIsNone(last["details"].get("paper_size"),
                           "با خواندن ناقص نباید حدس زده شود")
-        self.dev.print_job(small=4)                   # poll بعد: خطای گردش snapshot جذب می‌شود
+        self.dev.print_job(small=4)                   # Next poll: Snapshot rotation error is absorbed
         self.poll()
         last = self.events_of("PRINT")[-1]
         self.assertEqual(last["details"].get("paper_size"), "Small (A4/A5)",
                          "با جذب خطای داخل تلورانس باید دقیقاً Small ثبت شود (نه Mixed)")
         self.assertEqual(last["details"].get("paper_split"), {"large": 0, "small": 4},
                          "paper_split هرگز نباید از pages رویداد بیشتر شود")
-        self.dev.print_job(small=4)                   # poll بعد: بازیابی کامل
+        self.dev.print_job(small=4)                   # Next poll: full recovery
         self.poll()
         last = self.events_of("PRINT")[-1]
         self.assertEqual(last["details"].get("paper_size"), "Small (A4/A5)")
         self.assert_page_integrity("paper-read-fail")
 
     def test_10_two_pass_job_counter_updates_sum_correctly(self):
-        # job ۳۰صفحه‌ای که شمارنده‌اش در دو poll آپدیت می‌شود (تأخیر NVRAM)
+        # 30-page job whose counter is updated in two polls (NVRAM delay)
+        """Verifies 10 two pass job counter updates sum correctly."""
         self.poll()
         self.dev.print_job(small=18)
         self.poll()
@@ -344,32 +382,34 @@ class LoggingSimulationTests(SimBase):
         self.assertEqual(len(self.events_of("PRINT")), 2)
 
     def test_11_duplicate_poll_race_never_double_logs(self):
-        # poll دوبل (race/retry با همان snapshot) نباید رویداد تکراری بسازد
+        # A double poll (race/retry with the same snapshot) should not create duplicate events
+        """Verifies 11 duplicate poll race never double logs."""
         self.poll()
         self.dev.print_job(small=9)
         self.poll()
         n = len(recorded_events)
-        # اجرای دوباره با دقیقاً همان snapshot (دستگاه شمارنده نزده)
+        # Run again with exactly the same snapshot (device not countered)
         self.dev.uptime += 0
         self.poll()
         self.assertEqual(len(recorded_events), n, "delta صفر نباید PRINT جدید بسازد")
 
     def test_12_cartridge_swap_logs_exactly_one_confirmed_refill(self):
+        """Verifies 12 cartridge swap logs exactly one confirmed refill."""
         self.poll()
         self.dev.print_job(small=30)
-        self.dev.toner = 30                            # رسیدن به تهِ کارتریج با مصرف عادی
-        # (با چاپِ کافی در همین poll تا گاردِ ضدنویزِ «افت>۲۵٪ با <۵ صفحه» آن را
-        #  خوانش نویزی تلقی نکند — همان باگی که نسخه‌ی قدیمی تست را می‌شکست)
+        self.dev.toner = 30                            # Reaching the bottom of the cartridge with normal consumption
+        # (By printing enough in this same poll until the noise guard of "drop>25% with <5 pages" it
+        # Don't treat the reading as noise - the same bug that broke the old version of the test)
         self.poll()
-        self.dev.toner = 55                            # تعویض کارتریج: پرش +۲۵ بدون چاپ
+        self.dev.toner = 55                            # Cartridge replacement: +25 jump without printing
         self.poll()
         self.assertEqual(self.events_of("REFILL"), [],
                          "با یک poll نباید REFILL ثبت شود (مرحله pending)")
-        self.dev.toner = 54                            # تأیید اول (نویز ±۱ مجاز است)
+        self.dev.toner = 54                            # First verification (±1 noise is allowed)
         self.poll()
         self.assertEqual(self.events_of("REFILL"), [],
                          "با فقط یک تأیید نباید REFILL ثبت شود (دو تأیید پشت‌سر لازم است)")
-        self.dev.toner = 54                            # تأیید دومِ پشت‌سر → ثبت قطعی
+        self.dev.toner = 54                            # Second confirmation of the back → definitive registration
         self.poll()
         refills = self.events_of("REFILL")
         self.assertEqual(len(refills), 1, "REFILL باید فقط یک بار و بعد از دو تأیید پشت‌سر ثبت شود")

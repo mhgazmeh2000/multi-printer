@@ -1,4 +1,4 @@
-# طرح cutover — SQLite → PostgreSQL (فاز E)
+# Cutover plan — SQLite → PostgreSQL (phase E)
 
 **دامنه:** این سند فقط **دستور کار** است، نه اجرا. در فاز E.0 هیچ‌چیز از این سند اجرا نمی‌شود.
 **پیش‌نیازها:** `docs/db-adapter.md` (لایه‌ی adapter)، `docs/postgresql-strictness.md` (سخت‌گیری‌های PG)، `docs/timestamp-consumers.md` §۶ (الزام آگاه-UTC)، `docs/sql-paths-inventory.md` (مسیرهای SQL خام).
@@ -6,7 +6,7 @@
 
 ---
 
-## ۱. تعریف cutover
+## 1. Definition of cutover
 
 > **cutover = اولین نوشتنِ Flask روی PostgreSQL.**
 
@@ -23,7 +23,7 @@
 
 ---
 
-## ۲. چیزهایی که باید **قبل** از cutover تصمیم‌گیری و قفل شود
+## 2. Decisions that must be made and locked **before** cutover
 
 تاریخچهٔ «مرجع»: سطرهای ۲ تا ۸ این جدول به «بند N همان سند» ارجاع می‌دادند، درحالی‌که
 بندها در `docs/postgresql-strictness.md`‌اند نه در این سند — اصلاح شد (E.6.11).
@@ -48,7 +48,7 @@
 
 ---
 
-## ۳. روش اجرا — ۷ گام
+## 3. Execution method — 7 steps
 
 ### گام ۱ — dry-run بدون نویسنده
 هدف: اثبات اینکه خواندن‌ها کار می‌کنند، **بدون** اینکه چیزی در PG نوشته شود.
@@ -121,7 +121,7 @@ $env:DB_BACKEND="postgresql"
 
 ---
 
-## ۳.۵ شرط «هیچ داده‌ی تازه در PG» (درجه‌سنجی گام ۱)
+## 3.5 Condition "no new data in PG" (step 1 measurement)
 
 ```sql
 -- در ابتدا و انتهای گام ۱ (و بعد در گام ۴/۵) اجرا و مقایسه شود:
@@ -134,7 +134,7 @@ FROM pg_stat_user_tables ORDER BY relname;
 
 ---
 
-## ۴. چه چیزی cutover **نیست** (اشتباه‌های رایج)
+## 4. What cutover **is not** (common mistakes)
 
 - «اپلیکیشن به PG وصل شد» ⇒ نه؛ اتصال/خواندن، برگشت‌پذیرِ بی‌هزینه است.
 - «تست‌ها روی PG سبز شد» ⇒ نه؛ آن گام ۲ است.
@@ -145,7 +145,7 @@ FROM pg_stat_user_tables ORDER BY relname;
 
 ---
 
-## ۵. بکاپ‌ها و مسیرها
+## 5. Backups and paths
 
 | مورد | مسیر | توضیح |
 |---|---|---|
@@ -158,7 +158,7 @@ FROM pg_stat_user_tables ORDER BY relname;
 
 ---
 
-## ۶. بازگشت پس از cutover (نقش `tools/export_from_pg.py`)
+## 6. Rollback after cutover (role of `tools/export_from_pg.py`)
 
 ```powershell
 # ۱) توقف Flask (تا لحظه‌ی بازگشت هیچ نویسنده‌ای روی PG نباشد)
@@ -183,7 +183,7 @@ $env:DB_BACKEND="sqlite"
 
 ---
 
-## ۷. نشانه‌ی cutover در دیتابیس
+## 7. Cutover marker in the database
 
 `tools/set_cutover_marker.py` (E.0.13 — **ساخته شد**) جدول `meta(key, value, updated_at)`
 را idempotent می‌سازد و رکورد `timezone_cutover_at` را با ISO UTC می‌نویسد:
@@ -210,7 +210,7 @@ python tools\set_cutover_marker.py --verify                     # exit 1 اگر 
 
 ---
 
-## ۸. فهرست بازبینی نهایی (قبل از اعلام پایان cutover)
+## 8. Final checklist (before declaring cutover complete)
 
 - [ ] گام ۱: صفر نوشتن در PG (`n_tup_*` بی‌تغییر) و گزارش صفحات بازبینی‌شده
 - [ ] گام ۲: ۲۷۳ passed در هر دو backend + golden ۱۰/۱۰
@@ -224,7 +224,7 @@ python tools\set_cutover_marker.py --verify                     # exit 1 اگر 
 
 ---
 
-## ۹. کارهای باز مرتبط
+## 9. Related open items
 
 | مورد | وضعیت |
 |---|---|

@@ -1,4 +1,4 @@
-# بدهی فنی (Tech Debt) — فهرست زنده
+# Technical debt (Tech Debt) — live index
 
 **وضعیت:** فقط مستندات. هر ردیف یک «بدهی» شناخته‌شده است که در فاز جاری اصلاح
 نمی‌شود ولی باید پیش از/هنگام مهاجرت دیده شود.
@@ -13,13 +13,13 @@
 | TD-003 | نرمال‌ساز golden مقدار «N/A» را به «N<PATH>» تبدیل می‌کند | `tests/golden_harness.py` (الگوی `_PATH_RE`) | E.0.7 | کیفیت fixture | ⬜ کم | **رفع شد (E.3)** |
 | TD-004 | `log` تعریف‌نشده در مسیر خطای `api_security_stats` | `web/routes/security.py` | E.3.4 (هشدار pyflakes) | باگ واقعی در مسیر خطا | — | ✅ **بسته (E.6.7)** |
 | TD-005 | ابزار مهاجرت زمان، manifest را در هر اجرا بازنویسی می‌کند | `tools/migrate_timestamps_to_utc.py` (`_write_manifest`) | E.3.5 | قابلیت حسابرسی/شاهد | — | ✅ **بسته (فاز F.3.1: برچسب زمانی در نام فایل manifest)** |
-| TD-006 | «ساعات سکوت» هشدار سنسور به ساعت محلی سرور تکیه دارد | `core/sensor_alert.py:39` | E.3.4 | تصمیم زمان‌محور | — | ✅ **بسته (فاز I.6: اعمال timezone صریح `Asia/Tehran` و تست اختصاصی)** |
+| TD-006 | «ساعات سکوت» هشدار سنسور به ساعت محلی سرور تکیه دارد | `core/sensor_alert.py:39` | E.3.4 | تصمیم زمان‌محور | ⬜ متوسط (روی سرور UTC جابه‌جا می‌شود) | باز — **موکول به فاز I** (تصمیم E.6.8؛ پیش‌نیاز: تأیید مالک دربارهٔ TZ سرور) |
 | TD-007 | حالت `replace` در import روی PG پشتیبانی نمی‌شود | `web/routes/import_db.py` (`_import_table`) | E.4.8 | قابلیت ترجمه‌نشده | — | ✅ **بسته (تصمیم E.6.1 و ابزار CLI فاز F؛ سند docs/import-db-retirement.md)** |
 | TD-008 | `_columns`/`_tables` در import با SQLite-only کار می‌کنند (`PRAGMA`/`sqlite_master`) | `web/routes/import_db.py` (`_columns`, `_tables`) | E.4.4/E.4.8 | وابستگی به backend (ردیف ۱۱ strictness) | ✅ رفعِ بخشی در E.6.1 (`analyze` با `schema_columns`/`present_tables`) | باز — مسیر **نوشتن** بازنشسته (E.6.1)؛ `test_import_analyze_route` دیگر زیر TD-012 skip نمی‌شود |
 | TD-009 | `_exists_by_cols` روی PG نحو نامعتبر می‌سازد (`col IS $1`) | `web/routes/import_db.py` (`_exists_by_cols`) | E.4.8 | وابستگی به backend | ⬜ صفر عملی (تنها از `mode=skip` و آن روی PG اجرا نمی‌شود) | باز — **بدون رفع (تصمیم E.6.9)**؛ زیر گارد بازنشستگی ۶.۱ |
 | TD-010 | `printer_name` در `/metrics` با `MAX()` انتخاب می‌شود ⇒ «نام تاریخی» است، نه نام زندهٔ پرینتر | `web/routes/metrics.py` (کوئری `cartridge_changes_total`) | E.4.9 | تصمیم معنایی برچسب | ⬜ کم (نام‌ها در عمل ثابت‌اند) | باز — تصمیم مالک: حفظ تعداد سری |
 | TD-011 | نام `UniqueViolation` برای **کل** خانوادهٔ integrity به‌کار می‌رود | `core/db/exceptions.py`، `core/db/connection.py::_translate_error`، `web/routes/import_db.py` | E.4.4 (درخواست مالک برای ثبت) | دقت نام/ظرافت سیاست | ⬜ کم (رفتار امروز درست و مستند است) | باز — فاز بعد |
-| TD-012 | تست‌های SQLite-محور زیر `DB_BACKEND=postgresql` | `tests/*` (marker `sqlite_only`) | E.5.2 | کاستی پوشش (مدیریت‌شده) | ⬜ کم (skip با دلیل + شمارش در سربرگ) | باز — **ارتقاء بخشی در فاز I.7 (۱۰ تست در `test_poll_event_invariant.py` دوپشتانه‌ای شدند)**؛ رفع کامل نیازمند تصمیم برای هر فایل |
+| TD-012 | ۵۲ تست SQLite-محور که زیر `DB_BACKEND=postgresql` می‌شکنند | `tests/*` (marker `sqlite_only`) | E.5.2 | کاستی پوشش (مدیریت‌شده) | ⬜ کم (skip با دلیل + شمارش در سربرگ) | باز — **ثبت‌شده در E.6.10**؛ رفع کامل نیازمند تصمیم برای هر فایل |
 | TD-013 | ترتیب الفبای فارسی در SQL روی PG وجود ندارد (collation `C`) | `docs/postgresql-strictness.md` بند ۴؛ `tests/test_collation_ordering.py` | E.6.3 | محدودیت رفتار (آگاهانه) | ⬜ کم (امروز هیچ `ORDER BY` متنیِ فارسی در کد نیست؛ UI با `localeCompare`) | باز — **تصمیم E.6.3: `C` می‌ماند**؛ در صورت نیاز per-query `COLLATE "fa-IR-x-icu"` |
 | TD-014 | چهار ستون JSON دیگر هنوز `TEXT`‌اند (بدون سود اندازه‌گیری‌شده) | `users.allowed_offices`/`allowed_modules`، `printer_counters.cartridge_id_state`/`toner_overrides`، `security_events.details` | E.6.4 | یکدستیِ نوع | ⬜ خیلی کم (هیچ SQL روی محتوای آن‌ها JSON نمی‌خواند) | باز — **تصمیم E.6.4: TEXT می‌مانند**؛ JSONB فقط با یک کوئریِ واقعیِ JSON-خوان در کار |
 | TD-016 | `_hp_toner_key` روی نام‌های SNMP با زیررشته تطبیق می‌داد ⇒ رنگِ کاذب («Imaging Drum» → magenta، «Fuser Kit» → black) و گم‌شدن `black_white` روی پرینترهای تک‌رنگ | `core/collectors/hp.py` (`_hp_toner_key`) | G.5 (سنجهٔ آینهٔ exporter) | باگ واقعی در رفتارِ امروز | ⬜ متوسط (هر HP تک‌رنگ با درام/فیوزر در اسلات ۲) | ✅ **بسته — رفع شد (مرزِ کلمه + `tests/test_hp_toner_key.py`)** |
@@ -35,7 +35,7 @@
 
 ---
 
-## TD-001 — `_save_counters_to_db` (مرده) و فهرست ستون ناقص
+## TD-001 — `_save_counters_to_db` (dead) and incomplete column list
 
 **وضعیت:** ✅ **بسته در E.6.5** — تابع (۵۳ خط) و `import json` بی‌مصرفش حذف
 شدند؛ قفلِ بازنگشت در `tests/test_upsert_cross_backend.py` و شرح کامل در
@@ -70,7 +70,7 @@
 
 ---
 
-## TD-002 — بازتاب درخواست فراخوان در بدنهٔ پاسخ ۴۰۱
+## TD-002 — echoing the callback request in the body of the 401 response
 
 **وضعیت:** ✅ **بسته در E.6.6** — `next` هم‌سایت شد و خودِ guard هم سخت‌تر شد.
 
@@ -131,7 +131,7 @@ production» دست‌نخورده می‌ماند.
 
 ---
 
-## TD-003 — نرمال‌ساز golden، «N/A» را به «N&lt;PATH&gt;» تبدیل می‌کند
+## TD-003 — golden normaliser turns "N/A" into "N&lt;PATH&gt;"
 
 **شرح:** در `tests/golden_harness.py` الگوی مسیر (`_PATH_RE`) روی **هر** رشته
 اعمال می‌شود؛ پس مقدار `"N/A"` (که سنسور برای «نامعلوم» برمی‌گرداند —
@@ -152,7 +152,7 @@ fixture مگر برای PII» مجاز نیست ⇒ برای فاز E ثبت ش�
 
 ---
 
-## TD-003 — وضعیت: رفع‌شده (فاز E.3)
+## TD-003 — status: fixed (phase E.3)
 
 **رفع:** الگوی `_PATH_RE` یک lookbehind گرفت — `(?<![A-Za-z0-9])` — تا فقط جایی
 فعال شود که پیش از `/` کاراکتر الفبایی/عددی نباشد (یعنی ابتدای رشته، یا بعد از
@@ -169,7 +169,7 @@ fixture مگر برای PII» مجاز نیست ⇒ برای فاز E ثبت ش�
 
 ---
 
-## TD-004 — `log` تعریف‌نشده در مسیر خطای آمار امنیتی
+## TD-004 — undefined `log` in the error path of security statistics
 
 **وضعیت:** ✅ **بسته در E.6.7** — `import logging` + `log =
 logging.getLogger("PrinterMonitor")`) هم‌سبک سایر routeها اضافه شد و
@@ -204,7 +204,7 @@ logging.getLogger("PrinterMonitor")`) هم‌سبک سایر routeها اضاف�
 
 ---
 
-## TD-005 — بازنویسی manifest ابزار مهاجرت زمان
+## TD-005 — rewriting the manifest of the time migration tool
 
 **وضعیت:** ✅ **بسته (فاز F.3.1)** — نام‌گذاری فایل‌های مانیفست با برچسب زمانی استاندارد `{db_path}.e3-manifest-{timestamp}.json` پیاده‌سازی شد.
 
@@ -217,26 +217,27 @@ logging.getLogger("PrinterMonitor")`) هم‌سبک سایر routeها اضاف�
 
 ---
 
-## TD-006 — «ساعات سکوت» هشدار سنسور و ساعت سرور
+## TD-006 — "quiet hours" of the sensor alert and the server clock
 
-**وضعیت:** ✅ **بسته (فاز I.6)**.
+**وضعیت:** 🔵 **باز — موکول به فاز I** (تصمیم E.6.8). پیش‌نیاز، تصمیم مالک است،
+نه کد: «سرور هدف با `TZ=Asia/Tehran` اجرا می‌شود یا UTC؟» بدون آن، هر رفعی فقط
+انتخابِ ما را قفل می‌کرد.
 
-**شرح:** در ابتدا `core/sensor_alert.py:39` شرط شب/روز را با `datetime.now().hour` می‌سنجید؛
-یعنی به منطقهٔ زمانیِ **محلی سرور** تکیه داشت. اگر سرور `TZ=UTC` اجرا می‌شد (مثل
-سندباکس/CI)، پنجرهٔ سکوت ۳:۳۰ جابه‌جا می‌شد و ممکن بود هشدار در ساعت نامناسب
+**شرح:** `core/sensor_alert.py:39` شرط شب/روز را با `datetime.now().hour` می‌سنجد؛
+یعنی به منطقهٔ زمانیِ **محلی سرور** تکیه دارد. اگر سرور `TZ=UTC` اجرا شود (مثل
+سندباکس/CI)، پنجرهٔ سکوت ۳:۳۰ جابه‌جا می‌شود و ممکن است هشدار در ساعت نامناسب
 برود یا نرود.
 
-**راه‌حل پیاده‌سازی‌شده:** در فاز I.6 توابع `_in_time_range` و `check_and_send_sensor_alert`
-اصلاح شدند تا از منطقه زمانی صریح پروژه (`DEFAULT_DISPLAY_TZ = "Asia/Tehran"` یا فیلد `timezone` کانفیگ)
-استفاده کنند. همچنین برچسب زمانی ایمیل‌های هشدار نیز با ساعت محلی تهران درج می‌شود.
-رفتار تابع با تبدیل دقیق ساعت UTC به افق زمانی تهران و پنجره‌های شبانه در
-`tests/test_sensor_alert_timezone.py` تثبیت شد.
+**چرا در E.3 رفع نشد:** این «تصمیم زمانی کسب‌وکار» است نه timestamp ذخیره‌شده؛
+قرارداد زمان فاز E دربارهٔ *داده* است. ضمناً طبق `docs/timezone-contract.md` §۷.۳
+پیش‌فرض این است که سرور با ساعت تهران کار می‌کند (تأیید دستی مالک باز است).
 
-**اقدام پیشنهادی:** بسته شد.
+**اقدام پیشنهادی:** استفاده از `core.time_utils.local_tz()` (ساعت تهران) به‌جای
+ساعت سرور، همراه با تست مرزی.
 
 ---
 
-## TD-007 — حالت `replace` در import روی PostgreSQL
+## TD-007 — `replace` mode in import on PostgreSQL
 
 **شرح:** `INSERT OR REPLACE` نحو SQLite است؛ روی PostgreSQL با
 `syntax error at or near "OR"` (SQLSTATE 42601) می‌شکند (سنجیده‌شده، E.4.8).
@@ -248,7 +249,7 @@ logging.getLogger("PrinterMonitor")`) هم‌سبک سایر routeها اضاف�
 
 ---
 
-## TD-008 — خواندن اسکیمای import با ابزارهای SQLite-only
+## TD-008 — reading the import schema with SQLite-only tools
 
 **شرح:** `web/routes/import_db.py` هم برای فایل مبدأ (SQLite آپلودی) و هم برای
 دیتابیس مقصد از `_columns` (`PRAGMA table_info`) و `_tables` (`sqlite_master`)
@@ -268,7 +269,7 @@ logging.getLogger("PrinterMonitor")`) هم‌سبک سایر routeها اضاف�
 
 ---
 
-## TD-009 — `_exists_by_cols` روی PostgreSQL: `col IS $1` نحو نامعتبر است
+## TD-009 — `_exists_by_cols` on PostgreSQL: `col IS $1` is invalid syntax
 
 **شرح:** `web/routes/import_db.py::_exists_by_cols` برای «وجود ردیف با مقادیر
 یکسان، مقاوم به NULL» شرط `(col IS ? OR col = ?)` می‌سازد. عملگر `IS` در SQLite
@@ -298,7 +299,7 @@ TD-007 را می‌بندد (`_reject_import_on_postgres()` در ابتدای `c
 
 ---
 
-## TD-010 — `printer_name` در `/metrics` و معنای `MAX()`
+## TD-010 — `printer_name` in `/metrics` and the meaning of `MAX()`
 
 **شرح:** کوئری `cartridge_changes_total` روی `logs` گروه‌بندی
 `(printer_ip, detection, color)` دارد و `printer_name` را به‌عنوان برچسب برمی‌گرداند.
@@ -324,7 +325,7 @@ aggregate function») — سنجیده‌شده در E.4.9 روی PG ۱۶.
 
 ---
 
-## TD-011 — نام `UniqueViolation` برای کل خانوادهٔ integrity
+## TD-011 — the name `UniqueViolation` for the whole integrity family
 
 **شرح:** در E.4.4 به تصمیم صریح مالک، **کل** خانوادهٔ `IntegrityError` به یک کلاس
 نگاشت می‌شود: `sqlite3.IntegrityError` (UNIQUE / NOT NULL / CHECK / FK) و روی PG هر
@@ -352,9 +353,7 @@ SQLSTATE با پیشوند `23`. نام کلاس (`UniqueViolation`) پس برا
 
 ---
 
-## TD-012 — ۵۲ تست SQLite-محور که زیر `DB_BACKEND=postgresql` می‌شکنند
-
-**وضعیت (فاز I.7):** ۱۰ تست در `tests/test_poll_event_invariant.py` با تبدیل ساختار اتصال به `get_connection()` و مدیریت یکسان فیلد `details` (رشته و دیکشنری) از marker `sqlite_only` خارج شدند و به تست‌های dual-backend ارتقاء یافتند. باقی تست‌های این فهرست در انتظار بازآرایی فایل‌های مربوطه هستند.
+## TD-012 — 52 SQLite-based tests that fail under `DB_BACKEND=postgresql`
 
 **وضعیت (E.6.10):** ردیف این بدهی به **جدول** هم اضافه شد (تا پیش از این فقط
 بخش توضیحی داشت) — skip‌ها خودِ راه‌حل‌اند، ولی «ادعای پوشش PG» دیگر نمی‌شود،
@@ -398,7 +397,7 @@ python -m pytest tests/` ⇒ ۴۱۹ passed / ۰ failed / ۷۲ skipped و SQLite
 
 ---
 
-## TD-013 — ترتیب الفبای فارسی در SQL (collation `C`)
+## TD-013 — Persian alphabetical order in SQL (`C` collation)
 
 **وضعیت:** 🔵 **باز — آگاهانه** (تصمیم E.6.3؛ قفل در `tests/test_collation_ordering.py`).
 
@@ -422,7 +421,7 @@ ICU ندارد (`PRAGMA compile_options` ⇒ صفر)، پس ICU روی PG یعن
 
 ---
 
-## TD-014 — JSONB نشدنِ چهار ستون JSON دیگر
+## TD-014 — four other JSON columns that did not become JSONB
 
 **وضعیت:** 🔵 **باز — بدون برنامهٔ رفع** (تصمیم E.6.4؛ دامنه در
 `tests/test_jsonb_columns.py::MigrationScopeTests` قفل شده است).
@@ -447,7 +446,7 @@ ICU ندارد (`PRAGMA compile_options` ⇒ صفر)، پس ICU روی PG یعن
 
 ---
 
-## TD-015 — هندلرهای `except sqlite3.*` در `tools/` (بدهی *پذیرفته‌شده*)
+## TD-015 — `except sqlite3.*` handlers in `tools/` (*accepted* debt)
 
 **وضعیت:** ⬜ **no-action آگاهانه** (تصمیم مالک در E.4.4: «۱۳ محل در کد برنامه ⇒ کلاس
 مشترک؛ `tools/` و `tests/` دست‌نخورده»). این ردیف همان نیمهٔ دوم را شماره‌گذاری می‌کند —
@@ -487,7 +486,7 @@ PG هم کار کنند (مثلاً `set_cutover_marker` برای PG)، آن‌�
 
 ---
 
-## TD-016 — `_hp_toner_key` بی‌مرزِ کلمه (رفع‌شده در `fix(hp)`)
+## TD-016 — `_hp_toner_key` without word boundary (fixed in `fix(hp)`)
 
 **چطور پیدا شد:** گام G.5 خواست خروجیِ exporter «دقیقاً مثلِ `collect_hp`» باشد؛ برای
 همین `_hp_toner_key()` از همان فایل import شد و تستِ آینه، نامِ «CF470A Imaging Drum» را
@@ -533,7 +532,7 @@ collector — و آینه درست کار می‌کرد.
 
 ---
 
-## TD-017 — دو شاخه‌ای که آینهٔ exporter بازتولید نمی‌کند (دامنهٔ H.1)
+## TD-017 — two branches that the exporter mirror does not reproduce (scope of H.1)
 
 **چطور پیدا شد:** گام H.1 خواست وب‌اسکرپِ تونر (که فقط در collectorها بود) به مسیرِ
 exporter برسد. هنگامِ مرزبندیِ «چه چیزی آینه می‌شود»، سه شاخه بیرونِ دامنه ماند و عمداً
@@ -569,7 +568,7 @@ exporter به‌جای «کارتریج استفاده‌شده» می‌گوی�
 
 ---
 
-## TD-018 — mirror نکردنِ `toshiba`/`brother`/`sensor_ecs100g` در مسیرِ exporter
+## TD-018 — `toshiba`/`brother`/`sensor_ecs100g` not mirrored in the exporter path
 
 **چرا باز است:** دامنهٔ H.1 را مالک با «گزینهٔ ۱» بست: HP + Canon. `SUPPORTED_BRANDS =
 ("hp", "canon")` است و `collect_via_exporter` برایِ هر برندِ دیگر *پیش ازِ هر کوئری* `None`
@@ -606,7 +605,7 @@ non-entry» ساختیم نه successِ ساختگی.
 
 ---
 
-## TD-019 — گرهٔ transitive: `core.collectors.*` بدونِ SNMP/DB بار نمی‌شود
+## TD-019 — transitive node: `core.collectors.*` cannot load without SNMP/DB
 
 **چرا ثبت شد:** گام H.1 خواست اسکرپرهایِ HTTP از `core/collectors/{hp,canon}.py` import شوند
 («صفر کپی»). مخالفِ این انتخاب می‌گفت آن importها `core.snmp.protocol` را به مسیرِ exporter
@@ -635,7 +634,7 @@ eager import می‌کند و `base` که `core.store`/`core.db` را می‌آ�
 
 ---
 
-## TD-020 — fixture gap برای HP counter OIDs (11.2.3.9.6.1.1.*)
+## TD-020 — fixture gap for HP counter OIDs (11.2.3.9.6.1.1.*)
 
 **چطور پیدا شد:** در گام H.3، مقایسهٔ خروجیِ مسیرِ کاملِ exporter با fixtureهای طلایی اچ‌پی
 (`enhanced_01_hp_color_toner_full` و `enhanced_02_hp_color_toner_empty`) نشان داد که از میان
@@ -671,7 +670,7 @@ OIDها به fixture اضافه می‌شوند و تفاضل به صفر می�
 
 ---
 
-## TD-021 — snmp.yml برای HP Color فقط ۲ toner slot دارد
+## TD-021 — snmp.yml for HP Color has only 2 toner slots
 
 **چطور پیدا شد:** در تحلیل واگرایی گام H.3 و آزمون‌های `tests/test_hybrid_full_path.py` مشخص شد که
 خروجیِ `collect_via_exporter` برای پرینترهای رنگی اچ‌پی (مانند HP Color LaserJet MFP M577) صرفاً
@@ -695,7 +694,7 @@ OIDها به fixture اضافه می‌شوند و تفاضل به صفر می�
 
 ---
 
-## TD-022 — حذف ۵ ستون legacy از logs (در SQLite و PG)
+## TD-022 — removal of 5 legacy columns from logs (in SQLite and PG)
 
 **چرا:** ستون‌های مرده (`sheets`، `raw_counters`، `raw_delta`، `event_type`، `duplex_mode`)، ۱۰۰٪ تهی (NULL) یا دارای مقادیر ثابت (`UNKNOWN`، `unknown`)، بدون هرگونه مصرف‌کننده در کد برنامه (`core/`، `web/`). وجود آن‌ها در فاز F صرفاً جهت انطباق اسکیمای PostgreSQL با دیتابیس فعلی پروداکشن برای عبور از گارد ابزار مهاجرت با مایگریشن 0005 ایجاد شد.
 
@@ -708,7 +707,7 @@ OIDها به fixture اضافه می‌شوند و تفاضل به صفر می�
 
 ---
 
-## TD-023 — تفاوت ترتیب فیزیکی ستون‌ها در printer_counters بین SQLite و PG
+## TD-023 — difference in physical column order in printer_counters between SQLite and PG
 
 **چطور پیدا شد:** در جریان بازبینی پایگاه‌داده سرور تولید پس از مهاجرت SQLite به PostgreSQL مشخص شد که ترتیب فیزیکی ستون‌ها در جدول `printer_counters` بین SQLite و PostgreSQL (تعریف‌شده در مایگریشن `alembic/versions/0001_initial_schema.py`) دارای تفاوت جزئی است:
 - در SQLite: ستون ۱۷ `alert_codes`، ستون ۱۸ `updated_at`، ستون ۱۹ `cartridge_id_state`، ستون ۲۰ `toner_overrides`

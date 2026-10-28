@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tools/cartridge_test_step2.py
+# @brief:        Read-only helper for step 2 of cartridge_test.bat (ASCII-safe output).
+# @details:      Responsibilities: Connect read-only and print cartridge information.
+#                Main API: esc(), connect_ro(), main()
+#                Side effects: database access
+# @dependencies: stdlib only
+# @notes:        Can be run directly as a script.
+# =============================================================================
+
 """
 STEP 2 helper for cartridge_test.bat (read-only, ASCII-safe output).
 
@@ -20,12 +30,16 @@ import sys
 
 
 def esc(value):
+    """Escape a value for safe console output."""
+
     if value is None:
         return "-"
     return str(value).encode("ascii", "backslashreplace").decode("ascii")
 
 
 def connect_ro(db):
+    """Open the database read-only."""
+
     try:
         return sqlite3.connect("file:%s?mode=ro" % os.path.abspath(db), uri=True)
     except Exception:
@@ -33,6 +47,8 @@ def connect_ro(db):
 
 
 def main():
+    """Print the cartridge identity information for one printer."""
+
     if len(sys.argv) < 2:
         print("usage: cartridge_test_step2.py <printer_ip> [db_path]")
         return 2

@@ -1,7 +1,18 @@
-"""جمع‌آوری داده از HP LaserJet با افزایش timeout و تشخیص رنگ بهتر"""
+# =============================================================================
+# @file:         core/collectors/hp.py
+# @brief:        Collects status and toner data from HP LaserJet printers.
+# @details:      Responsibilities: Read HP OIDs with an increased timeout and detect colour toners
+#                reliably.
+#                Main API: collect_hp()
+#                Side effects: none at import time
+# @dependencies: internal: core, core.collectors.base, core.database, core.time_utils
+# @notes:        None.
+# =============================================================================
+
+"""Data collection from HP LaserJet with increased timeout and better color detection"""
 import re, time, logging
 from datetime import datetime, timezone
-from core.snmp.protocol import snmp_get_with_fallback
+
 from core.collectors.base import si, ss, _g, _counters_event, fetch_first_web_page
 from core import store
 from core.time_utils import to_utc_z, utc_now_iso
@@ -10,30 +21,30 @@ log = logging.getLogger("PrinterMonitor")
 
 
 def _scrape_hp_toners(ip: str, timeout: float = 4.0):
-    """Fallback وب برای سطح تونر HP وقتی SNMP عدد نمی‌دهد.
+    """Web fallback for HP toner level when SNMP does not return a number.
 
-    کشف مهم روی دستگاه‌های واقعی (E52645 با W9008MC و LaserJet 400 M401dn با
-    CE505A — هر دو با level=-2 در SNMP): علت «ماسک‌شدن» سطح، **کارتریج
-    شارژی/استفاده‌شده (Used)** است — خودِ EWS هم صراحتاً «Used Black Cartridge»
-    می‌گوید و نه SNMP عدد می‌دهد نه وب. در این حالت به‌جای عدد جعلی، حالت
-    ‍``_used`` برمی‌گردانیم تا UI وضعیت واقعی («کارتریج شارژی/استفاده‌شده — سطح نامشخص»)
-    را نشان دهد.
+    Important discovery on real devices (E52645 with W9008MC and LaserJet 400 M401dn with
+    CE505A — both with level=-2 in SNMP): cause of level "masking", **Cartridge
+    Charged/Used** — EWS itself is explicitly "Used Black Cartridge"
+    It says that neither SNMP gives a number nor the web. In this case, instead of the fake number, the state
+    Returns ``_used'' to the actual state UI ("Cartridge Charged/Used - Unspecified Level")
+    show
 
-    ساختارهای تأییدشده روی دستگاه واقعی:
-    - نسل جدید (FutureSmart / onehp):
-        صفحه‌ی Supplies Status:
+    Verified builds on real device:
+    - New generation (FutureSmart / onehp):
+        Supplies Status page:
           <h2 id="BlackCartridge1-Header">…</h2><p class="data percentage">67%*</p>
           <strong id="BlackCartridge1-SupplyState">Used|OK</strong>
-        صفحه‌ی Device Status (ریشه):
+        Device Status page (root):
           <h2 id="SupplyName0" …>…</h2> … <span id="SupplyPLR0" class="plr">67%*</span>
-          توجه: gauge همیشه width:0% نشان می‌دهد وقتی چیپ ناشناخته است — هرگز از
-          آن عدد برنمی‌داریم؛ منبع معتبر فقط متن PLR / data-percentage است.
-    - نسل قدیم (EWS کلاسیک مثل M401dn): صفحات supplies با نام مستقیم
-      (info_suppliesStatus.html / supplies_status.html) و متن «Used … Cartridge»/
-      پیام anticounterfeit برای کارتریج شارژی/استفاده‌شده.
+          Note: The gauge always shows width:0% when the chip is unknown — never from
+          We don't get that number; The only valid source is PLR text / data-percentage.
+    - Old generation (classic EWS like M401dn): supplies pages with direct names
+      (info_suppliesStatus.html / supplies_status.html) and the text "Used... Cartridge"/
+      Anticounterfeit message for refilled/used cartridge.
 
-    خروجی: {"<color>": 0-100، "_used": ["<color>", …]} — کلیدهای «_» فراداده‌اند
-    و در merge رد می‌شوند. اگر هیچ داده‌ی قابل‌استفاده‌ای نباشد None برمی‌گردد.
+    Output: {"<color>": 0-100, "_used": ["<color>", …]} — "_" keys are given
+    and are rejected in merge. None is returned if there is no usable data.
     """
     urls = [
         f"http://{ip}/hp/device/InternalPages/Index?id=SuppliesStatus",
@@ -56,8 +67,9 @@ def _scrape_hp_toners(ip: str, timeout: float = 4.0):
     used_colors = set()
 
     def _key(name: str):
-        # تشخیص رنگ با مرز کلمه — مثل «Document Feeder Kit» که حرف k دارد نباید
-        # به‌اشتباه black شود؛ فقط black/cyan/magenta/yellow به‌صورت کلمه‌ی کامل.
+        # Color recognition with a word border — such as "Document Feeder Kit" which has the letter k should not
+        # be mistakenly black; Only black/cyan/magenta/yellow in full word form.
+        """Map a supply name to its colour key (black, cyan, magenta or yellow)."""
         n = (name or "").lower()
         for color in ("black", "cyan", "magenta", "yellow"):
             if re.search(r"\b%s\b" % color, n):
@@ -65,12 +77,13 @@ def _scrape_hp_toners(ip: str, timeout: float = 4.0):
         return None
 
     def _mark_used(name: str, state_text: str = ""):
+        """Mark a supply as used when its name or state text mentions 'used'."""
         if "used" in (name or "").lower() or "used" in (state_text or "").lower():
             k = _key(name)
             if k:
                 used_colors.add(k)
 
-    # ۱) نسل جدید — جفت‌های SupplyName<n>/SupplyPLR<n> روی صفحه‌ی Device Status
+    # 1) New generation — SupplyName<n>/SupplyPLR<n> pairs on Device Status screen
     names = dict(re.findall(r'id="SupplyName(\d+)"[^>]*>\s*([^<]{2,80}?)\s*</h2>', html))
     for idx, plr_html in re.findall(r'id="SupplyPLR(\d+)"[^>]*>\s*([^<]{0,40}?)\s*</span>', html):
         name = names.get(idx, "")
@@ -82,7 +95,7 @@ def _scrape_hp_toners(ip: str, timeout: float = 4.0):
         if m and 0 <= int(m.group(1)) <= 100:
             result[key] = int(m.group(1))
 
-    # ۲) نسل جدید — صفحه‌ی Supplies Status:
+    # 2) New generation - Supplies Status page:
     #    <h2 id="BlackCartridge1-Header">NAME</h2><p class="data percentage">VAL</p>
     for _id, name, pct_html in re.findall(
             r'<h2 id="(\w+)-Header">\s*([^<]*?)\s*</h2>\s*'
@@ -95,20 +108,20 @@ def _scrape_hp_toners(ip: str, timeout: float = 4.0):
         if m and 0 <= int(m.group(1)) <= 100:
             result[key] = int(m.group(1))
 
-    # ۳) تشخیص «Used» از روی SupplyState و متن پیج (هر دو نسل)
+    # 3) Detection of "Used" from SupplyState and page text (both generations)
     for sid, stext in re.findall(r'id="(\w+)-SupplyState">\s*([^<]{1,40}?)\s*</strong>', html):
-        # نام متناظر از هدر همان بلوک
+        # The corresponding name of the header of the same block
         m = re.search(r'id="%s-Header">\s*([^<]*?)\s*</h2>' % re.escape(sid), html)
         _mark_used(m.group(1) if m else sid, stext)
     if re.search(r"Used\s+[A-Za-z]+\s+Cartridge|used supply has been installed|anticounterfeit",
                  html, re.IGNORECASE):
-        # فرم عمومی نسل قدیم/جدید — حداقل کارتریج مشکی شارژی/استفاده‌شده تشخیص یابد
+        # Generic form old/new generation — at least recharged/used black cartridge detected
         m = re.search(r"Used\s+([A-Za-z]+)\s+Cartridge", html, re.IGNORECASE)
         k = _hp_toner_key(m.group(1)) if m else "black"
         if k:
             used_colors.add(k)
 
-    # ۴) XML مصرفی‌های DevMgmt (خانواده‌ی Web Jetadmin)
+    # 4) DevMgmt consumption XML (Web Jetadmin family)
     if "black" not in result:
         for pat in (
             r"(?:PercentageLevelRemaining|LevelRemaining|PercentRemaining|percentageRemaining)[^0-9]{0,12}(\d{1,3})",
@@ -119,13 +132,13 @@ def _scrape_hp_toners(ip: str, timeout: float = 4.0):
                 result["black"] = int(m.group(1))
                 break
 
-    # ۵) ویژگی‌های data-* در پیج‌های مدرن FutureSmart
+    # 5) data-* features in modern FutureSmart pages
     if "black" not in result:
         m = re.search(r"data-(?:percent|value|level)\s*=\s*[\"'](\d{1,3})[\"']", html, re.IGNORECASE)
         if m and 0 <= int(m.group(1)) <= 100:
             result["black"] = int(m.group(1))
 
-    # خروجی فقط وقتی واقعاً داده یا حالت معتبری داریم
+    # Output only when we actually have valid data or state
     if result or used_colors:
         if used_colors:
             result["_used"] = sorted(used_colors)
@@ -143,16 +156,16 @@ _HP_TONER_COLOR_MAP = {
 }
 
 def _hp_toner_key(name: str) -> str:
-    """کلیدِ رنگِ کارتریج از نامِ SNMP (prtMarkerSuppliesDescription).
+    """Cartridge color key from SNMP name (prtMarkerSuppliesDescription).
 
-    تطبیق با **مرزِ کلمه** — همان چیزی که `_key()` در `_scrape_hp_toners` برای
-    مسیرِ وب از قبل داشت. دلیل (TD-016، سنجهٔ G.5): تطبیقِ زیررشته «k/c/m/y» را هم
-    می‌خورد و نام‌های بی‌رنگ را به رنگ اشتباه می‌بست:
-        'Imaging Drum'          → magenta   (حرف m در «iMaging»)
-        'CF470A Imaging Drum'   → cyan      (حرف c در «CF470A»)
-        'Fuser Kit' / 'Maintenance Kit' → black (حرف k در «Kit»)
-    اثرِ آن روی پرینترهای تک‌رنگ: `has_color_toner` کاذب True ⇒ `full_color=None` و
-    `black_white=None` (جای `black_white=total`) و درایور/درام به‌عنوان تونر رنگی در UI.
+    match **word boundary** — same as `_key()` in `_scrape_hp_toners` for
+    It already had a web path. Reason (TD-016, Criterion G.5): match substring "k/c/m/y" too
+    eats and closes the colorless names to the wrong color:
+        'Imaging Drum' → magenta (the letter m in 'iMaging')
+        'CF470A Imaging Drum' → cyan (letter c in 'CF470A')
+        'Fuser Kit' / 'Maintenance Kit' → black (letter k in "Kit")
+    Its effect on monochrome printers: `has_color_toner` false True ⇒ `full_color=None` and
+    `black_white=None` (instead of `black_white=total`) and driver/drum as color toner in UI.
     """
     n = (name or "").lower()
     for kw, key in _HP_TONER_COLOR_MAP.items():
@@ -161,9 +174,12 @@ def _hp_toner_key(name: str) -> str:
     return None
 
 def collect_hp(ip: str, name: str, community: str, start: float) -> dict:
+    """Collect status, counters and toner levels from an HP LaserJet printer."""
+
     try:
-        # افزایش تایم‌اوت کلی به ۲۵ ثانیه (مشابه Canon)
+        # Increase the total timeout to 25 seconds (similar to Canon)
         def g(oid, timeout=5.0):
+            """Read one SNMP OID with a 25-second time budget; returns None when it is exceeded."""
             if time.time() - start > 25.0:
                 return None
             val = _g(ip, oid, community, timeout=timeout)
@@ -187,8 +203,8 @@ def collect_hp(ip: str, name: str, community: str, start: float) -> dict:
         firmware = ss(g("1.3.6.1.4.1.11.2.3.9.1.1.3.1.1.1.1.7.0"), "N/A")
 
         total = si(g("1.3.6.1.2.1.43.10.2.1.4.1.1", timeout=5.0))
-        
-        # ═══ بررسی و retry برای total=0 مشکوک ═══
+
+        # ═══ Check and retry for total=0 suspicious ═══
         prev_data = store._prev.get(ip) or {}
         prev_total = prev_data.get("print_total") if prev_data else None
         if total == 0 and prev_total is not None and prev_total > 1000:
@@ -199,7 +215,7 @@ def collect_hp(ip: str, name: str, community: str, start: float) -> dict:
                 log.warning(f"HP {ip}: retry successful → total={retry_total}")
                 total = retry_total
             else:
-                # ✅ باگ: ثبت خطا و نگهداری total=0 (نه prev_total)
+                # ✅ Bug: error registration and maintaining total=0 (not prev_total)
                 log.error(f"HP {ip}: retry also failed, recording SNMP error")
                 from core.database import add_event
                 add_event(ip, "SNMP_ERROR", {
@@ -211,12 +227,12 @@ def collect_hp(ip: str, name: str, community: str, start: float) -> dict:
         color_print = si(g("1.3.6.1.4.1.11.2.3.9.6.1.1.5.1"), -1)
         copy_mono   = si(g("1.3.6.1.4.1.11.2.3.9.6.1.1.9.1"), -1)
         copy_color  = si(g("1.3.6.1.4.1.11.2.3.9.6.1.1.6.1"), -1)
-        scan_mono   = si(g("1.3.6.1.4.1.11.2.3.9.6.1.1.10.1"), -1)
-        scan_color  = si(g("1.3.6.1.4.1.11.2.3.9.6.1.1.3.1"), -1)
+        scan_mono   = si(g("1.3.6.1.4.1.11.2.3.9.6.1.1.10.1"), -1)  # noqa: F841 - SNMP read kept on purpose (poll side effect)
+        scan_color  = si(g("1.3.6.1.4.1.11.2.3.9.6.1.1.3.1"), -1)  # noqa: F841 - SNMP read kept on purpose (poll side effect)
         fax_count   = si(g("1.3.6.1.4.1.11.2.3.9.6.1.1.11.1"), -1)
         copy_total  = max(copy_mono, 0) + max(copy_color, 0)
 
-        # ── خواندن تونرها برای تشخیص وجود رنگ ──
+        # ── Reading toners to detect the presence of color ──
         toners = {}
         has_color_toner = False
         for idx in range(1, 5):
@@ -244,21 +260,21 @@ def collect_hp(ip: str, name: str, community: str, start: float) -> dict:
             toners["black"] = {"level": None, "status": "unknown",
                                "name": "Black Toner", "remaining": -1, "max": -1}
 
-        # ── تشخیص رنگ ──
+        # ── color recognition ──
         if color_print >= 0:
             full_color = color_print
             bw = max(0, total - color_print)
         elif has_color_toner:
-            # پرینتر رنگی است اما OID رنگ در دسترس نیست → تفکیک رنگ/سیاه‌وسفید نامعلوم است
+            # Printer is color but color OID is not available → color/black and white resolution is unknown
             full_color = None
             bw = None
             log.warning(f"HP {ip} has color toners but no color counter, cannot split color vs BW")
         else:
-            # پرینتر تک‌رنگ
+            # Monochrome printer
             full_color = None
             bw = total
 
-        # ── سینی‌ها ──
+        # ── Trays ──
         trays = []
         for idx, label in [(1,"Tray 1"),(2,"Tray 2")]:
             cap = si(g(f"1.3.6.1.2.1.43.8.2.1.9.1.{idx}"), 0)

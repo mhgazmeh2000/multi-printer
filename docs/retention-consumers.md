@@ -1,4 +1,4 @@
-# مصرف‌کنندگان جداول سری‌زمانی و پیشنهاد retention
+# Consumers of time-series tables and the retention proposal
 
 **دامنه:** سه جدول `toner_snapshots_v2`، `sensor_readings`، `toner_history`
 **هدف:** پیش از افزودن هر مکانیزم retention، مشخص شود چه کدی از این جدول‌ها می‌خواند و چه بازه‌ای لازم دارد.
@@ -7,7 +7,7 @@
 
 ---
 
-## خلاصه‌ی اجرایی (۴ نکته)
+## Executive summary (4 points)
 
 ۱. **هیچ‌کدام از سه جدول خواننده‌ی «درون‌برنامه‌ای» (web/API/داشبورد) ندارند** — به‌جز یک استثنا: `sensor_readings` که `/api/stats/sensor/daily` از آن می‌خواند (`web/routes/stats.py:77`). یعنی حذف/کوتاه‌کردن دو جدول دیگر، چارت‌های داشبورد را نمی‌شکند.
 ۲. **`toner_snapshots_v2` عملاً write-only است** (نویسنده: Yield Engine، `core/yield_engine.py:445`) و تنها مصرف‌کننده‌ی واقعی آن **ابزار ممیزی** است (`tools/audit_pages.py`). بنابراین retention این جدول باید بر اساس **نیاز ممیزی** تعیین شود، نه یادگیری — این با فرض اولیه‌ی درخواست («Yield Engine برای یادگیری مقاوم ۹۰ روز لازم دارد») متفاوت است؛ یادگیری از `cartridge_state`/`yield_samples` تغذیه می‌شود (`core/yield_engine.py:367,388,556`، `:1226`).
@@ -16,7 +16,7 @@
 
 ---
 
-## جدول ۱ — `toner_snapshots_v2`
+## Table 1 — `toner_snapshots_v2`
 
 **نویسنده‌ها (write path):**
 
@@ -46,7 +46,7 @@
 
 ---
 
-## جدول ۲ — `sensor_readings`
+## Table 2 — `sensor_readings`
 
 **نویسنده‌ها:**
 
@@ -71,7 +71,7 @@
 
 ---
 
-## جدول ۳ — `toner_history`
+## Table 3 — `toner_history`
 
 **نویسنده‌ها:**
 
@@ -94,7 +94,7 @@
 
 ---
 
-## پیشنهاد retention (بدون اجرا)
+## Retention proposal (not executed)
 
 | جدول | raw | rollup ساعتی | rollup روزانه | پیش‌نیاز / ریسک |
 |---|---|---|---|---|
@@ -109,7 +109,7 @@
 
 ---
 
-## مکانیزم‌های retention موجود (وضعیت واقعی)
+## Existing retention mechanisms (actual status)
 
 | مکانیزم | فایل:خط | دامنه | وضعیت اجرا |
 |---|---|---|---|
@@ -122,7 +122,7 @@
 
 ---
 
-## سؤالات باز (نیاز به تصمیم پیش از پیاده‌سازی)
+## Open questions (need a decision before implementation)
 
 ۱. **آیا rollup ها در پستگرس ماده‌ای (materialized view / جدول تجمیعی با job دوره‌ای) ساخته می‌شوند یا به‌صورت continuous aggregation؟** در معماری هدف (بدون Prometheus/Timescale) این انتخاب روی طراحی جدول‌ها اثر دارد.
 ۲. **برای `sensor_readings` آیا سقف ۳۶۵ روز API حفظ می‌شود؟** اگر بله، یا raw باید ۳۶۵ روز بماند یا endpoint باید به rollup روزانه سوییچ کند (کاری که در این فاز انجام نشد).
@@ -131,7 +131,7 @@
 
 ---
 
-## روش بازتولید (دستورهای grep استفاده‌شده)
+## How to reproduce (grep commands used)
 
 ```bash
 # ۱) همه‌ی ارجاع‌های هر جدول در کد پایتون

@@ -1,17 +1,31 @@
-"""جمع‌آوری داده از سنسور ECS100G با SNMP v1.
+# =============================================================================
+# @file:         core/collectors/sensor.py
+# @brief:        Collects readings from the ECS100G environmental sensor over SNMP v1.
+# @details:      Responsibilities: Build sensor OID sets and convert sensor values for storage.
+#                Main API: sensor_oids(), collect_sensor()
+#                Side effects: network I/O
+# @dependencies: internal: core, core.database, core.sensor_alert, core.snmp.protocol,
+#                core.time_utils
+# @notes:        Reads environment variables: SENSOR_HUM_CHANGE_LOG_DELTA,
+#                SENSOR_HUM_CRITICAL_HIGH, SENSOR_HUM_MAX, SENSOR_HUM_MIN,
+#                SENSOR_HUM_WARNING_HIGH, SENSOR_HUM_WARNING_LOW, SENSOR_PORT_COUNT,
+#                SENSOR_TEMP_CHANGE_LOG_DELTA.
+# =============================================================================
 
-قابلیت‌ها:
-- تشخیص و خواندن دما/رطوبت چند پورت
-- اعتبارسنجی محدوده دما/رطوبت
-- ثبت لاگ SENSOR_CHANGE برای هر تغییر دما/رطوبت هر پورت
-- ذخیره snapshot در جدول sensor_readings برای نمودار میانگین روزانه
+"""Data collection from ECS100G sensor with SNMP v1.
+
+Features:
+- Multi-port temperature/humidity detection and reading
+- Temperature/humidity range validation
+- Register SENSOR_CHANGE log for every temperature/humidity change of each port
+- Save snapshot in sensor_readings table for daily average chart
 """
 
 from __future__ import annotations
 
+import logging
 import os
 import time
-import logging
 
 from core.snmp.protocol import snmp_get
 from core import store
@@ -21,36 +35,37 @@ from core.time_utils import utc_now_iso
 
 log = logging.getLogger("PrinterMonitor")
 
-# OIDهای واقعی ECS100G (استخراج شده از snmpwalk)
+# Real ECS100G OIDs (extracted from snmpwalk)
 SENSOR_BASE_OIDS = {
     "model":  "1.3.6.1.4.1.47206.1.0",
     "serial": "1.3.6.1.4.1.47206.2.0",
     "uptime": "1.3.6.1.2.1.1.3.0",
 }
 
-# بیشتر ECS100Gها دو پورت دارند، ولی برای توسعه بعدی قابل تنظیم است.
+# Most ECS100Gs have two ports, but it can be configured for future expansion.
 SENSOR_PORT_COUNT = max(1, min(8, int(os.getenv("SENSOR_PORT_COUNT", "2") or "2")))
 
-# محدوده‌های منطقی؛ بیرون از این بازه‌ها به عنوان invalid نمایش داده می‌شود.
+# logical limits; Outside these ranges, it is displayed as invalid.
 TEMP_MIN_C = float(os.getenv("SENSOR_TEMP_MIN_C", "-40"))
 TEMP_MAX_C = float(os.getenv("SENSOR_TEMP_MAX_C", "125"))
 HUM_MIN = float(os.getenv("SENSOR_HUM_MIN", "0"))
 HUM_MAX = float(os.getenv("SENSOR_HUM_MAX", "100"))
 
-# Threshold هشدار عملیاتی؛ فقط alert فعال در UI می‌سازد، تغییرات جداگانه با SENSOR_CHANGE لاگ می‌شوند.
+# Operational alert threshold; It only makes active alert in UI, individual changes are logged with SENSOR_CHANGE.
 TEMP_WARNING_C = float(os.getenv("SENSOR_TEMP_WARNING_C", "30"))
 TEMP_CRITICAL_C = float(os.getenv("SENSOR_TEMP_CRITICAL_C", "35"))
 HUM_WARNING_HIGH = float(os.getenv("SENSOR_HUM_WARNING_HIGH", "70"))
 HUM_CRITICAL_HIGH = float(os.getenv("SENSOR_HUM_CRITICAL_HIGH", "80"))
 HUM_WARNING_LOW = float(os.getenv("SENSOR_HUM_WARNING_LOW", "20"))
 
-# ثبت لاگ تغییر سنسور فقط وقتی تغییر معنی‌دار باشد.
-# درخواست عملیاتی: دما حداقل ۱ درجه، رطوبت حداقل ۵٪.
+# Recording the sensor change log only when the change is significant.
+# Operational request: temperature at least 1 degree, humidity at least 5%.
 SENSOR_TEMP_CHANGE_LOG_DELTA = float(os.getenv("SENSOR_TEMP_CHANGE_LOG_DELTA", "1"))
 SENSOR_HUM_CHANGE_LOG_DELTA = float(os.getenv("SENSOR_HUM_CHANGE_LOG_DELTA", "5"))
 
 
 def _port_oids(port: int) -> dict:
+    """Return the SNMP OIDs of the temperature and humidity readings for one sensor port."""
     return {
         f"temp{port}": f"1.3.6.1.4.1.47206.110.{port}.2.0",
         f"temp{port}_status": f"1.3.6.1.4.1.47206.110.{port}.1.0",
@@ -60,6 +75,8 @@ def _port_oids(port: int) -> dict:
 
 
 def sensor_oids() -> dict:
+    """Return the OID map used to read the ECS100G sensor."""
+
     oids = dict(SENSOR_BASE_OIDS)
     for port in range(1, SENSOR_PORT_COUNT + 1):
         oids.update(_port_oids(port))
@@ -70,6 +87,7 @@ SENSOR_OIDS = sensor_oids()
 
 
 def _clean_text(value, default: str) -> str:
+    """Return the stripped text, or the default when it is empty or a placeholder such as 'N/A'."""
     text = str(value or "").strip()
     if not text or text.lower() in ("none", "n/a", "null"):
         return default
@@ -77,6 +95,7 @@ def _clean_text(value, default: str) -> str:
 
 
 def _to_int(value):
+    """Convert a sensor value to int, returning None on failure."""
     try:
         if value is None:
             return None
@@ -86,7 +105,7 @@ def _to_int(value):
 
 
 def _safe_divide_10(value, *, kind: str):
-    """تبدیل امن مقدار SNMP به مقدار واقعی و اعتبارسنجی محدوده."""
+    """Secure SNMP value conversion to real value and scope validation."""
     raw = _to_int(value)
     if raw is None:
         return None, "no_data"
@@ -101,6 +120,7 @@ def _safe_divide_10(value, *, kind: str):
 
 
 def _status(raw_status, value, validation_status: str) -> str:
+    """Compute the reading status from the raw status, the value and the validation status."""
     if validation_status == "invalid":
         return "invalid"
     status_int = _to_int(raw_status)
@@ -108,13 +128,14 @@ def _status(raw_status, value, validation_status: str) -> str:
         return "active"
     if status_int == 0 and value is None:
         return "inactive"
-    # بعضی دستگاه‌ها status را درست نمی‌دهند ولی مقدار معتبر ارسال می‌کنند.
+    # Some devices do not correct the status but send a valid value.
     if value is not None:
         return "active"
     return "inactive"
 
 
 def _severity_for_reading(kind: str, value):
+    """Return the alert severity for a sensor reading, or None when no alert applies."""
     if value is None:
         return None
     if kind == "temperature":
@@ -131,6 +152,7 @@ def _severity_for_reading(kind: str, value):
 
 
 def _register_sensor_changes(ip: str, previous: dict, readings: list):
+    """Compare the sensor readings with the previous poll and record any changes."""
     prev_counters = (previous or {}).get("counters") or {}
     for r in readings:
         key = f"{'temp' if r['kind'] == 'temperature' else 'hum'}{r['port']}"
@@ -164,9 +186,11 @@ def _register_sensor_changes(ip: str, previous: dict, readings: list):
 
 
 def collect_sensor(ip: str, name: str, community: str, start: float) -> dict:
+    """Collect readings from an ECS100G environmental sensor over SNMP v1."""
+
     try:
         def g(oid_key):
-            """خواندن OID با SNMPv1 و timeout کلی."""
+            """Read OID with SNMPv1 and general timeout."""
             if time.time() - start > 10.0:
                 return None
             oid = SENSOR_OIDS.get(oid_key)
@@ -176,7 +200,7 @@ def collect_sensor(ip: str, name: str, community: str, start: float) -> dict:
 
         values = {key: g(key) for key in SENSOR_OIDS}
 
-        # سنسور ممکن است sysDescr ندهد؛ اگر model یا هر مقدار sensor وجود داشته باشد online است.
+        # Sensor may not give sysDescr; If there is a model or any sensor value, it is online.
         has_any_sensor_value = any(
             values.get(f"temp{port}") is not None or values.get(f"hum{port}") is not None
             for port in range(1, SENSOR_PORT_COUNT + 1)
@@ -248,7 +272,7 @@ def collect_sensor(ip: str, name: str, community: str, start: float) -> dict:
         _register_sensor_changes(ip, previous, readings)
         record_sensor_readings(ip, readings, timestamp=timestamp)
 
-        # ارسال ایمیل هشدار به کاربران
+        # Send email alerts to users
         try:
             check_and_send_sensor_alert(ip, name, readings)
         except Exception as e:

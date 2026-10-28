@@ -1,22 +1,33 @@
+# =============================================================================
+# @file:         core/oid/scanner.py
+# @brief:        Scans a printer's OIDs and stores the resulting profile.
+# @details:      Responsibilities: Run startup and weekly OID scans and detect the device type.
+#                Main API: scan_printer_oids(), startup_scan_all(), weekly_scan_loop()
+#                Side effects: network I/O, starts threads, file I/O
+# @dependencies: internal: config.settings, core, core.collectors.base, core.device_classifier,
+#                core.oid.catalog, core.oid.validator, core.snmp.protocol, core.time_utils
+# @notes:        None.
+# =============================================================================
+
 """
-اسکن OIDهای یک پرینتر و ذخیره پروفایل در oid_profiles.json
-+ اسکن startup و اسکن هفتگی دوره‌ای
-+ تشخیص و ذخیره نوع دستگاه (رنگی/تک‌رنگ/دماسنج) با استفاده از OIDهای فعال
+Scan the OIDs of a printer and save the profile in oid_profiles.json
++ Startup scan and periodic weekly scan
++ Detect and save device type (color/monochrome/thermometer) using active OIDs
 """
 
-import os
 import json
-import time
-import threading
 import logging
+import os
+import threading
+import time
 from datetime import datetime
 
 from config.settings import OID_PROFILES_FILE, VALIDATION_LOG_FILE
 from core.snmp.protocol import snmp_get_with_fallback
 from core.collectors.base import si, detect_brand
 from core.oid.catalog import OID_CATALOG
-from core.oid.validator import _validate_oid_value_strict, validate_oid_value, log_validation_error
-from core.device_classifier import classify_from_scan   # ← classifier مبتنی بر OIDهای اسکن‌شده
+from core.oid.validator import _validate_oid_value_strict, log_validation_error
+from core.device_classifier import classify_from_scan   # → Classifier based on scanned OIDs
 from core import store
 from core.time_utils import utc_now_iso
 
@@ -26,6 +37,7 @@ WEEK = 7 * 24 * 3600
 _profiles_lock = threading.Lock()
 
 def _load_oid_profiles() -> dict:
+    """Load the saved OID profiles from disk; returns an empty dict on error."""
     if os.path.exists(OID_PROFILES_FILE):
         try:
             with open(OID_PROFILES_FILE, encoding="utf-8") as f:
@@ -36,6 +48,7 @@ def _load_oid_profiles() -> dict:
 
 
 def _save_oid_profiles(profiles: dict) -> bool:
+    """Save the OID profiles to disk; returns True on success."""
     try:
         with open(OID_PROFILES_FILE, "w", encoding="utf-8") as f:
             json.dump(profiles, f, ensure_ascii=False, indent=2)
@@ -46,6 +59,7 @@ def _save_oid_profiles(profiles: dict) -> bool:
 
 
 def _oid_unit(category: str, key: str) -> str:
+    """Return the display unit for an OID category and key."""
     unit_map = {
         "counter":  "pages",
         "supply":   "%" if "level" in key or "status" in key else "dots",
@@ -58,6 +72,8 @@ def _oid_unit(category: str, key: str) -> str:
 
 
 def scan_printer_oids(ip: str, community: str = "public", force: bool = False) -> dict:
+    """Scan one printer's OIDs and save the resulting profile; force overrides an existing profile."""
+
     with _profiles_lock:
         profiles = _load_oid_profiles()
 
@@ -74,7 +90,7 @@ def scan_printer_oids(ip: str, community: str = "public", force: bool = False) -
     current_vals  = {}
     rejected_oids = {}
 
-    # فیلتر OID بر اساس برند
+    # Filter OID by brand
     brand_prefixes = {
         "toshiba": ("tsh_", "sys_", "cover_", "tray", "toner"),
         "canon":   ("canon_", "sys_", "cover_", "tray", "toner", "model_", "serial_"),
@@ -109,6 +125,7 @@ def scan_printer_oids(ip: str, community: str = "public", force: bool = False) -
     elapsed = int((time.time() - t0) * 1000)
 
     def gv(k, default=None):
+        """Return a value from the current poll results by key, with a default."""
         return current_vals.get(k, default)
 
     model = str(gv("tsh_model") or gv("canon_model") or gv("bro_model") or
@@ -154,7 +171,7 @@ def scan_printer_oids(ip: str, community: str = "public", force: bool = False) -
         if key not in oids_rich:
             oids_rich[key] = {**old_oid_data, "active": False, "last_value": None}
 
-    # ═══ تشخیص نوع دستگاه (رنگی/تک‌رنگ/دماسنج) از روی OIDهای فعال ═══
+    # ═══ device type recognition (color/monochrome/thermometer) from active OIDs ═══
     device_type = classify_from_scan(active_oids, current_vals, brand)
     with store.printers_lock:
         for p in store.PRINTERS:
@@ -198,6 +215,8 @@ def scan_printer_oids(ip: str, community: str = "public", force: bool = False) -
 
 
 def startup_scan_all(printers: list, force: bool = False) -> dict:
+    """Scan the OIDs of every configured printer at startup."""
+
     try:
         with open(VALIDATION_LOG_FILE, "w", encoding="utf-8") as f:
             f.write(f"═══ OID Validation Log — {datetime.now().isoformat()} ═══\n\n")
@@ -208,6 +227,7 @@ def startup_scan_all(printers: list, force: bool = False) -> dict:
     results = {}
 
     def scan_one(p):
+        """Scan one printer for its OIDs and return the values that were found."""
         ip        = p["ip"]
         community = p.get("community", "public")
         try:
@@ -231,7 +251,7 @@ def startup_scan_all(printers: list, force: bool = False) -> dict:
 
 
 def weekly_scan_loop(get_printers_fn):
-    """اسکن هفتگی دوره‌ای OIDها"""
+    """Periodic weekly scan of OIDs"""
     time.sleep(WEEK)
     while True:
         log.info("═══ اسکن دوره‌ای هفتگی OIDها ═══")

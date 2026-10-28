@@ -1,32 +1,44 @@
 # -*- coding: utf-8 -*-
-"""خواندن «شناسه‌ی یکتای کارتریج» برای تشخیص قطعی تعویض کارتریج (CARTRIDGE_CHANGED).
+# =============================================================================
+# @file:         core/collectors/cartridge_id.py
+# @brief:        Reads the unique cartridge ID to detect definitive cartridge replacement.
+# @details:      Responsibilities: Normalise cartridge IDs, load the ID-OID map and cache per-
+#                printer identity data.
+#                Main API: normalize_id(), load_id_config(), get_cartridge_identity_data(),
+#                clear_cache()
+#                Side effects: network I/O, file I/O
+# @dependencies: internal: core.collectors.base, core.snmp.protocol
+# @notes:        None.
+# =============================================================================
 
-سه منبع شواهد، به ترتیب قوت:
+"""Reading "Unique Cartridge ID" to definitively identify cartridge replacement (CARTRIDGE_CHANGED).
 
-1) **شناسه‌ی تراشه / شماره سریال کارتریج** (Chip ID / Supply Serial) — قطعی:
-   هر کارتریج، شناسه‌ی متفاوتی دارد؛ تغییرش یعنی کارتریج عوض شده.
-   منابع:
-     - SNMP/OID اختصاصیِ هر مدل: از `config/cartridge_id_map.json` خوانده
-       می‌شود (الگوی config-driven تا بدون تغییر کد و با تأیید diagnose روی
-       ناوگان واقعی فعال شود؛ نمونه: cartridge_id_map.example.json).
-     - پنل وب HP (EWS): صفحه‌های Supplies/Status مدل‌های LaserJet معمولاً ردیف
-       «Serial Number» کارتریج را برای کارتریج‌های اصل نمایش می‌دهند.
+Three sources of evidence, in order of strength:
 
-2) **شمارنده‌ی «صفحات چاپ‌شده با این کارتریج»** (Pages printed with this
-   supply) — شبه‌قطعی: این عدد فقط صعودی است؛ افت معنی‌دارش (مثلاً ۳۲,۰۰۰ → ۱۵)
-   یعنی کارتریج عوض شده. روی EWS مدل‌های HP در دسترس است و حتی برای کارتریج‌های
-   سازگار (بدون سریال معتبر) کار می‌کند.
+1) **Chip ID / Cartridge serial number** (Chip ID / Supply Serial) — definite:
+   Each cartridge has a different ID; Its change means that the cartridge has been changed.
+   Sources:
+     - Unique SNMP/OID of each model: read from `config/cartridge_id_map.json`
+       can be (config-driven pattern) without changing the code and by confirming diagnose on
+       Activate real fleet; Example: cartridge_id_map.example.json).
+     - HP Web Panel (EWS): Supplies/Status pages of LaserJet models usually row
+       "Serial Number" of the cartridge is displayed for original cartridges.
 
-3) چیزی پیدا نشد → دیکشنری خالی؛ موتور رویداد سراغ fallback جهش سطح می‌رود
-   (همان مسیر موجود، دست‌نخورده).
+2) "Pages printed with this cartridge" counter
+   supply) — quasi-definite: this number is only bullish; Significant drop (for example, 32,000 → 15)
+   It means that the cartridge has been changed. Available on EWS for HP models and even for cartridges
+   Compatible (no valid serial) works.
 
-نکته‌ی صادقانه: بسیاری از دستگاه‌ها (مخصوصاً Canon i-SENSYS / Brother / Toshiba
-e-STUDIO) شناسه‌ی تراشه را هیچ‌جای عمومی منتشر نمی‌کنند. برای آن‌ها
-`tools/diagnose_printer.py` موارد کاندید را کاوش می‌کند و پس از تأیید روی
-دستگاه واقعی، OID در فایل تنظیمات فعال می‌شود — بدون تغییر کد.
+3) nothing found → empty dictionary; The event engine goes to the level jump fallback
+   (The same existing route, intact).
 
-عملکرد: نتیجه به‌ازای هر IP با TTL کش می‌شود (موفق ۱۰ دقیقه / ناموفق ۶۰ دقیقه)
-تا سربار پال‌کردن ۶۰ثانیه‌ای ناوگان نزدیک به صفر بماند.
+Honest tip: Many devices (especially Canon i-SENSYS / Brother / Toshiba
+e-STUDIO) do not publish the chip ID anywhere publicly. for those
+`tools/diagnose_printer.py` explores the candidate cases and after verification on
+The actual device OID is enabled in the configuration file — without changing the code.
+
+Performance: Result is cached per IP with TTL (success 10 minutes / failure 60 minutes)
+so that the fleet's 60-second pacing overhead remains close to zero.
 """
 import json
 import logging
@@ -34,12 +46,11 @@ import os
 import re
 import time
 
-from core.snmp.protocol import snmp_get_with_fallback
 
 log = logging.getLogger("PrinterMonitor")
 
-_TTL_FOUND = 180.0    # شناسه پیدا شد: ۳ دقیقه کش (حداکثر تاخیر تشخیص تعویض از مسیر شناسه)
-_TTL_MISS = 900.0     # چیزی پیدا نشد: ۱۵ دقیقه بک‌آف
+_TTL_FOUND = 180.0    # ID found: 3 minutes cache (maximum delay of switching detection from ID path)
+_TTL_MISS = 900.0     # Nothing found: 15 minutes back-off
 _cache = {}           # ip -> (expire_ts, result_dict)
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -47,7 +58,7 @@ CONFIG_PATH = os.path.join(_REPO_ROOT, "config", "cartridge_id_map.json")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ابزارهای اعتبارسنجی/نرمال‌سازی شناسه
+# ID validation/normalization tools
 # ─────────────────────────────────────────────────────────────────────────────
 _BAD_TOKENS = {
     "", "-", "--", "0", "00", "000", "0000", "000000", "n/a", "na", "none",
@@ -57,11 +68,11 @@ _BAD_TOKENS = {
 
 
 def normalize_id(value):
-    """مقدار SNMP/وب را به شناسه‌ی قابل‌اعتماد تبدیل می‌کند؛ غیرمعتبر → None.
+    """Converts the SNMP/Web value to a trusted ID; Invalid → None.
 
-    قواعد: ۴ تا ۴۸ نویسه، حداقل یک حرف/رقم، نویسه‌های مجاز، و نبودن در فهرست
-    توکن‌های بی‌معنا. بسیاری دستگاه‌ها در نبود سریال رشته‌هایی مثل "Unknown"
-    یا "0" برمی‌گردانند که نباید به‌عنوان شناسه‌ی تراشه مصرف شوند.
+    Rules: 4 to 48 characters, at least one letter/number, allowed characters, and not in the list
+    Meaningless tokens. Many devices have strings like "Unknown" in the absence of serial numbers.
+    or return "0" which should not be used as chip ID.
     """
     if value is None:
         return None
@@ -85,16 +96,16 @@ def normalize_id(value):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# تنظیمات (config-driven OID map)
+# Settings (config-driven OID map)
 # ─────────────────────────────────────────────────────────────────────────────
 _config_cache = {"ts": 0.0, "data": None}
 _CONFIG_TTL = 300.0
 
 
 def load_id_config(force: bool = False):
-    """نقشه‌ی OIDهای تأییدشده را می‌خواند؛ فایل اختیاری است.
+    """Reads a map of verified OIDs; The file is optional.
 
-    ساختار (نمونه در cartridge_id_map.example.json):
+    Structure (example in cartridge_id_map.example.json):
       {
         "brands":   {"hp": {"snmp": {"black": "1.3.6.1...."}}, ...},
         "printers": {"172.16.8.52": {"snmp": {"black": "1.3.6.1...."}}},
@@ -102,8 +113,8 @@ def load_id_config(force: bool = False):
                                                  "meta": {...}}}},
         "hp_web": true
       }
-    بخش ``learned`` به‌صورت خودکار توسط cartridge_discovery.py پر می‌شود؛
-    اولویت نهایی: printers (دستی) > brands (دستی) > learned (خودکار).
+    The ``learned'' section is automatically populated by cartridge_discovery.py;
+    Final priority: printers (manual) > brands (manual) > learned (automatic).
     """
     now = time.time()
     if not force and _config_cache["data"] is not None and now - _config_cache["ts"] < _CONFIG_TTL:
@@ -123,10 +134,10 @@ def load_id_config(force: bool = False):
 
 
 def _snmp_oids_for(ip: str, brand: str, cfg: dict):
-    """ترکیب نقشه‌ی برند + override دستگاه + بخش learned خودکار.
+    """Combination of brand map + device override + automatic learned part.
 
-    اولویت (آخری می‌نشیند و می‌برد): learned < brands < printers.
-    یعنی ورودی دستی کاربر همیشه بر OID کشف‌شده‌ی خودکار اولویت دارد.
+    Priority (the last one sits and wins): learned < brands < printers.
+    That is, user's manual input always takes precedence over the auto-discovered OID.
     """
     out = {}
     try:
@@ -140,7 +151,7 @@ def _snmp_oids_for(ip: str, brand: str, cfg: dict):
 
 
 def _read_snmp_ids(ip: str, oids_by_color: dict, community: str, snmp_version=None, timeout: float = 1.2) -> dict:
-    """خواندن شناسه‌ها از SNMP طبق نقشه‌ی تنظیمات؛ جاهای خالی رد می‌شوند."""
+    """Reading identifiers from SNMP according to configuration map; Blank spaces are omitted."""
     ids = {}
     if not oids_by_color:
         return ids
@@ -158,7 +169,7 @@ def _read_snmp_ids(ip: str, oids_by_color: dict, community: str, snmp_version=No
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# خواندن از پنل وب HP (EWS): سریال کارتریج + «صفحات چاپ‌شده با این کارتریج»
+# Read from HP web panel (EWS): Cartridge serial + "Pages printed with this cartridge"
 # ─────────────────────────────────────────────────────────────────────────────
 _HP_URLS = (
     "http://{ip}/hp/device/InternalPages/Index?id=SuppliesStatus",
@@ -169,11 +180,11 @@ _HP_URLS = (
     "http://{ip}/info_suppliesStatus.html",
 )
 
-# سریال: نزدیکِ برچسب Serial/Serial Number (در HTML و XML)
-# نکته: مقدار ممکن است بعد از چند تگ‌بستن/بازکردن بیاید: <td>Serial:</td><td>VAL</td>
-# و در بعضی EWSها برچسب دوپاره است: Serial</span><span>Number</span> — پس بعد از
-# پرش تگ‌ها هم یک توکن اختیاری Number/No/# رد می‌شود تا خودِ برچسب گرفته نشود
-# (باگ واقعی ناوگان: مقدار «Number» به‌عنوان سریال ثبت می‌شد).
+# Serial: near the Serial/Serial Number tag (in HTML and XML)
+# Note: The value may come after a few closing/opening tags: <td>Serial:</td><td>VAL</td>
+# And in some EWS the label is split: Serial</span><span>Number</span> — so after
+# Skipping tags also skips an optional token Number/No/# so that the tag itself is not taken
+# (Actual fleet bug: "Number" value was being recorded as serial).
 _HP_SERIAL_PATTERNS = (
     re.compile(
         r"Serial\s*(?:Number|No\.?|#)?\s*[:：]?\s*(?:</\w+>\s*)?(?:<[^>]*>\s*){0,3}"
@@ -181,7 +192,7 @@ _HP_SERIAL_PATTERNS = (
         r"([A-Za-z0-9][A-Za-z0-9\-]{3,30})", re.IGNORECASE),
     re.compile(r"<[A-Za-z0-9:]*SerialNumber>\s*([A-Za-z0-9][A-Za-z0-9\-]{3,30})\s*<", re.IGNORECASE),
 )
-# «صفحات چاپ‌شده با این کارتریج» (انگلیسی EWS؛ معادل XML)
+# "Pages printed with this cartridge" (English EWS; XML equivalent)
 _HP_SUPPLY_PAGES_PATTERNS = (
     re.compile(r"Pages\s+printed\s+with\s+this\s+supply[^0-9]{0,40}([0-9][0-9,]{0,12})", re.IGNORECASE),
     re.compile(r"PagesWithSupply[^0-9]{0,20}([0-9][0-9,]{0,12})", re.IGNORECASE),
@@ -190,6 +201,7 @@ _HP_SUPPLY_PAGES_PATTERNS = (
 
 
 def _first_int(text: str):
+    """Return the first integer found in a text, or None."""
     if not text:
         return None
     try:
@@ -199,7 +211,7 @@ def _first_int(text: str):
 
 
 def _search_serial(text: str):
-    """جستجوی سریال با الگوها؛ اولین مقدار معتبر (گذرنده از normalize) برمی‌گردد."""
+    """Serial search with patterns; The first valid value (passing normalize) is returned."""
     for pat in _HP_SERIAL_PATTERNS:
         m = pat.search(text)
         if m:
@@ -210,15 +222,15 @@ def _search_serial(text: str):
 
 
 def _read_hp_web_ids(ip: str, timeout: float = 3.5):
-    """خواندن سریال/شمارنده‌ی کارتریج HP از EWS؛ نبود → دیکشنری خالی.
+    """Read HP cartridge serial/counter from EWS; There was no → empty dictionary.
 
-    توجه: ناوگان فعلی HPها مونو است؛ نتیجه روی کلید ``black`` می‌نشیند. برای
-    مدل‌های رنگی (اگر بعداً اضافه شوند) باید بخش‌بندی per-color اضافه شود.
+    Note: The current fleet of HPs is mono; The result sits on the ``black'' key. for
+    Color models (if added later) should be added per-color segmentation.
 
-    سریال اول روی «متن ساده» (تگ‌ها → فاصله) جستجو می‌شود — روی HTML خام،
-    backtracking الگو باعث می‌شد خودِ واژه‌ی «Number» از برچسب دوپاره‌ی
-    Serial</span><span>Number به‌عنوان سریال گرفته شود (باگ واقعی ناوگان).
-    الگوی XML مستقیماً روی متن خام اعمال می‌شود.
+    The first series is searched on "plain text" (tags → spaces) — on raw HTML,
+    The pattern backtracking caused the word "Number" itself from the label to split
+    Serial</span><span>Number to be taken as serial (actual fleet bug).
+    The XML template is applied directly to the raw text.
     """
     from core.collectors.base import fetch_first_web_page
 
@@ -245,15 +257,15 @@ def _read_hp_web_ids(ip: str, timeout: float = 3.5):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# خواندن از پنل وب Canon / Brother / Toshiba
+# Reading from Canon / Brother / Toshiba web panel
 # ─────────────────────────────────────────────────────────────────────────────
 def _read_other_web_ids(ip: str, brand: str, timeout: float = 3.0):
-    """Canon/Brother/Toshiba: سریال تراشه معمولاً در صفحات عمومی نیست.
+    """Canon/Brother/Toshiba: The chip serial is usually not on public pages.
 
-    بسیاری Remote UI های i-SENSYS و صفحات status برادر فقط سطح تونر را
-    نشان می‌دهند. این خواننده عمداً محافظه‌کار است: فقط الگوی صریح
-    «Serial Number» را برمی‌دارد؛ در نبودش چیزی برنمی‌گرداند (fallback سطح
-    همچنان پوشش می‌دهد). تأیید واقع‌ی با diagnose انجام می‌شود.
+    Most i-SENSYS remote UIs and Brother status pages only show the toner level
+    show This reader is deliberately conservative: just the obvious example
+    Removes "Serial Number"; In its absence, it does not return anything (level fallback
+    still covers). Actual verification is done with diagnose.
     """
     from core.collectors.base import fetch_first_web_page
 
@@ -282,33 +294,33 @@ def _read_other_web_ids(ip: str, brand: str, timeout: float = 3.0):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# شناسه‌ی جایگزین برای پرینترهای بدون chip ID
+# Alternative ID for printers without chip ID
 # ─────────────────────────────────────────────────────────────────────────────
 def _read_fallback_identity(ip: str, brand: str, community: str = "public",
                             snmp_version=None) -> dict:
-    """برای پرینترهایی که chip ID اختصاصی ندارند، سیگنال جایگزین برمی‌گرداند.
+    """Returns an alternative signal for printers that do not have a dedicated chip ID.
 
-    Brothr: Toner Replace Count (هر بار تعویض +۱)
-    HP قدیمی: شماره پارت کارتریج از Printer-MIB (ایستا اما مفید)
-    Canon LBP: مدل کارتریج از Printer-MIB
+    Brothr: Toner Replace Count (+1 each time)
+    Old HP: Cartridge part number from Printer-MIB (static but useful)
+    Canon LBP: Cartridge model from Printer-MIB
 
-    خروجی مشابه get_cartridge_identity_data: {"ids": {}, "supply_pages": {}, "source": str}
+    Output similar to get_cartridge_identity_data: {"ids": {}, "supply_pages": {}, "source": str}
     """
     ids, pages, source = {}, {}, ""
-    # از ماژول بخوان (نه import局部) تا monkeypatch در تست‌ها کار کند
+    # Read from the module (not local import) so that monkeypatch works in tests
     import core.snmp.protocol as _snmp_mod
     _sg = _snmp_mod.snmp_get_with_fallback
 
     if brand == "brother":
-        # Toner Replace Count: هر بار تعویض تونر +۱
+        # Toner Replace Count: +1 each time toner is replaced
         # OID: 1.3.6.1.4.1.2435.2.3.9.4.2.1.5.1.1.6.0
         val = _sg(ip, "1.3.6.1.4.1.2435.2.3.9.4.2.1.5.1.1.6.0", community,
                   version=snmp_version, timeout=2.0)
         if val is not None:
             try:
                 count = int(str(val).strip())
-                # ذخیره به‌صورت generation counter — motor CARTRIDGE_CHANGED
-                # با افزایش این مقدار تشخیص می‌دهد
+                # Save as generation counter — motor CARTRIDGE_CHANGED
+                # It detects by increasing this value
                 ids["black"] = f"toner_gen:{count}"
                 source = "brother_snmp_gen"
                 log.info("  [%s] Brother toner generation count: %s", ip, count)
@@ -316,20 +328,20 @@ def _read_fallback_identity(ip: str, brand: str, community: str = "public",
                 pass
 
     elif brand == "hp":
-        # شماره پارت کارتریج از Printer-MIB (برای مدل‌های قدیمی بدون EWS)
+        # Cartridge part number from Printer-MIB (for old models without EWS)
         # OID: 1.3.6.1.2.1.43.11.1.1.6.1.1 (prtMarkerSuppliesDescription)
         val = _sg(ip, "1.3.6.1.2.1.43.11.1.1.6.1.1", community,
                   version=snmp_version, timeout=2.0)
         if val:
             v = str(val).strip()
-            # فقط شماره‌های پارت (مثل CC388A) — رد کردن سریال‌های عددی خالص
+            # Part numbers only (eg CC388A) — skip pure numeric serials
             if v and not v.isdigit() and len(v) >= 4:
                 ids["black"] = f"part:{v}"
                 source = "hp_mib_part"
                 log.info("  [%s] HP toner part number: %s", ip, v)
 
     elif brand == "canon":
-        # مدل کارتریج از Printer-MIB (فقط اگر شماره serial وجود نداشته باشد)
+        # Cartridge model from Printer-MIB (only if there is no serial number)
         # OID: 1.3.6.1.2.1.43.11.1.1.6.1.1
         val = _sg(ip, "1.3.6.1.2.1.43.11.1.1.6.1.1", community,
                   version=snmp_version, timeout=2.0)
@@ -341,7 +353,7 @@ def _read_fallback_identity(ip: str, brand: str, community: str = "public",
                 log.info("  [%s] Canon cartridge model: %s", ip, v)
 
     if ids:
-        # کیفیت سیگنال: genuine=unique per cartridge, generation=counter, static=model/part
+        # Signal quality: genuine=unique per cartridge, generation=counter, static=model/part
         quality = {}
         for ck, val in ids.items():
             if val.startswith("toner_gen:"):
@@ -357,14 +369,14 @@ def _read_fallback_identity(ip: str, brand: str, community: str = "public",
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# نقطه‌ی تجمیع (با کش TTL)
+# Aggregation point (with TTL cache)
 # ─────────────────────────────────────────────────────────────────────────────
 def get_cartridge_identity_data(ip: str, brand: str = None, community: str = "public",
                                 snmp_version=None, force_refresh: bool = False) -> dict:
-    """شناسه‌ها و شمارنده‌های کارتریج یک دستگاه را برمی‌گرداند.
+    """Returns the cartridge IDs and counters of a device.
 
-    خروجی: {"ids": {color: serial}, "supply_pages": {color: pages}, "source": str}
-    در نبود شواهد: {"ids": {}, "supply_pages": {}, "source": "none"} (کش‌شده).
+    Output: {"ids": {color: serial}, "supply_pages": {color: pages}, "source": str}
+    In the absence of evidence: {"ids": {}, "supply_pages": {}, "source": "none"} (cached).
     """
     if not ip:
         return {"ids": {}, "supply_pages": {}, "source": "none"}
@@ -377,7 +389,7 @@ def get_cartridge_identity_data(ip: str, brand: str = None, community: str = "pu
     brand_key = (brand or "").lower()
     ids, pages, sources, signal_quality, identity_type = {}, {}, [], {}, {}
 
-    # ۱) SNMP بر اساس نقشه‌ی تأییدشده (پرینتر-خاص یا برند-عمومی)
+    # 1) SNMP based on the approved map (printer-specific or brand-generic)
     oids = _snmp_oids_for(ip, brand_key, cfg)
     if oids:
         try:
@@ -392,7 +404,7 @@ def get_cartridge_identity_data(ip: str, brand: str = None, community: str = "pu
                 identity_type[ck] = "chip_id"
             sources.append("snmp")
 
-    # ۲) پنل وب (HP همیشه‌تلاش؛ بقیه اگر web=true در تنظیمات یا پیش‌فرض محدود)
+    # 2) Web panel (HP always try; others if web=true in settings or limited by default)
     web = {}
     try:
         if brand_key == "hp" and cfg.get("hp_web", True):
@@ -412,10 +424,10 @@ def get_cartridge_identity_data(ip: str, brand: str = None, community: str = "pu
     if web.get("supply_pages"):
         pages.update(web["supply_pages"])
 
-    # ۳) جایگزین‌های SNMP برای پرینترهایی که chip ID ندارند:
-    #    a) Brother: Toner Replace Count — هر بار تعویض +۱
-    #    b) HP قدیمی: شماره پارت کارتریج از Printer-MIB
-    #    c) Canon LBP: مدل کارتریج از Printer-MIB
+    # 3) SNMP alternatives for printers that do not have chip ID:
+    # a) Brother: Toner Replace Count — +1 each time replaced
+    # b) Old HP: Cartridge part number from Printer-MIB
+    # c) Canon LBP: Cartridge model from Printer-MIB
     if not ids and brand_key in ("brother", "hp", "canon"):
         try:
             _fallback = _read_fallback_identity(ip, brand_key, community, snmp_version)
@@ -443,4 +455,6 @@ def get_cartridge_identity_data(ip: str, brand: str = None, community: str = "pu
 
 
 def clear_cache():
+    """Empty the in-memory cartridge-ID cache."""
+
     _cache.clear()

@@ -1,16 +1,24 @@
+# =============================================================================
+# @file:         .github/workflows/tests.yml
+# @brief:        CI workflow that runs the test suite on Python 3.10 to 3.13.
+# @details:      Responsibilities: Run pytest and unittest paths, check that no test is double-counted, and verify golden fixtures.
+# @dependencies: GitHub Actions, actions/checkout@v4, actions/setup-python@v5, pytest, unittest, tools/record_golden.py
+# @notes:        Tests are hermetic: no network, real clock or external PostgreSQL service is needed.
+# =============================================================================
+
 name: tests
 
 # =====================================================
-# فاز C — کار ۶: تور ایمنی CI
+# Phase C — Task 6: CI Safety Tour
 # =====================================================
-# سه چیز را تضمین می‌کند:
-#   ۱) ۲۳۴ تست سبز روی پایتون ۳.۱۰ / ۳.۱۱ / ۳.۱۲ / ۳.۱۳
-#   ۲) بدون دوبارشماری: ۲۱ تست pytest-only (۳ فایل marker‌دار) + ۲۱۳ تست
-#      unittest — هر تست دقیقاً یک بار شمرده می‌شود (گارد اختصاصی پایین‌تر)
-#   ۳) fixtureهای golden بایت‌به‌بایت ثابت (تفاضل-صفر)
+# It guarantees three things:
+#   1) 234 green tests on Python 3.10 / 3.11 / 3.12 / 3.13
+#   2) Without double counting: 21 pytest-only tests (3 marker files) + 213 tests
+#      unittest — each test is counted exactly once (lower proprietary guard)
+#   3) fixed byte by byte golden fixtures (difference-zero)
 #
-# تست‌ها hermetic هستند: بدون شبکه/ساعت واقعی/سرویس خارجی. هیچ سرویس جانبی
-# (PostgreSQL/Exporter) در این ورک‌فلو لازم نیست.
+# Tests are hermetic: no network/real time/external service. No ancillary services
+# (PostgreSQL/Exporter) is not required in this workflow.
 # =====================================================
 
 on:
@@ -55,19 +63,19 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt -r requirements-dev.txt
 
-      # ---------- مسیر ۱: pytest (فقط ۳ فایل marker‌دار = ۲۱ تست) ----------
+      # ---------- Route 1: pytest (only 3 marker files = 21 tests) ----------
       - name: pytest — فایل‌های pytest-only (۲۱ تست)
         run: python -m pytest tests/ -m pytest_only -q --color=no
 
-      # ---------- مسیر ۲: unittest (۲۱۳ تست باقی‌مانده) ----------
-      # فایل‌های pytest-only با load_tests خالی از این مسیر کنار گذاشته شده‌اند.
+      # ---------- Route 2: unittest (213 tests remaining) ----------
+      # pytest-only files with empty load_tests are excluded from this path.
       - name: unittest — سایر تست‌ها (۲۱۳ تست)
         run: |
           python -m unittest discover -s tests -p "test_*.py" 2>&1 | tee "${{ runner.temp }}/unittest.log"
 
-      # ---------- گارد ضد دوبارشماری ----------
-      # هیچ تستی نباید حذف یا دوبار شمرده شود. تعداد unittest-discovered باید
-      # دقیقاً برابر مجموعه‌ی pytest بدون marker باشد (مقایسه‌ی مستقل از عدد ثابت).
+      # ---------- Anti-double counting guard ----------
+      # No test shall be omitted or counted twice. The number of unittest-discovered must
+      # be exactly equal to pytest set without marker (independent comparison of constant number).
       - name: گارد ضد دوبارشماری
         shell: python
         env:
@@ -105,12 +113,12 @@ jobs:
               sys.exit(f"دوبارشماری/حذف تست: pytest(بدون marker)={rest} ولی unittest={unittest_n}")
           print(f"✔ بدون دوبارشماری: {only} + {unittest_n} = {total} تست، هر کدام یک بار")
 
-      # ---------- گارد رگرسیون golden ----------
+      # ---------- golden regression guard ----------
       - name: golden fixtures — تفاضل-صفر (۱۰/۱۰)
         run: python tools/record_golden.py --only all --check
 
-      # ---------- پوشش کد (اختیاری، بدون threshold) ----------
-      # فایل‌های پوشش بیرون از مخزن نوشته می‌شوند تا workspace آلوده نشود.
+      # ---------- Code coverage (optional, no threshold) ----------
+      # Cover files are written outside the repository so that the workspace is not contaminated.
       - name: پوشش کد (اختیاری — بدون threshold)
         continue-on-error: true
         env:

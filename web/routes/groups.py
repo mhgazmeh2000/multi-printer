@@ -1,19 +1,34 @@
+# =============================================================================
+# @file:         web/routes/groups.py
+# @brief:        API routes for creating, renaming and deleting printer groups.
+# @details:      Responsibilities: Expose group CRUD over HTTP.
+#                Main API: api_groups(), api_create_group(), api_rename_group(),
+#                api_delete_group(), api_get_office_subnets(), api_save_office_subnets(),
+#                api_delete_office_group()
+#                Side effects: defines HTTP routes, file I/O
+# @dependencies: internal: config, core, core.groups | external: flask, flask_login
+# @notes:        None.
+# =============================================================================
+
+"""Printer group API routes."""
+
+import json
 import logging
+import os
+
 from flask import Blueprint, jsonify, request
+from flask_login import current_user
 
 from core import store
 from core.groups import load_groups, create_group, rename_group, delete_group
-from flask_login import current_user
 from config import settings
-import os
-import json
 
 log = logging.getLogger("PrinterMonitor")
 bp = Blueprint("groups", __name__)
 
 
 def _clear_group_from_printers(group_id: str) -> int:
-    """گروه را از همه پرینترهایی که آن id را دارند پاک می‌کند."""
+    """Removes the group from all printers that have that id."""
     changed = 0
     with store.printers_lock:
         for p in store.PRINTERS:
@@ -27,12 +42,14 @@ def _clear_group_from_printers(group_id: str) -> int:
 
 @bp.route("/api/groups", methods=["GET"])
 def api_groups():
-    """لیست گروه‌های سفارشی (گروه‌های پیش‌فرض دفاتر frontend-side هستند)."""
+    """List of custom groups (default groups are frontend-side offices)."""
     return jsonify({"groups": load_groups()})
 
 
 @bp.route("/api/groups", methods=["POST"])
 def api_create_group():
+    """Create a printer group from the JSON body."""
+
     body = request.get_json(silent=True) or {}
     try:
         group = create_group(
@@ -47,6 +64,8 @@ def api_create_group():
 
 @bp.route("/api/groups/<path:gid>/rename", methods=["POST"])
 def api_rename_group(gid):
+    """Rename a printer group."""
+
     body = request.get_json(silent=True) or {}
     try:
         ok = rename_group(gid, body.get("name"))
@@ -59,6 +78,8 @@ def api_rename_group(gid):
 
 @bp.route("/api/groups/<path:gid>", methods=["DELETE"])
 def api_delete_group(gid):
+    """Delete a printer group."""
+
     if not delete_group(gid):
         return jsonify({"error": "گروه پیدا نشد (گروه‌های پیش‌فرض دفاتر قابل حذف نیستند)"}), 404
     cleared = _clear_group_from_printers(gid)
@@ -68,6 +89,8 @@ def api_delete_group(gid):
 @bp.route('/api/admin/office_subnets', methods=['GET'])
 def api_get_office_subnets():
     # only admin
+    """Return the office subnet settings."""
+
     if not getattr(current_user, 'is_authenticated', False) or getattr(current_user, 'role', '') != 'admin':
         return jsonify({'error': 'forbidden'}), 403
     return jsonify({'subnets': settings.OFFICE_SUBNETS})
@@ -75,6 +98,8 @@ def api_get_office_subnets():
 
 @bp.route('/api/admin/office_subnets', methods=['POST'])
 def api_save_office_subnets():
+    """Save the office subnet settings."""
+
     if not getattr(current_user, 'is_authenticated', False) or getattr(current_user, 'role', '') != 'admin':
         return jsonify({'error': 'forbidden'}), 403
     body = request.get_json(silent=True) or {}
@@ -102,7 +127,7 @@ def api_save_office_subnets():
             settings.OFFICE_SUBNETS = out
         except Exception:
             log.exception('Failed to update settings.OFFICE_SUBNETS in-memory')
-    except Exception as e:
+    except Exception:
         log.exception('Failed to save office_subnets.json')
         return jsonify({'error': 'failed to save'}), 500
 
@@ -111,6 +136,8 @@ def api_save_office_subnets():
 
 @bp.route('/api/admin/office_subnets/<path:gid>', methods=['DELETE'])
 def api_delete_office_group(gid):
+    """Delete an office group."""
+
     if not getattr(current_user, 'is_authenticated', False) or getattr(current_user, 'role', '') != 'admin':
         return jsonify({'error': 'forbidden'}), 403
 

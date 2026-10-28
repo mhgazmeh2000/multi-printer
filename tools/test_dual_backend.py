@@ -1,31 +1,42 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tools/test_dual_backend.py
+# @brief:        Practical test of the core/db layer on both backends (phase E.2).
+# @details:      Responsibilities: Run the data-layer checks against each backend.
+#                Main API: Outcome, mask(), check_sqlite(), check_postgres(), print_block(),
+#                summarize(), main()
+#                Side effects: database access
+# @dependencies: internal: core.db, core.db.exceptions
+# @notes:        Reads environment variables: DB_BACKEND. Can be run directly as a script.
+# =============================================================================
+
 """
-tools/test_dual_backend.py — آزمون عملی لایه‌ی `core/db` روی **هر دو** backend (فاز E.2).
+tools/test_dual_backend.py — practical test of the `core/db' layer on **both** backends (phase E.2).
 
-چه می‌کند؟
+what does it do
 ----------
-یک باتری یکسان از رفتارها را روی هر backend اجرا می‌کند و برای هر مورد یکی از این
-سه وضعیت را گزارش می‌دهد:
+It executes the same battery of behaviors on each backend, one for each instance
+It reports three situations:
 
-  • OK        — کار می‌کند (اندازه‌گیری‌شده با همین اجرا)
-  • EXPECTED  — پشتیبانی **نمی‌شود** و طبق طرح نباید بشود (مثل `lastrowid` روی PG)
-  • FAIL      — انتظار می‌رفت کار کند ولی نشد ⇒ کد خروج ۱
+  • OK — works (measured by this run)
+  • EXPECTED — **not supported** and should not be supported according to plan (like `lastrowid' on PG)
+  • FAIL — expected to work but did not ⇒ exit code 1
 
-SQLite روی یک فایل موقت در پوشه‌ی موقت سیستم اجرا می‌شود (به `logs.db` دست نمی‌زند)
-و PostgreSQL فقط جدول `TEMP` می‌سازد (پایان session خودش می‌رود) و در پایان rollback
-می‌کند ⇒ **هیچ اثری روی دیتابیس مالک نمی‌گذارد** و هیچ جدول برنامه‌ای را لمس نمی‌کند.
+SQLite runs on a temporary file in the system temp folder (doesn't touch `logs.db').
+And PostgreSQL only creates ``TEMP'' table (the end of the session goes by itself) and at the end rollback
+It does ⇒ **leaves no traces on the owner's database** and does not touch any program tables.
 
-کد خروج
+exit code
 -------
-  0 = هر دو backend (یا backendهای درخواستی) سالم
-  1 = یک یا چند بررسی FAIL شد
-  2 = PG درخواست شده ولی در دسترس نیست (نبود DSN یا سرور خاموش)
+  0 = both backends (or requested backends) healthy
+  1 = One or more checks FAIL
+  2 = PG requested but not available (no DSN or server down)
 
-نمونه
+sample
 -----
-    python tools\\test_dual_backend.py                  # هر دو backend
-    python tools\\test_dual_backend.py --backend sqlite  # فقط SQLite (بدون PG)
+    python tools\\test_dual_backend.py # Both backends
+    python tools\\test_dual_backend.py --backend sqlite # SQLite only (no PG)
     set PG_DSN=host=127.0.0.1 port=5432 dbname=printguard user=printguard password=…
     python tools\\test_dual_backend.py --backend postgresql --quiet
 """
@@ -43,7 +54,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from core.db import (  # noqa: E402 — بعد از تنظیم sys.path
+from core.db import (  # noqa: E402 — After setting sys.path
     BACKEND_POSTGRESQL,
     BACKEND_SQLITE,
     connect_postgres,
@@ -64,26 +75,27 @@ _SCRIPT_SQL = "CREATE TABLE s1 (x INT); CREATE TABLE s2 (y INT);"
 
 
 class Outcome:
-    """نتیجه‌ی یک بررسی روی یک backend."""
+    """The result of a check on a backend."""
 
     def __init__(self, name: str, status: str, detail: str = ""):
+        """Create a check result with its name, status and detail."""
         self.name = name
         self.status = status
         self.detail = detail
 
 
 def mask(dsn: str) -> str:
-    """رمز را از DSN پنهان می‌کند (هیچ‌وقت رمز چاپ نشود)."""
+    """Hides the password from the DSN (never print the password)."""
     return " ".join("password=***" if t.lower().startswith("password=") else t
                     for t in str(dsn).split())
 
 
 # ─────────────────────────────────────────────────────────────
-# باتری بررسی‌ها (مشترک بین دو backend)
+# Battery of reviews (shared between two backends)
 # ─────────────────────────────────────────────────────────────
 
 def check_sqlite(path: str) -> list:
-    """اجرای باتری روی SQLite (فایل موقت)."""
+    """Battery run on SQLite (temp file)."""
     out = []
     conn = connect_sqlite(path, timeout=5.0)
     try:
@@ -125,7 +137,7 @@ def check_sqlite(path: str) -> list:
         row = conn.execute("SELECT id FROM t ORDER BY id").fetchone()
         out.append(Outcome("row_factory", OK if row["id"] == 1 else FAIL,
                            f"دسترسی با نام ستون ⇒ id={row['id']}"))
-    except Exception as exc:  # noqa: BLE001 — ابزار، باید همه‌چیز را گزارش کند
+    except Exception as exc:  # noqa: BLE001 — Tool should report everything
         out.append(Outcome("اجرای باتری SQLite", FAIL, f"{type(exc).__name__}: {exc}"))
     finally:
         conn.close()
@@ -133,7 +145,7 @@ def check_sqlite(path: str) -> list:
 
 
 def check_postgres(dsn: str) -> list:
-    """اجرای همان باتری روی PostgreSQL (فقط جدول TEMP)."""
+    """Running the same battery on PostgreSQL (TEMP table only)."""
     out = []
     conn = connect_postgres(dsn, timeout=5.0)
     try:
@@ -142,7 +154,7 @@ def check_postgres(dsn: str) -> list:
                            f"{conn.execute('SHOW timezone').fetchone()[0]}"
                            f" | autocommit={conn.raw_connection.autocommit}"))
         conn.execute("CREATE TEMP TABLE t (id INTEGER, name TEXT, n INTEGER)")
-        conn.commit()  # DDL در PG تراکنشی است
+        conn.commit()  # DDL in PG is transactional
 
         cur = conn.execute("INSERT INTO t (id, name, n) VALUES (?, ?, ?)", (1, "alpha", 10))
         out.append(Outcome("execute + ترجمه-placeholder (? ⇒ %s)", OK,
@@ -153,8 +165,8 @@ def check_postgres(dsn: str) -> list:
         count = conn.execute("SELECT count(*) FROM t").fetchone()[0]
         out.append(Outcome("executemany در یک تراکنش", OK if count == 3 else FAIL,
                            f"count={count}"))
-        # مثل باتری SQLite: ثبت نقطه‌ی مرجع، تا بررسی بعدی واقعاً «یک rollback» بسنجد
-        # (در PG برخلاف sqlite3، هیچ DMLای خودکار commit نمی‌شود).
+        # Like the SQLite battery: recording a reference point, until the next check is really "a rollback".
+        # (In PG, unlike sqlite3, no automatic DML is committed).
         conn.commit()
 
         conn.execute("INSERT INTO t (id, name, n) VALUES (?, ?, ?)", (4, "doomed", 0))
@@ -179,7 +191,7 @@ def check_postgres(dsn: str) -> list:
         except NotImplementedError as exc:
             out.append(Outcome("lastrowid", EXPECTED, f"طبق طرح: {str(exc)[:60]}…"))
 
-        # E.4.7: اسکریپت چنددستوری روی PG هم اجرا می‌شود (تقسیم به statement).
+        # E.4.7: The multi-command script is also executed on the PG (divided into statements).
         try:
             conn.executescript(_SCRIPT_SQL)
             made = conn.execute(
@@ -188,7 +200,7 @@ def check_postgres(dsn: str) -> list:
             ).fetchone()[0]
             out.append(Outcome("executescript (تقسیم به statement)",
                                OK if made == 2 else FAIL, f"جدول‌های ساخته‌شده={made}/2"))
-        except NotImplementedError as exc:              # دیگر نباید رخ دهد
+        except NotImplementedError as exc:              # It should not happen again
             out.append(Outcome("executescript (تقسیم به statement)", FAIL,
                                f"هنوز پیاده نشده: {str(exc)[:60]}…"))
 
@@ -197,12 +209,12 @@ def check_postgres(dsn: str) -> list:
         out.append(Outcome("cursor خام (سبک خودِ درایور: %s)", OK,
                            f"count={cur.fetchone()[0]}"))
 
-        conn.row_factory = object()          # باید بی‌اثر باشد، نه خطا
+        conn.row_factory = object()          # It should be null, not error
         out.append(Outcome("row_factory (بی‌اثر به‌عمد)", OK,
                            f"خواندن ⇒ {conn.row_factory}"))
 
         conn.rollback()
-    except Exception as exc:  # noqa: BLE001 — ابزار، باید همه‌چیز را گزارش کند
+    except Exception as exc:  # noqa: BLE001 — Tool should report everything
         out.append(Outcome("اجرای باتری PostgreSQL", FAIL, f"{type(exc).__name__}: {exc}"))
     finally:
         conn.close()
@@ -210,10 +222,12 @@ def check_postgres(dsn: str) -> list:
 
 
 # ─────────────────────────────────────────────────────────────
-# گزارش
+# Report
 # ─────────────────────────────────────────────────────────────
 
 def print_block(title: str, outcomes: list) -> None:
+    """Print one titled block of results."""
+
     print(f"\n── {title} " + "─" * max(0, 58 - len(title)))
     if not outcomes:
         print("   (اجرا نشد)")
@@ -224,13 +238,15 @@ def print_block(title: str, outcomes: list) -> None:
 
 
 def summarize(outcomes: list) -> tuple:
-    """(تعداد OK، تعداد EXPECTED، تعداد FAIL)"""
+    """(OK number, EXPECTED number, FAIL number)"""
     return (sum(1 for o in outcomes if o.status == OK),
             sum(1 for o in outcomes if o.status == EXPECTED),
             sum(1 for o in outcomes if o.status == FAIL))
 
 
 def main(argv=None) -> int:
+    """Command-line entry point that runs the data layer on both backends."""
+
     ap = argparse.ArgumentParser(
         prog="test_dual_backend.py",
         description="آزمون عملی core/db روی SQLite و PostgreSQL (فاز E.2).",
@@ -267,7 +283,7 @@ def main(argv=None) -> int:
     pg_results, pg_error, pg_dsn_display = [], None, ""
     if want_pg:
         try:
-            dsn = resolve_dsn(BACKEND_POSTGRESQL, args.dsn or None)  # خالی ⇒ ConfigurationError
+            dsn = resolve_dsn(BACKEND_POSTGRESQL, args.dsn or None)  # Empty ⇒ ConfigurationError
             pg_dsn_display = mask(dsn)
             pg_results = check_postgres(dsn)
         except ConfigurationError as exc:
@@ -277,7 +293,7 @@ def main(argv=None) -> int:
         except Exception as exc:  # noqa: BLE001
             pg_error = f"{type(exc).__name__}: {exc}"
 
-    # ── گزارش ─────────────────────────────────────────────────
+    # Report
     if not args.quiet:
         if want_sqlite:
             print_block("SQLite", sqlite_results)

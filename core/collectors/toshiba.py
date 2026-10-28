@@ -1,15 +1,28 @@
+# =============================================================================
+# @file:         core/collectors/toshiba.py
+# @brief:        Collects counters and paper-size data from Toshiba e-STUDIO printers (SNMP and
+#                HTTP).
+# @details:      Responsibilities: Combine SNMP and HTTP scraping, detect paper sizes and
+#                calculate accurate toner levels.
+#                Main API: collect_toshiba()
+#                Side effects: network I/O, file I/O
+# @dependencies: internal: config.settings, core, core.collectors.base, core.database,
+#                core.snmp.oid_map, core.snmp.protocol, core.time_utils | external: requests
+# @notes:        None.
+# =============================================================================
+
 """
-جمع‌آوری داده از Toshiba e-STUDIO از طریق SNMP + HTTP scraping
-با پشتیبانی از تشخیص سایز کاغذ و محاسبه دقیق تونر
+Data collection from Toshiba e-STUDIO via SNMP + HTTP scraping
+With support for paper size detection and accurate toner calculation
 """
 
+import logging
 import re
 import time
-import logging
 from datetime import datetime, timezone
 
 from core.snmp.protocol import snmp_get_bulk, snmp_get_with_fallback
-from core.snmp.oid_map import OIDS, PAPER_SIZE_MAP, TONER_STATUS, TONER_LEVEL
+from core.snmp.oid_map import OIDS, PAPER_SIZE_MAP, TONER_STATUS
 from core.collectors.base import si, ss, _counters_event, validate_counter_consistency, attribute_paper_size
 from core import store
 from core.database import add_event
@@ -19,15 +32,15 @@ log = logging.getLogger("PrinterMonitor")
 
 NE_LEVEL = {5: 25, 6: 20, 7: 10, 8: 0, 9: 5}
 
-# ✅ باگ #10: کش HTTP scrape برای کاهش timeout و افزایش دقت
+# Bug #10: HTTP scrape cache to reduce timeout and increase accuracy
 _toner_scrape_cache = {}  # ip → (timestamp, result)
-_TONER_CACHE_TTL = 300  # ۵ دقیقه
+_TONER_CACHE_TTL = 300  # 5 minutes
 
-# تنظیمات validation log
+# Validation log settings
 from config.settings import VALIDATION_LOG_FILE
 
 def _log_validation_error(ip: str, error_type: str, details: str):
-    """ثبت خطا در فایل validation log"""
+    """Record errors in the validation log file"""
     try:
         timestamp = datetime.now().isoformat()
         with open(VALIDATION_LOG_FILE, "a", encoding="utf-8") as f:
@@ -38,15 +51,15 @@ def _log_validation_error(ip: str, error_type: str, details: str):
 
 
 def _scrape_toshiba_toners(ip: str, timeout: float = 4.0):
-    """درصد دقیق تونر را از پنل TopAccess می‌خواند."""
-    # ✅ باگ #10: بررسی کش قبل از درخواست HTTP
+    """Reads the exact toner percentage from the TopAccess panel."""
+    # Bug #10: Check cache before HTTP request
     now = time.time()
     if ip in _toner_scrape_cache:
         ts, cached_result = _toner_scrape_cache[ip]
         if now - ts < _TONER_CACHE_TTL:
             log.debug(f"Toshiba toner cache hit for {ip}")
             return cached_result
-    
+
     html = None
     url = f"http://{ip}/?MAIN=DEVICE"
 
@@ -116,7 +129,7 @@ def _scrape_toshiba_toners(ip: str, timeout: float = 4.0):
 
     if result and all(0 <= v <= 100 for v in result.values()):
         log.debug(f"Toshiba toner scrape {ip}: {result}")
-        # ✅ باگ #10: ذخیره در کش
+        # Bug #10: Save in cache
         _toner_scrape_cache[ip] = (time.time(), result)
         return result
 
@@ -126,25 +139,25 @@ def _scrape_toshiba_toners(ip: str, timeout: float = 4.0):
 
 def _walk_toner_remaining(ip: str, community: str, timeout: float = 2.0) -> dict:
     """
-    روش سوم: SNMP Walk روی جدول مواد مصرفی برای یافتن درصد دقیق تونر
-    OIDهای استفاده شده (Printer MIB):
-    - 1.3.6.1.2.1.43.11.1.1.6 (prtMarkerSuppliesDescription) : نام کارتریج
-    - 1.3.6.1.2.1.43.11.1.1.8 (prtMarkerSuppliesMaxCapacity) : ظرفیت
-    - 1.3.6.1.2.1.43.11.1.1.9 (prtMarkerSuppliesRemaining) : باقی‌مانده
+    Third method: SNMP Walk on the table of consumables to find the exact toner percentage
+    Used OIDs (Printer MIB):
+    - 1.3.6.1.2.1.43.11.1.1.6 (prtMarkerSuppliesDescription): cartridge name
+    - 1.3.6.1.2.1.43.11.1.1.8 (prtMarkerSuppliesMaxCapacity): capacity
+    - 1.3.6.1.2.1.43.11.1.1.9 (prtMarkerSuppliesRemaining): Remaining
     """
     result = {}
-    
-    for idx in range(1, 11):  # حداکثر 10 ماده مصرفی
+
+    for idx in range(1, 11):  # A maximum of 10 consumables
         try:
-            # خواندن نام
+            # Read the name
             name_oid = f"1.3.6.1.2.1.43.11.1.1.6.1.{idx}"
             name = snmp_get_with_fallback(ip, name_oid, community, timeout=timeout)
             if name is None:
-                continue  # این ایندکس وجود ندارد
-            
+                continue  # This index does not exist
+
             name_str = str(name).strip().lower()
-            
-            # تشخیص رنگ
+
+            # Color detection
             color = None
             if "black" in name_str or "bk" in name_str:
                 color = "black"
@@ -155,29 +168,29 @@ def _walk_toner_remaining(ip: str, community: str, timeout: float = 2.0) -> dict
             elif "yellow" in name_str:
                 color = "yellow"
             else:
-                continue  # ماده مصرفی غیر تونر (مثل درام)
-            
-            # خواندن ظرفیت
+                continue  # non-toner consumables (such as drums)
+
+            # Reading capacity
             max_oid = f"1.3.6.1.2.1.43.11.1.1.8.1.{idx}"
             max_val = snmp_get_with_fallback(ip, max_oid, community, timeout=timeout)
-            
-            # خواندن باقی‌مانده
+
+            # Remaining reading
             rem_oid = f"1.3.6.1.2.1.43.11.1.1.9.1.{idx}"
             rem_val = snmp_get_with_fallback(ip, rem_oid, community, timeout=timeout)
-            
+
             if max_val is None or rem_val is None:
-                _log_validation_error(ip, "walk_incomplete", 
+                _log_validation_error(ip, "walk_incomplete",
                                      f"Toner {color} idx={idx}: max={max_val}, rem={rem_val}")
                 continue
-            
+
             try:
                 max_int = int(max_val)
                 rem_int = int(rem_val)
-                
+
                 if max_int > 0 and rem_int >= 0:
                     percent = round(rem_int / max_int * 100)
-                    
-                    # وضعیت
+
+                    # status
                     if percent == 0:
                         st = "empty"
                     elif percent <= 10:
@@ -186,7 +199,7 @@ def _walk_toner_remaining(ip: str, community: str, timeout: float = 2.0) -> dict
                         st = "low"
                     else:
                         st = "ok"
-                    
+
                     result[color] = {
                         "level": percent,
                         "status": st,
@@ -194,23 +207,54 @@ def _walk_toner_remaining(ip: str, community: str, timeout: float = 2.0) -> dict
                         "max": max_int,
                         "source": "snmp_walk",
                     }
-                    
+
                     log.debug(f"Toshiba walk {ip}: {color}={percent}% (rem={rem_int}, max={max_int})")
-                    
+
             except (ValueError, TypeError) as e:
-                _log_validation_error(ip, "walk_conversion", 
+                _log_validation_error(ip, "walk_conversion",
                                      f"Toner {color} idx={idx}: max={max_val}, rem={rem_val}, error={e}")
-                
+
         except Exception as e:
             _log_validation_error(ip, "walk_exception", f"Toner idx={idx}: {e}")
-    
+
     return result
 
 
+# Standard supplies table: prtMarkerSuppliesDescription, one row per colour.
+# The index is the row of the colour in the printer's supplies table.
+_SUPPLY_DESCRIPTION_OID = "1.3.6.1.2.1.43.11.1.1.6.1.{idx}"
+_COLOR_SUPPLY_INDEX = {"cyan": 2, "magenta": 3, "yellow": 4, "black": 1}
+
+
+def _read_supply_names(ip: str, community: str, timeout: float = 2.0) -> dict:
+    """Read the cartridge description of each colour from the standard supplies table.
+
+    Uses the same SNMP version handling as the other reads of this module (the
+    version is detected and cached per printer by snmp_get_with_fallback). A colour
+    whose read fails or returns an empty value is left out, so the caller falls
+    back to the generic label. Failures are logged at debug level.
+    """
+    names = {}
+    for col, idx in _COLOR_SUPPLY_INDEX.items():
+        try:
+            value = snmp_get_with_fallback(
+                ip, _SUPPLY_DESCRIPTION_OID.format(idx=idx), community, timeout=timeout
+            )
+            text = ss(value, "")
+        except Exception as exc:
+            log.debug("Toshiba %s: supply description read failed for %s: %s", ip, col, exc)
+            continue
+        if text:
+            names[col] = text
+    return names
+
+
 def collect_toshiba(ip: str, name: str, community: str, start: float) -> dict:
+    """Collect counters, paper-size data and toner levels from a Toshiba e-STUDIO printer."""
+
     prev = store._prev.get(ip) or {}
-    # ✅ فیکس: پیش‌فرض ۰ برای baseline حذف شد؛ مقدار None یعنی «نمی‌دانیم» و
-    # نباید به‌عنوان صفر در دلتا شرکت کند (دلتای جعلیِ به‌اندازه‌ی کل شمارنده).
+    # Fix: the default 0 for baseline was removed; The value None means "we don't know" and
+    # It should not participate in the delta as a zero (fake delta equal to the total counter).
     prev_a3 = prev.get("a3_total")
     prev_a4 = prev.get("a4_total")
 
@@ -222,12 +266,12 @@ def collect_toshiba(ip: str, name: str, community: str, start: float) -> dict:
     us = ut // 100
     uptime_str = f"{us // 86400}d {(us % 86400) // 3600:02d}:{(us % 3600) // 60:02d}"
 
-    # ─── تونر با اولویت: TopAccess > Usage-based > SNMP Walk > NE_LEVEL ───
-    
-    # اولویت ۱: TopAccess Scrape
+    # ─── Tuner with priority: TopAccess > Usage-based > SNMP Walk > NE_LEVEL ───
+
+    # Priority 1: TopAccess Scrape
     scraped = _scrape_toshiba_toners(ip)
-    
-    # اولویت ۳ (fallback): SNMP Walk
+
+    # Priority 3 (fallback): SNMP Walk
     walk_result = None
     if not scraped:
         try:
@@ -236,18 +280,9 @@ def collect_toshiba(ip: str, name: str, community: str, start: float) -> dict:
                 log.info(f"Toshiba {ip}: SNMP walk successful for {len(walk_result)} toners")
         except Exception as e:
             _log_validation_error(ip, "walk_failed", str(e))
-    
-    # خواندن نام کارتریج از standard MIB (prtMarkerSuppliesDescription)
-    supply_names = {}
-    _color_mib_idx = {"cyan": 2, "magenta": 3, "yellow": 4, "black": 1}
-    _g_toshiba = lambda oid, timeout=2.0: snmp_get_with_fallback(ip, oid, community, version=snmp_version, timeout=timeout)
-    for col, idx in _color_mib_idx.items():
-        try:
-            t_name = ss(_g_toshiba(f"1.3.6.1.2.1.43.11.1.1.6.1.{idx}"), "")
-            if t_name:
-                supply_names[col] = t_name
-        except Exception:
-            pass
+
+    # Cartridge names from the standard supplies table (prtMarkerSuppliesDescription)
+    supply_names = _read_supply_names(ip, community)
 
     toners = {}
     for col, ne_key in [("cyan","toner_cyan_status"),("magenta","toner_magenta_status"),
@@ -255,14 +290,14 @@ def collect_toshiba(ip: str, name: str, community: str, start: float) -> dict:
         ne = si(raw.get(ne_key), 3)
         usage = si(raw.get(f"toner_{col}_usage"), 0)
 
-        # اولویت ۱: TopAccess
+        # Priority 1: TopAccess
         if scraped and col in scraped:
             level = scraped[col]
             st = ("ok" if level > 50 else "low" if level > 25 else
                   "critical" if level > 0 else "empty")
             source = "topaccess_scrape"
-            
-        # اولویت ۲: Usage-based estimation
+
+        # Priority 2: Usage-based estimation
         elif usage > 0:
             if col == "black":
                 estimated_max = 40_000_000_000
@@ -270,8 +305,8 @@ def collect_toshiba(ip: str, name: str, community: str, start: float) -> dict:
                 estimated_max = 20_000_000_000
 
             level = max(0, min(100, round(100 - (usage / estimated_max * 100))))
-            
-            # تصحیح بر اساس وضعیت NE
+
+            # Correction based on NE status
             if ne in (3, 4):
                 level = max(level, 50)
             elif ne in (5, 6):
@@ -280,18 +315,18 @@ def collect_toshiba(ip: str, name: str, community: str, start: float) -> dict:
                 level = max(level, 5)
             elif ne == 8:
                 level = 0
-                
+
             st = ("ok" if level > 50 else "low" if level > 25 else
                   "critical" if level > 0 else "empty")
             source = "usage_estimated"
-            
-        # اولویت ۳: SNMP Walk
+
+        # Priority 3: SNMP Walk
         elif walk_result and col in walk_result:
             level = walk_result[col]["level"]
             st = walk_result[col]["status"]
             source = "snmp_walk"
-            
-        # اولویت ۴: NE_LEVEL
+
+        # Priority 4: NE_LEVEL
         else:
             if ne in NE_LEVEL:
                 level = NE_LEVEL[ne]
@@ -340,8 +375,8 @@ def collect_toshiba(ip: str, name: str, community: str, start: float) -> dict:
     alerts = [{"message": a["message"], "code": a["code"]} for a in alerts]
 
     total = si(raw.get("print_total"))
-    
-    # ═══ Retry برای total=0 ═══
+
+    # ═══ Retry for total=0 ═══
     prev_total = prev.get("print_total") if prev else None
     if total == 0 and prev_total is not None and prev_total > 1000:
         log.warning(f"Toshiba {ip}: total=0 but prev={prev_total}, retrying...")
@@ -351,15 +386,15 @@ def collect_toshiba(ip: str, name: str, community: str, start: float) -> dict:
             log.warning(f"Toshiba {ip}: retry successful → total={retry_total}")
             total = retry_total
         else:
-            # ✅ باگ #10: ثبت خطا و نگهداری total=0 (نه prev_total)
+            # ✅ Bug #10: error registration and maintaining total=0 (not prev_total)
             log.error(f"Toshiba {ip}: retry also failed, recording SNMP error")
             add_event(ip, "SNMP_ERROR", {
                 "message": f"SNMP total=0 and retry failed for {ip}",
                 "severity": "error",
                 "prev_total": prev_total,
             })
-            # total رو 0 نگه دار تا در poll بعدی دوباره تلاش بشه
-            # اگر prev_total رو برگردونیم، چاپ‌های واقعی گم می‌شن
+            # Keep the total at 0 to try again in the next poll
+            # If we return prev_total, the actual prints are lost
 
     color = si(raw.get("print_fc"))
     bw = si(raw.get("print_bw"))
@@ -372,21 +407,21 @@ def collect_toshiba(ip: str, name: str, community: str, start: float) -> dict:
     printer = printer_fc + printer_bw
     fax = si(raw.get("print_fax"))
 
-    # نکته مهم: OID `twin` در بعضی مدل‌های Toshiba با تأخیر/دو مرحله update می‌شود.
-    # اگر total را با twin دوباره اصلاح کنیم، ممکن است یک job دوبار در log ثبت شود.
-    # بنابراین total خام دستگاه را منبع truth نگه می‌داریم و twin فقط برای نمایش نگه داشته می‌شود.
+    # Important note: OID `twin' is updated with a delay/two steps in some Toshiba models.
+    # If we modify total with twin again, a job may be recorded twice in the log.
+    # Therefore, we keep the raw total of the device as the source of truth, and the twin is kept only for display.
     twin_pages = twin * 2 if twin > 0 else 0
     bw_for_event = max(0, total - color) if total >= 0 and color >= 0 else bw
 
-    # ✅ فیکس: خواندن ناموفق SNMP نباید ۰ شود. قبلاً si(...)=0 هم در دلتا شرکت
-    # می‌کرد و هم در PrevStore ذخیره می‌شد؛ نتیجه دلتای بعدی = کل شمارنده و
-    # برچسب سایز کاغذِ کاملاً اشتباه در لاگ بود (مثلاً «Large» برای چاپ A4 خالص).
+    # ✅ Fix: failed SNMP read should not be 0. Previously, si(...)=0 in Delta Company
+    # and it was stored in PrevStore; Next delta result = total counter and
+    # The paper size label was completely wrong in the log (eg "Large" for plain A4 printing).
     a3_raw = raw.get("a3_total")
     a4_raw = raw.get("a4_total")
     a3_total = si(a3_raw) if a3_raw is not None else None
     a4_total = si(a4_raw) if a4_raw is not None else None
 
-    # ✅ اعتبارسنجی هم‌راستایی دلتا با شمارنده کل (هویت a3+a4 == print_total)
+    # ✅ Delta alignment validation with total counter (identity a3+a4 == print_total)
     paper_size, paper_split, paper_size_reliable = attribute_paper_size(
         total=total,
         prev_total=prev.get("print_total"),
@@ -407,25 +442,27 @@ def collect_toshiba(ip: str, name: str, community: str, start: float) -> dict:
         } for k in ["a4","a3","a4r","a5","b4"]
     }
 
-    # ─── حسابرسی سایز/عملکرد در لاگ (گزارش فلت: «پرینت A3 درست ثبت نمی‌شود») ───
-    # شواهد واقعی (2050C ᴀɴᴅ 3015AC): شاخه ۲۰۷=کل بزرگ، ۲۰۸=کل کوچک،
-    # ۲۰۹=پرینت(بزرگ)، ۲۱۰=پرینت(کوچک) — طوری که a4r+a5 ≈ printer. این دلتاها
-    # در details هر رویداد می‌نشینند: «چند صفحه A3(بزرگ) پرینت/کپی شد» دیگر
-    # بدون حدس پاسخ داده می‌شود.
+    # ─── Size/performance audit in the log (Flat report: "A3 print does not register correctly") ───
+    # Actual evidence (2050C ᴀɴᴅ 3015AC): branch 207=large whole, 208=small whole,
+    # 209=print (large), 210=print (small) — so that a4r+a5 ≈ printer. These deltas
+    # In the details of each event sit: "How many A3 (large) pages were printed/copied" else
+    # It is answered without guessing.
     def _raw_int(key):
+        """Read an integer from the raw poll data by key, or None when it is missing."""
         v = raw.get(key)
         return si(v) if v is not None else None
 
     def _safe_delta(prev_key, cur_val):
+        """Return the difference between the current and previous value, or None when unknown."""
         if cur_val is None or prev.get(prev_key) is None:
             return None
         prev_v = si(prev.get(prev_key))
         if prev_v < 0 or cur_val < prev_v:
-            return None   # ریست/نویز — نسبت‌دهی ساختگی نمی‌کنیم
+            return None   # Reset/Noise — We don't fake attribution
         return cur_val - prev_v
 
-    print_large_total = _raw_int("a4r_total")   # branch 209 = پرینت(کاغذ بزرگ)
-    print_small_total = _raw_int("a5_total")    # branch 210 = پرینت(کاغذ کوچک)
+    print_large_total = _raw_int("a4r_total")   # branch 209 = print (large paper)
+    print_small_total = _raw_int("a5_total")    # branch 210 = print (small paper)
     list_total = _raw_int("print_list")
 
     paper_detail = {k: v for k, v in {
@@ -451,7 +488,7 @@ def collect_toshiba(ip: str, name: str, community: str, start: float) -> dict:
                 black_level = t["level"]
                 break
     prev_toner = prev.get("toner_level")
-    # ✅ باگ #11: پاس دادن a3_total و a4_total به _counters_event
+    # Bug #11: Passing a3_total and a4_total to _counters_event
     _counters_event(ip, total, prev, alerts, curr_codes,
                     full_color=color, black_white=bw_for_event, paper_size=paper_size,
                     current_toner_level=black_level, prev_toner_level=prev_toner,
@@ -470,25 +507,25 @@ def collect_toshiba(ip: str, name: str, community: str, start: float) -> dict:
 
     log.info(f"  ✓ {name} [toshiba] total={total:,} fc={color:,} bw={bw:,} {elapsed}ms")
 
-    # ═══ اصلاح: عدم بازنویسی PrevStore ═══
-    # ✅ فیکس: فقط وقتی شمارنده واقعاً خوانده شده baseline را جلو ببر؛ ذخیره‌ی ۰
-    # برای خواندن ناموفق، دلتای poll بعدی را به اندازه‌ی کل شمارنده باد می‌کرد.
+    # ═══ Fix: PrevStore not overwritten ═══
+    # Fix: advance the baseline only when the counter is actually read; Save 0
+    # For a failed read, the delta of the next poll will be inflated by the total counter size.
     with store._prev_lock:
         current_prev = store._prev.get(ip) or {}
         changed = False
-        # ✅ هم‌ترازی baseline: فقط وقتی موتور رویداد snapshot این poll را
-        # پذیرفته (print_total جلو رفته) baseline عملکرد/زیرگروه‌ها هم جلو می‌رود؛
-        # در غیر این صورت (خواندن مشکوک / overflow pending) نگه‌داشتن baseline
-        # قدیمی باعث می‌شود دلتای poll بعدی دقیق و بدون دوبار-شماری بماند.
+        # Baseline alignment: Only when the event engine snapshots this poll
+        # Accepted (print_total moved forward) performance baseline/subgroups also move forward;
+        # otherwise (read suspicious/overflow pending) keep the baseline
+        # Old makes the next poll delta accurate and without double-counting.
         snapshot_accepted = (
             current_prev.get("print_total") is not None
             and si(current_prev.get("print_total"), -1) == total
         )
         if snapshot_accepted:
-            # ✅ باگ #2 (fallback): baseline کاغذ بزرگ/کوچک هم — دقیقاً مثل
-            # printer/copy/fax/list — فقط با snapshot پذیرفته‌شده جلو می‌رود تا
-            # در pollهای anomaly/overflow از print_total جدا نشود و سایز کاغذ
-            # اشتباه (A3 به‌جای A4 یا برعکس) در PRINT ثبت نشود.
+            # Bug #2 (fallback): paper baseline large/small too — exactly the same
+            # printer/copy/fax/list — only forwards with accepted snapshot
+            # In anomaly/overflow polls, do not separate from print_total and paper size
+            # Do not record the mistake (A3 instead of A4 or vice versa) in PRINT.
             if a3_total is not None:
                 current_prev["a3_total"] = a3_total
                 current_prev["a3_lagged"] = False

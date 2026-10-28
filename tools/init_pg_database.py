@@ -1,42 +1,54 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tools/init_pg_database.py
+# @brief:        Creates the PostgreSQL database and application role (phase E.1).
+# @details:      Responsibilities: Create the role and database, and mask the DSN in output.
+#                Main API: load_psycopg(), mask(), app_dsn(), admin_dsn(), with_dbname(),
+#                ensure_password(), db_state(), describe_db() (+2 more)
+#                Side effects: database access
+# @dependencies: external: psycopg
+# @notes:        Reads environment variables: PGPASSWORD, PG_ADMIN_DSN, PG_ADMIN_USER, PG_DSN. Can
+#                be run directly as a script.
+# =============================================================================
+
 """
-tools/init_pg_database.py — ساخت دیتابیس/نقش PostgreSQL برنامه (فاز E.1).
+tools/init_pg_database.py — Create the PostgreSQL database/role application (phase E.1).
 
-چه می‌کند؟
+what does it do
 ----------
-  ۱) بررسی می‌کند دیتابیس `printguard` هست یا نه (وضعیت فعلی را گزارش می‌دهد)؛
-  ۲) اگر نبود: با **نقش ادمین** کاربر برنامه را (اگر لازم باشد) و سپس دیتابیس را
-     با مشخصات قرارداد پروژه می‌سازد: `ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C'
-     TEMPLATE template0` و `ALTER DATABASE … SET timezone TO 'UTC'`؛
-  ۳) اگر بود: **هیچ تغییری نمی‌دهد** (idempotent) و فقط وضعیت را گزارش می‌کند؛
-  ۴) جدول‌ها را نمی‌سازد — آن کار Alembic است (`alembic upgrade head`).
+  1) Checks whether the ``printguard'' database exists or not (reports the current status);
+  2) If not: with **admin role** user program (if necessary) and then database
+     Builds project with contract specification: `ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C'
+     TEMPLATE template0` and `ALTER DATABASE... SET timezone TO 'UTC'`;
+  3) If it was: **does not change anything** (idempotent) and only reports the status;
+  4) It doesn't build the tables - that's Alembic's job (`alembic upgrade head').
 
-چرا نقش ادمین لازم است؟
+Why is the admin role necessary?
 -----------------------
-سنجش E.1.5 نشان داد نقش برنامه (`printguard`) مجوز `CREATEDB` ندارد (و نباید داشته باشد:
-کمترین-مجوز). پس «ساخت دیتابیس» فقط با یک نقش ادمین ممکن است:
+Test E.1.5 showed that the application role (`printguard') does not have (and should not have) `CREATEDB' permission:
+least-licensed). So "creating a database" is only possible with an admin role:
 
-    --admin-dsn   یا   PG_ADMIN_DSN   یا   کاربر پیش‌فرض postgres روی همان میزبان/پورتِ هدف
+    --admin-dsn or PG_ADMIN_DSN or the default postgres user on the same target host/port
 
-رمز ادمین از `PG_ADMIN_PASSWORD` (یا داخل DSN) خوانده می‌شود؛ هیچ رمزی در کد یا سند نیست.
-رمز نقش برنامه هم از `PG_APP_PASSWORD` (یا داخل DSN هدف) خوانده می‌شود و **فقط وقتی**
-استفاده می‌شود که نقش وجود نداشته باشد و باید ساخته شود.
+The admin password is read from `PG_ADMIN_PASSWORD' (or inside the DSN); There is no encryption in the code or document.
+The application role password is also read from `PG_APP_PASSWORD' (or inside the target DSN) and **only when**
+It is used when the role does not exist and must be created.
 
-کد خروج
+exit code
 -------
-  0 = دیتابیس آماده است (همین حالا ساخته شد یا از قبل بود)
-  1 = خطای اجرا (اتصال، ساخت دیتابیس/نقش)
-  2 = نیازمند اقدام انسانی (نبود psycopg، نبود DSN، نبود رمز لازم، نبود مجوز ادمین)
+  0 = database is ready (just created or already existed)
+  1 = execution error (connection, database/role creation)
+  2 = requires human action (no psycopg, no DSN, no required password, no admin permission)
 
-نمونه (ویندوز — CMD/PowerShell)
+Example (Windows — CMD/PowerShell)
 -------------------------------
     set PG_DSN=host=127.0.0.1 port=5432 dbname=printguard user=printguard password=...
     set PG_ADMIN_DSN=host=127.0.0.1 port=5432 dbname=postgres user=postgres
     set PG_ADMIN_PASSWORD=<admin-password>
     set PG_APP_PASSWORD=<strong-app-password>
     python tools\\init_pg_database.py
-    python tools\\init_pg_database.py --dry-run        # فقط گزارش برنامه، بدون تغییر
+    python tools\\init_pg_database.py --dry-run # Just log the program, no changes
 """
 
 from __future__ import annotations
@@ -62,6 +74,8 @@ APP_TZ = "UTC"
 # ─────────────────────────────────────────────────────────────
 
 def load_psycopg():
+    """Import the psycopg driver and return the module."""
+
     try:
         import psycopg  # type: ignore
         return psycopg
@@ -70,7 +84,7 @@ def load_psycopg():
 
 
 def _kv_pairs(dsn: str) -> dict:
-    """جفت‌های کلید=مقدار یک DSN سبک libpq (فرم URI پشتیبانی نمی‌شود)."""
+    """key=value pairs of a libpq-style DSN (URI form not supported)."""
     out = {}
     for token in str(dsn).split():
         if "=" in token:
@@ -80,12 +94,14 @@ def _kv_pairs(dsn: str) -> dict:
 
 
 def mask(dsn: str) -> str:
+    """Mask the password in a DSN string for display."""
+
     return " ".join("password=***" if t.lower().startswith("password=") else t
                     for t in str(dsn).split())
 
 
 def app_dsn(cli: str) -> str:
-    """DSN هدف (دیتابیس برنامه) از --dsn / PG_DSN / متغیرهای libpq."""
+    """Target DSN (application database) from --dsn / PG_DSN / libpq variables."""
     if cli.strip():
         return cli.strip()
     dsn = os.getenv("PG_DSN", "").strip()
@@ -99,9 +115,9 @@ def app_dsn(cli: str) -> str:
 
 
 def admin_dsn(cli: str, target: str) -> str:
-    """DSN ادمین: --admin-dsn / PG_ADMIN_DSN / ساخته‌شده از میزبان-پورت هدف با کاربر postgres.
+    """Admin DSN: --admin-dsn / PG_ADMIN_DSN / created from target host-port with postgres user.
 
-    اگر DSN انتخابی رمز نداشت، `PG_ADMIN_PASSWORD` به آن ضمیمه می‌شود (رمز هرگز چاپ نمی‌شود).
+    If the selected DSN does not have a password, `PG_ADMIN_PASSWORD` is appended to it (the password is never printed).
     """
     if cli.strip():
         dsn = cli.strip()
@@ -119,7 +135,7 @@ def admin_dsn(cli: str, target: str) -> str:
 
 
 def with_dbname(dsn: str, name: str) -> str:
-    """همان DSN با نام دیتابیس عوض‌شده (برای تأیید اتصال به دیتابیس هدف)."""
+    """The same DSN with the database name changed (to verify the connection to the target database)."""
     tokens = str(dsn).split()
     out, replaced = [], False
     for t in tokens:
@@ -133,7 +149,7 @@ def with_dbname(dsn: str, name: str) -> str:
 
 
 def ensure_password(dsn: str, env_name: str) -> str:
-    """اگر DSN رمز ندارد، از متغیر محیطی اضافه می‌کند (بدون چاپ رمز)."""
+    """If the DSN does not have a password, it adds it from the environment variable (without printing the password)."""
     if "password=" in dsn.lower():
         return dsn
     pwd = os.getenv(env_name, "")
@@ -141,11 +157,11 @@ def ensure_password(dsn: str, env_name: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────
-# کار اصلی
+# The main work
 # ─────────────────────────────────────────────────────────────
 
 def db_state(psycopg, target: str, admin: str, app_db: str, app_role: str) -> dict:
-    """وضعیت فعلی: دیتابیس/نقش چه وضعی دارند (تا جای ممکن از دید ادمین)."""
+    """Current Status: What is the status of the database/role (as far as possible from the admin's point of view)."""
     state = {"db_exists": None, "role_exists": None, "checked_with": None}
     try:
         with psycopg.connect(admin, connect_timeout=5) as conn:
@@ -156,10 +172,10 @@ def db_state(psycopg, target: str, admin: str, app_db: str, app_role: str) -> di
                 state["role_exists"] = cur.fetchone() is not None
                 cur.execute("SELECT current_user, current_setting('is_superuser')")
                 state["checked_with"] = cur.fetchone()[0]
-    except Exception as exc:  # noqa: BLE001 — اتصال هدف ممکن است هنوز برقرار نشود
+    except Exception as exc:  # noqa: BLE001 — The target connection may not yet be established
         state["admin_error"] = f"{type(exc).__name__}: {exc}"
-        # تلاش دوم: از طریق هدف — `pg_database` و `pg_roles` برای هر نقشِ واردشده خواندنی‌اند،
-        # پس با همین اتصال هم می‌توان «وجود» را سنجید (حتی وقتی دیتابیس هدف هنوز نیست).
+        # Second attempt: via target — `pg_database` and `pg_roles` are readable for each imported role,
+        # So, with this connection, "existence" can be measured (even when the target database is not yet).
         try:
             with psycopg.connect(target, connect_timeout=5) as conn:
                 with conn.cursor() as cur:
@@ -175,7 +191,7 @@ def db_state(psycopg, target: str, admin: str, app_db: str, app_role: str) -> di
 
 
 def describe_db(psycopg, target: str) -> dict | None:
-    """مشخصات دیتابیس برنامه از دید DSN هدف (اگر قابل اتصال باشد)."""
+    """Specification of the application database from the point of view of the target DSN (if connectable)."""
     try:
         with psycopg.connect(target, connect_timeout=5) as conn:
             with conn.cursor() as cur:
@@ -194,16 +210,16 @@ def describe_db(psycopg, target: str) -> dict | None:
 
 def create_role_and_db(psycopg, sql, admin: str, dry_run: bool, state: dict,
                        app_db: str, app_role: str, target_dsn: str) -> tuple:
-    """(ok, پیام) — ساخت نقش (در صورت نیاز) و دیتابیس با مشخصات قرارداد."""
+    """(ok, message) — Create role (if needed) and database with contract specifications."""
     created = []
     if dry_run:
         return True, "dry-run: هیچ تغییری اعمال نشد"
     try:
-        # CREATE DATABASE در تراکنش ممکن نیست ⇒ autocommit لازم است.
+        # CREATE DATABASE is not possible in transaction ⇒ autocommit is required.
         with psycopg.connect(admin, connect_timeout=5, autocommit=True) as conn:
             with conn.cursor() as cur:
-                # دستورهای utility در PostgreSQL پارامتر (%s) نمی‌پذیرند ⇒ از
-                # psycopg.sql برای نقل‌قول ایمن شناسه‌ها و مقدارها استفاده می‌کنیم.
+                # Utility commands in PostgreSQL do not accept parameter (%s) ⇒ from
+                # We use psycopg.sql to safely quote identifiers and values.
                 if not state.get("role_exists"):
                     app_pwd = _kv_pairs(ensure_password(target_dsn, "PG_APP_PASSWORD")).get("password")
                     if not app_pwd:
@@ -246,6 +262,8 @@ def create_role_and_db(psycopg, sql, admin: str, dry_run: bool, state: dict,
 
 
 def main(argv=None) -> int:
+    """Command-line entry point that creates the PostgreSQL role and database."""
+
     p = argparse.ArgumentParser(
         prog="init_pg_database.py",
         description="ساخت دیتابیس/نقش PostgreSQL برنامه (idempotent، فاز E.1).",

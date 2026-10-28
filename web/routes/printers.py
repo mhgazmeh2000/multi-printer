@@ -1,9 +1,27 @@
+# =============================================================================
+# @file:         web/routes/printers.py
+# @brief:        API routes for printer records and debug endpoints.
+# @details:      Responsibilities: Expose printer CRUD and debugging data over HTTP.
+#                Main API: api_printers(), api_printer(), debug_printer(), debug_brother_toner(),
+#                debug_toshiba_snmp(), api_add(), api_bulk_add(), api_remove() (+3 more)
+#                Side effects: network I/O, starts threads, defines HTTP routes
+# @dependencies: internal: config.settings, core, core.collectors.base, core.database,
+#                core.enhanced_collector, core.oid.scanner, core.poller, core.snmp.oid_map,
+#                core.snmp.protocol, core.store, core.yield_engine, web.auth | external: flask,
+#                flask_login
+# @notes:        Reads environment variables: ENABLE_DEBUG_ENDPOINTS.
+# =============================================================================
+
+"""Printer management and debugging API routes."""
+
+import logging
 import os
 import re
 import threading
-import logging
+
 from flask import Blueprint, jsonify, request
 from flask_login import current_user
+
 from core import store
 from core.database import add_event
 from core.poller import collect, poll_one
@@ -19,7 +37,7 @@ _IP_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
 
 
 def _is_valid_ip(ip: str) -> bool:
-    """اعتبارسنجی IPv4 — جلوگیری از ورود رشته‌های نامعتبر/مخرب به printers.json"""
+    """IPv4 Validation — Prevent invalid/malicious strings from entering printers.json"""
     if not ip or len(ip) > 15 or not _IP_RE.match(ip):
         return False
     try:
@@ -29,16 +47,17 @@ def _is_valid_ip(ip: str) -> bool:
 
 
 def _debug_endpoints_enabled() -> bool:
-    """🔒 endpointهای دیباگ فقط با ENABLE_DEBUG_ENDPOINTS=1 فعال می‌شوند."""
+    """🔒 Debug endpoints are enabled only with ENABLE_DEBUG_ENDPOINTS=1."""
     return os.getenv("ENABLE_DEBUG_ENDPOINTS", "0") == "1"
 
 
 def _debug_forbidden():
+    """Return a 404 response for debug routes that are disabled."""
     return jsonify({"error": "not found"}), 404
 
 
 def _attach_yield_metadata(printer_data: dict) -> dict:
-    """اضافه کردن yield/capacity به خروجی API حتی اگر snapshot فعلی قدیمی باشد."""
+    """Add yield/capacity to API output even if the current snapshot is old."""
     if not isinstance(printer_data, dict):
         return printer_data
     ip = printer_data.get("ip")
@@ -72,6 +91,8 @@ def _attach_yield_metadata(printer_data: dict) -> dict:
 
 @bp.route('/api/printers')
 def api_printers():
+    """Return the printers the current user may see, with their latest data."""
+
     allowed_offices = user_allowed_offices(current_user)
     allowed_ips = allowed_printer_ips(current_user)
     with store.data_lock:
@@ -79,8 +100,8 @@ def api_printers():
     with store.printers_lock:
         cfg = list(store.PRINTERS)
     cfg_by_ip = {p.get("ip"): p for p in cfg if p.get("ip")}
-    # admin دسترسی کامل دارد؛ allowed_offices برای admin نباید با لیست خالی
-    # باعث حذف همه پرینترها شود. محدودسازی فقط برای کاربران غیرadmin است.
+    # admin has full access; allowed_offices for admin should not be empty list
+    # Remove all printers. Restriction is only for non-admin users.
     if allowed_offices and getattr(current_user, "role", None) != "admin":
         snap = [d for d in snap if d.get("ip") in allowed_ips]
         cfg = [p for p in cfg if p.get("ip") in allowed_ips]
@@ -114,6 +135,8 @@ def api_printers():
 
 @bp.route('/api/printer/<path:ip>')
 def api_printer(ip):
+    """Return the data of one printer."""
+
     if not user_can_access_office(current_user, ip):
         return jsonify({"error": "forbidden"}), 403
     with store.data_lock:
@@ -123,6 +146,8 @@ def api_printer(ip):
 
 @bp.route('/api/debug/printer/<path:ip>')
 def debug_printer(ip):
+    """Return raw diagnostic data of one printer (only when debug endpoints are enabled)."""
+
     if not _debug_endpoints_enabled():
         return _debug_forbidden()
     if not user_can_access_office(current_user, ip):
@@ -137,7 +162,7 @@ def debug_printer(ip):
 @bp.route('/api/debug/brother-toner/<path:ip>')
 @admin_required
 def debug_brother_toner(ip):
-    """Endpoint موقت برای بررسی raw OIDهای تونر Brother."""
+    """Temporary endpoint to check raw Brother toner OIDs."""
     if not _debug_endpoints_enabled():
         return _debug_forbidden()
     if not user_can_access_office(current_user, ip):
@@ -217,7 +242,7 @@ def debug_brother_toner(ip):
 @bp.route('/api/debug/toshiba-snmp/<path:ip>')
 @admin_required
 def debug_toshiba_snmp(ip):
-    """Endpoint موقت برای بررسی raw probeهای SNMP و OIDهای Toshiba."""
+    """Temporary endpoint to check raw SNMP probes and Toshiba OIDs."""
     if not _debug_endpoints_enabled():
         return _debug_forbidden()
     if not user_can_access_office(current_user, ip):
@@ -289,6 +314,8 @@ def debug_toshiba_snmp(ip):
 
 @bp.route('/api/printers/add', methods=['POST'])
 def api_add():
+    """Add a printer from the JSON body."""
+
     body = request.get_json() or {}
     ip = (body.get("ip") or "").strip()
     name = (body.get("name") or f"Printer {ip}").strip()
@@ -314,6 +341,8 @@ def api_add():
 
 @bp.route('/api/printers/bulk-add', methods=['POST'])
 def api_bulk_add():
+    """Add several printers at once."""
+
     body = request.get_json() or {}
     items = body.get("printers", [])
     do_scan = body.get("scan", True)
@@ -351,6 +380,7 @@ def api_bulk_add():
 
     if added:
         def _bg_init(new_printers):
+            """Initialize the newly added printers in a background thread."""
             for p in new_printers:
                 try:
                     if do_scan:
@@ -362,10 +392,10 @@ def api_bulk_add():
                                     if x["ip"] == p["ip"]:
                                         store.PRINTERS[i] = _normalize_printer(p)
                                 store.save_printers(store.PRINTERS)
-                            # بعد از به‌روزرسانی برند در PRINTERS، بلافاصله poll_one بگیر تا printer_data بروز شود
+                            # After updating the brand in PRINTERS, immediately poll_one to update printer_data
                             poll_one(p)
                         else:
-                            # اگر برند قبلاً مشخص بود یا اسکن نشد، باز هم یک poll اولیه انجام بده
+                            # If the brand was already known or was not scanned, do an initial poll again
                             result = collect(p)
                             with store.data_lock:
                                 store.printer_data[p["ip"]] = result
@@ -373,7 +403,7 @@ def api_bulk_add():
                         result = collect(p)
                         with store.data_lock:
                             store.printer_data[p["ip"]] = result
-                except Exception as e:
+                except Exception:
                     log.exception("bulk-add init %s failed", p['ip'])
         threading.Thread(target=_bg_init, args=(list(added),), daemon=True).start()
 
@@ -387,6 +417,8 @@ def api_bulk_add():
 
 @bp.route('/api/printers/remove', methods=['POST'])
 def api_remove():
+    """Remove a printer."""
+
     ip = (request.get_json() or {}).get("ip", "").strip()
     with store.printers_lock:
         before = len(store.PRINTERS)
@@ -396,13 +428,15 @@ def api_remove():
         store.save_printers(store.PRINTERS)
     with store.data_lock:
         store.printer_data.pop(ip, None)
-    # حذف baseline قبلی تا اگر همین IP بعداً به دستگاه دیگری اختصاص یافت، لاگ دروغین ساخته نشود.
+    # Delete the previous baseline so that if the same IP is assigned to another device later, a false log will not be created.
     store._prev.delete(ip)
     return jsonify({"status": "removed", "ip": ip})
 
 
 @bp.route('/api/discover/auto-add', methods=['POST'])
 def api_auto_add_printer():
+    """Add a printer that was found by discovery."""
+
     data = request.json or {}
     ip = data.get("ip", "").strip()
     community = data.get("community", "public")
@@ -433,6 +467,7 @@ def api_auto_add_printer():
             store.save_printers(store.PRINTERS)
 
         def _poll_new():
+            """Poll the newly added printer once."""
             result = collect(new_printer)
             with store.data_lock:
                 store.printer_data[new_printer["ip"]] = result
@@ -445,14 +480,16 @@ def api_auto_add_printer():
 
 @bp.route('/api/printer/<path:ip>/update', methods=['POST'])
 def api_update_printer(ip):
+    """Update the settings of one printer."""
+
     if not user_can_access_office(current_user, ip):
         return jsonify({"error": "forbidden"}), 403
-        
+
     data = request.get_json() or {}
     new_name = data.get("name", "").strip()
     new_nickname = data.get("nickname", "").strip()
     new_group = data.get("group", "").strip()
-    
+
     with store.printers_lock:
         found = False
         for p in store.PRINTERS:
@@ -463,26 +500,28 @@ def api_update_printer(ip):
                 p["group"] = new_group
                 found = True
                 break
-        
+
         if not found:
             return jsonify({"error": "printer not found"}), 404
-            
+
         store.save_printers(store.PRINTERS)
-        
-    # به‌روزرسانی داده‌های لحظه‌ای در حافظه
+
+    # Instant data update in memory
     with store.data_lock:
         if ip in store.printer_data:
             if new_name:
                 store.printer_data[ip]["name"] = new_name
             store.printer_data[ip]["nickname"] = new_nickname
             store.printer_data[ip]["group"] = new_group
-            
+
     return jsonify({"status": "ok", "ip": ip})
 
 
 @bp.route('/api/printer/<path:ip>/toner_reset', methods=['POST'])
-@admin_required  # 🔒 ریست دستی تونر: عملیات مدیریتی (admin)
+@admin_required  # 🔒 manual toner reset: administrative operation (admin)
 def toner_reset(ip):
+    """Reset the toner counters of one printer."""
+
     try:
         if not user_can_access_office(current_user, ip):
             return jsonify({"error": "forbidden"}), 403
@@ -532,7 +571,7 @@ def toner_reset(ip):
                 printer['counters']['pages_since_last_reset'] = 0
 
             if new_level > warning_threshold:
-                # هشدارهای مرتبط با تونر را بلافاصله از وضعیت فعال حذف کن.
+                # Immediately remove toner-related warnings from active status.
                 toner_alert_codes = {
                     ((toner_data.get('index') if isinstance(toner_data, dict) else None) or toner_color)
                     for toner_color, toner_data in toners.items()
@@ -578,10 +617,10 @@ def toner_reset(ip):
         else:
             cleared_alert_codes = prev.get('alert_codes', [])
 
-        # ✅ فیکس باگ «بازگشت مقدار دستی به پیش‌فرض پس از چند ثانیه»:
-        # هر رنگ اسلات override مستقل خودش را دارد (toner_overrides). reset یک
-        # رنگ دیگر override رنگ‌های قبلی را نابود نمی‌کند و poll بعدی مقدار
-        # نمایشی همه‌ی رنگ‌های reset‌شده را از روی صفحات چاپ‌شده ادامه می‌دهد.
+        # ✅ Bug fix "manual value return to default after a few seconds":
+        # Each color has its own independent override slot (toner_overrides). reset one
+        # Another color override will not destroy the previous colors and the next poll value
+        # It continues to display all the reset colors from the printed pages.
         from core.collectors.base import _normalize_overrides as _norm_ov
         overrides = _norm_ov(prev)
         overrides[color] = {
@@ -590,8 +629,8 @@ def toner_reset(ip):
         }
 
         new_prev = {
-            # reset دستی باید baseline شمارنده را با snapshot فعلی sync کند؛
-            # وگرنه poll بعدی ممکن است PRINT یا COUNTER_RESET اشتباه بسازد.
+            # A manual reset should sync the counter baseline with the current snapshot;
+            # Otherwise, the next poll may make a PRINT or COUNTER_RESET error.
             'print_total': current_total,
             'full_color': current_full_color if current_full_color is not None else prev.get('full_color'),
             'black_white': current_black_white if current_black_white is not None else prev.get('black_white'),
@@ -611,8 +650,8 @@ def toner_reset(ip):
         }
         store._prev.set(ip, new_prev)
 
-        # Yield Engine جدید هم باید reset دستی را به‌عنوان anchor معتبر per-cartridge ثبت کند؛
-        # وگرنه اگر دستگاه raw toner ندهد، لایه جدید از reset کاربر بی‌خبر می‌ماند.
+        # The new Yield Engine must also record the manual reset as a valid per-cartridge anchor;
+        # Otherwise, if the device does not produce raw toner, the new layer will remain unaware of the user's reset.
         try:
             from core.yield_engine import register_manual_refill
             device_info = printer.get('device') if isinstance(printer.get('device'), dict) else {}
@@ -647,6 +686,6 @@ def toner_reset(ip):
         })
 
         return jsonify({'status': 'ok'})
-    except Exception as e:
+    except Exception:
         log.exception('toner_reset failed for %s', ip)
         return jsonify({"error": "internal server error"}), 500

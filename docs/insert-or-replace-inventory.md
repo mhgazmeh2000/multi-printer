@@ -1,4 +1,4 @@
-# فهرست `INSERT OR REPLACE` و ستون‌های جاافتاده — فاز E.0، کار E.0.4
+# `INSERT OR REPLACE` inventory and dropped columns — phase E.0, task E.0.4
 
 **وضعیت:** فقط مستندات + یک ابزار تشخیصی. هیچ کد production، هیچ schema و هیچ داده‌ای تغییر نکرده است.
 **ابزار:** `tools/find_insert_or_replace.py` (AST-محور؛ کد را می‌خواند و برای نقشه‌ی ستون‌ها یک DB **موقت** بیرون از مخزن می‌سازد).
@@ -6,7 +6,7 @@
 
 ---
 
-## ۱. چرا این فهرست لازم است (تفاوت معنایی SQLite و PostgreSQL)
+## 1. Why this inventory is needed (semantic difference between SQLite and PostgreSQL)
 
 | | SQLite: `INSERT OR REPLACE` | PostgreSQL: `ON CONFLICT (...) DO UPDATE` |
 |---|---|---|
@@ -29,7 +29,7 @@
 
 ---
 
-## ۲. فهرست کامل محل‌ها (۶ محل در زمان E.0.4 — هیچ‌کدام بدون تصمیم نمانده)
+## 2. Full list of locations (6 locations at E.0.4 — none left without a decision)
 
 > **بازه‌ی خواندن:** این جدول، اسکن روز E.0.4 است و عمداً دست‌نخورده مانده
 > تا «از کجا شروع شد» پیداش باشد. وضعیت امروز هر ردیف در §۲.۱ است و
@@ -71,7 +71,7 @@ backend).
 
 ---
 
-## ۳. تصمیم به‌تفکیک
+## 3. Decision per item
 
 ### ۳.۱ `semantics یکسان` (سه محل تولیدی/تستی)
 
@@ -132,7 +132,7 @@ insert_sql = f"{verb} INTO {_q(table)} ({cols_sql}) VALUES ({placeholders})"
 
 ---
 
-## ۴. بازتولید
+## 4. Reproduction
 
 ```bash
 python tools/find_insert_or_replace.py                     # گزارش خوانا (کد خروج 2 = محل‌های پویا/جزئی)
@@ -148,7 +148,7 @@ python tools/find_insert_or_replace.py --no-schema         # بدون ساخت D
 
 ---
 
-## ۵. پیوند با کارهای بعدی فاز E.0
+## 5. Link to the next E.0 tasks
 
 - **E.0.5 (except sqlite3.\*):** همین شش محل خطاهایشان با `sqlite3.IntegrityError`
   مدیریت می‌شود؛ فهرست بعدی به آن‌ها ارجاع می‌دهد.

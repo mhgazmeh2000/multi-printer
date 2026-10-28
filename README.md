@@ -1,493 +1,402 @@
 # 🖨️ Multi‑Brand Printer Monitor (PrintGuard)
 
 > 🇬🇧 **English version:** [README.en.md](README.en.md)  
-> 🗺️ **نمودار تعاملی معماری و جریان داده:** [docs/architecture.html](docs/architecture.html) (با خروجی XML برای draw.io)  
-> 📋 **دستورالعمل عملیاتی انتقال به پایگاه‌داده (Cutover Runbook):** [docs/cutover-runbook.md](docs/cutover-runbook.md)
+> 🗺️ **Interactive architecture and data-flow diagram:** [docs/architecture.html](docs/architecture.html) (with XML export for draw.io)  
+> 📋 **Operational runbook for the database migration (Cutover Runbook):** [docs/cutover-runbook.md](docs/cutover-runbook.md)
 
-سامانه‌ی جامع پایش، تحلیل و مدیریت پرینترهای سازمانی چندبرندی (**Toshiba، HP، Canon، Brother**) و سنسورهای محیطی **ECS100G** با پشتیبانی از پروتکل‌های **SNMP (v1/v2c) + HTTP Web Scraping**، خط‌لوله‌ی پرسرعت **Prometheus SNMP Exporter** و معماری پایگاه‌داده‌ی دوگانه (**SQLite + PostgreSQL 16+** سازگار و تست‌شده روی نسخه‌های ۱۶، ۱۷ و ۱۸).
+A comprehensive system for monitoring, analysing and managing multi-brand enterprise printers (**Toshiba, HP, Canon, Brother**) and **ECS100G** environmental sensors. It supports **SNMP (v1/v2c) + HTTP web scraping**, a high-speed **Prometheus SNMP Exporter** pipeline, and a dual database architecture (**SQLite + PostgreSQL 16**).
 
-این سامانه برای نمایش وضعیت برخط/آفلاین، شمارنده‌های چاپ تفکیکی (A3/A4، رنگی/سیاه‌وسفید، کپی/پرینت/اسکن)، وضعیت تونر و درام، سینی‌های کاغذ، رویدادها و هشدارهای فعال، پیش‌بینی هوشمند ظرفیت کارتریج (Yield Engine)، لاگ‌های تفصیلی، خروجی‌های تحلیلی، گروه‌بندی پیشرفته و امنیت نقش‌محور سازمانی طراحی شده است.
-
----
-
-## 📑 فهرست مطالب
-
-1. [قابلیت‌ها](#-قابلیت‌ها)
-2. [معماری کلی و لایه‌ها](#-معماری-کلی-پروژه)
-3. [جریان داده و خط‌لوله‌ها](#-جریان-داده)
-4. [ساختار پروژه و توضیح فایل‌ها](#-ساختار-پروژه)
-5. [پیش‌نیازها و نصب](#-پیشنیازها)
-6. [نصب و اجرا](#-نصب-و-اجرا)
-7. [بسته خودکارسازی ویندوز (Setup / Migrate / Start)](#-بسته-خودکارسازی-ویندوز)
-8. [مدیریت سرویس و پشتیبان‌گیری سازمانی PostgreSQL](#-مدیریت-سرویس-ویندوز-و-پشتیبانگیری-postgresql)
-9. [تنظیمات مهم محیطی](#-تنظیمات-مهم-محیطی)
-10. [APIهای مهم](#-apiهای-مهم)
-11. [نکات مربوط به تونر و Yield Engine](#-نکات-مربوط-به-تونر-و-مواد-مصرفی)
-12. [صحت لاگ‌ها و شمارنده‌ها](#-صحت-لاگها-و-شمارندهها)
-13. [ابزارها و اسکریپت‌های کمکی (CLI)](#-ابزارها)
-14. [تست‌ها و تضمین کیفیت](#-تستها-و-تضمین-کیفیت)
-15. [نقشه راه و وضعیت فازها](#-نقشه-راه-و-وضعیت-فازها)
-16. [امنیت سازمانی](#-امنیت)
-17. [خروجی Excel و گزارش‌ها](#-خروجی-excel)
-18. [نکات اجرایی](#-نکات-اجرایی)
-19. [مجوز](#-مجوز--license)
+The system shows online/offline status, per-type print counters (A3/A4, colour/black-and-white, copy/print/scan), toner and drum status, paper trays, events and active alerts, intelligent cartridge capacity forecasting (Yield Engine), detailed logs, analytical outputs, advanced grouping and enterprise role-based security.
 
 ---
 
-## ✨ قابلیت‌ها
+## 📑 Table of contents
 
-### 🖨️ پشتیبانی از چند برند سازمانی
-- **Toshiba e‑STUDIO:** شمارنده‌های تفکیکی مدل‌های چندکاره، تفکیک اندازه کاغذ A3/A4، وضعیت سینی‌های کاغذ، خواندن تونر از SNMP یا استخراج از وب‌پنل TopAccess.
-- **HP LaserJet / FutureSmart / JetDirect:** پشتیبانی از مدل‌های سازمانی (مانند M527، E52645، M577)، مدیریت درصدهای NPCL، هشدارهای سنسور و تفکیک رنگی.
-- **Canon i‑SENSYS / imageRUNNER / LBP:** پشتیبانی از مدل‌های MF و تک‌کاره (مانند LBP233dw)، تفسیر کدهای گسسته تونر (`0/5/7`) و پشتیبانی از استخراج وب‌پنل Remote UI.
-- **Brother MFC / NC Series:** مانیتورینگ شمارنده‌ها، وضعیت درام و کارتریج.
-- **ECS100G:** پایش برخط دما و رطوبت اتاق سرور و سالن چاپ.
-
-### 💾 معماری دوگانه پایگاه‌داده (Dual Backend) و استقرار عملیاتی
-- پشتیبانی بومی و یکپارچه از **SQLite** (توسعه محلی و محیط‌های ایزوله) و **PostgreSQL 16+** (محیط عملیاتی و پرترافیک سازمانی؛ اعتبارسنجی‌شده و تست‌شده روی نسخه‌های **16.x**، **17.5** و **18.1**).
-- **اتمام موفق عملیات مهاجرت قطعی (Phase F Cutover):** سامانه در حال حاضر در محیط عملیاتی با موفقیت کامل روی PostgreSQL با پایش هم‌زمان و برخط **۲۷ تجهیز شبکه** (شامل ۲۶ پرینتر و سنسور محیطی) مستقر است.
-- **تضمین تمامیت داده‌های کارتریج:** مهاجرت صددرصدی و کامل جدول وضعیت کارتریج با پوشش **۵۱ از ۵۱ سطر داده** روی تمامی پرینترها و رنگ‌های فعال.
-- لایه‌ی انتزاعی آداپتور مشترک داده (`core/db/`) جهت مدیریت سازگار کوئری‌ها، پارامترها و UPSERTهای cross-backend.
-- پایبندی سخت‌گیرانه به **قرارداد منطقه زمانی UTC** در سطح دیتابیس (`docs/timezone-contract.md`) با شناسه استاندارد UTC-Z و تبدیل شفاف به وقت محلی تهران (`Asia/Tehran`) در لایه نمایش و گزارش‌ها.
-- سیستم مهاجرت ساختار رسمی با **Alembic** (`0001` تا `0005`) با پشتیبانی از ستون‌های منطقی `BOOLEAN`، فیلدهای مدرن `IDENTITY` و ذخیره‌سازی جزئیات لاگ در نوع داده‌ی پرسرعت `JSONB`.
-
-### 🚀 خط‌لوله‌ی پرومتئوس و تاب‌آوری نوین (Prometheus & Resilience)
-- اکسپوزیشن استاندارد متریک‌ها روی مسیر `/metrics` با توکن احراز هویت اختصاصی (`METRICS_TOKEN`).
-- امکان فعال‌سازی خط‌لوله‌ی پرسرعت پیوندی (`USE_SNMP_EXPORTER=1`) مبتنی بر `snmp_exporter` جهت جمع‌آوری هم‌زمان و کم‌بار داده‌های SNMP ناوگان پرینترها.
-- مجهز به کلاینت مقاوم به خطا (`core/exporter_client.py`) با پیاده‌سازی مکانیزم‌های **Exponential Backoff** و **Circuit Breaker** جهت جلوگیری از اشغال منابع سرور و مسدود شدن تردها در مواجهه با پرینترهای خاموش یا شبکه ناپایدار.
-- بازگشت خودکار و هوشمند به اسکرپ وب (HTTP Fallback) در صورت ناقص بودن داده‌های SNMP خام بدون کپی‌برداری کد یا افت پوشش مانیتورینگ.
-
-### 📊 مانیتورینگ دستگاه
-- تشخیص **آنلاین / آفلاین** با مکانیزم **حداقل ۲ چرخه شکست متوالی** تا قطعی لحظه‌ای شبکه باعث آفلاین کاذب نشود.
-- نمایش **مدل، سریال، firmware، uptime**.
-- شمارنده‌های چاپ: کل / رنگی / سیاه‌وسفید / کپی / پرینت / فکس / اسکن.
-- **تفکیک اندازه کاغذ (A3/A4)** با چرخه‌ی تطبیق Snapshotها (راستی‌آزمایی‌شده با شبیه‌سازی دقیق).
-- نمایش **سینی‌های کاغذ** و سطح آن‌ها.
-- نمایش **تونر / کارتریج / درام** در قالب کارت‌های یکپارچه.
-- نمایش **هشدارهای فعال** دستگاه.
-
-### 🎨 تونر و مواد مصرفی
-- خواندن سطح تونر از **SNMP** و در برخی برندها **HTTP scraping** (Toshiba TopAccess / Canon Remote UI).
-- پشتیبانی از واحدهای RFC 3805: درصد (`unit=19`)، کدهای گسسته Canon (`0/5/7`)، sentinel های `-2/-3`.
-- پشتیبانی از **manual toner reset** و محاسبه **pages since last reset**.
-- **Yield Engine** هوشمند (`core/yield_engine.py`):
-  - یادگیری خودکار `yield_per_page` بر اساس سابقه مصرف واقعی.
-  - روش **anchor-based learning** برای پرینترهای کم‌مصرف.
-  - سطح اعتماد `low` / `medium` / `high`.
-  - اشتراک yield بین کارتریج‌های هم‌مدل/هم‌نام.
-  - تاریخچه snapshotها و نمونه‌های یادگیری.
-- **کاتالوگ محلی کارتریج** (`cartridge_yield_catalog.json` — بیش از ۳۰ مدل) به‌جای fallback خام ۲۰۰۰ صفحه.
-- اولویت منابع ظرفیت: `auto_learn` → `shared_profile` → `device_capacity` → `catalog` → `default`.
-- نمایش **Dot Count / Mega Dots** در مدل‌هایی که واقعاً داده ارائه می‌کنند.
-
-### 📜 رویدادها و لاگ‌ها
-- ثبت خودکار رویدادهای `PRINT` / `STATUS` / `ALERT` / `REFILL` / `SERVICE`.
-- `CARTRIDGE_CHANGED` — **تشخیص قطعی تعویض کارتریج بر اساس شناسه‌ی یکتا (Chip ID / سریال تراشه)**:
-  - **کشف خودکار OID:** در اولین poll موفق هر پرینتر، ماژول `cartridge_discovery.py` شاخه‌ی استاندارد Printer-MIB (`prtMarkerSuppliesDescription` برای نگاشت رنگ) و شاخه‌های vendor هر چهار برند (HP / Canon / Brother / Toshiba) را walk می‌کند و مقادیر شبیه سریال را استخراج می‌کند.
-  - **دروازه‌ی ثبات:** کاندیدا فقط وقتی تأیید می‌شود که مقدارش در ۳ پروب متوالی یکسان بماند (مقادیر پویا مثل سطح تونر حذف می‌شوند).
-  - OIDهای تأییدشده به‌صورت خودکار در `config/cartridge_id_map.json` (بخش `learned`) ذخیره می‌شوند؛ ورودی‌های دستی شما اولویت دارند و بازنویسی نمی‌شوند.
-  - تغییر شناسه ⇒ رویداد فوری `CARTRIDGE_CHANGED` با شناسه‌ی قبلی/جدید و رنگ کارتریج؛ سیگنال‌های مکمل: ریست «صفحات چاپ‌شده با این کارتریج» و (fallback) جهش سطح تونر.
-  - شناسه‌ی فعلی هر کارتریج در داشبورد (کارت خلاصه و کارت هر مصرفی) با برچسب 🧩 نمایش داده می‌شود.
-- `SENSOR_CHANGE` برای تغییر معنی‌دار سنسورها (دما ≥ ۱°C، رطوبت ≥ ۵٪).
-- ثبت `paper_size` (`Large (A3/B4)` / `Small (A4/A5)` / `Mixed`) و `paper_split` در جزئیات لاگ.
-- ثبت `poll_timestamp` در رویدادهای `PRINT`.
-- **محافظت در برابر لاگ‌های غلط:** بی‌توجهی به اولین poll، تشخیص `COUNTER_RESET`، `COUNTER_DROP`، `PRINT_OVERFLOW` و `COUNTER_ANOMALY` (جزئیات در بخش [صحت لاگ‌ها](#-صحت-لاگها-و-شمارندهها)).
-
-### 👥 گروه‌بندی پرینترها
-- ساخت/تغییرنام/حذف **گروه‌های سفارشی** با آیکون و رنگ (`groups.json`).
-- گروه حتی بدون پرینتر هم باقی می‌ماند؛ `id` پایدار جدا از نام نمایشی.
-- گروه‌های پیش‌فرض بر اساس **subnet دفاتر**.
-
-### 📈 گزارش و خروجی
-- نمودار مصرف روزانه (Chart.js).
-- خروجی ساخت‌یافته‌ی **Excel** (شیت‌های Printer Status / Job Log / Reset History).
-- خروجی **CSV** و **JSON**.
-- **Import دیتابیس** با تحلیل، انتخاب بخش‌ها، فیلتر IP/تاریخ، مدیریت تکراری‌ها و backup خودکار.
-
-### 👤 کاربران و امنیت
-- احراز هویت با **username/password** (رمزنگاری bcrypt) و **Google OAuth**.
-- نقش‌ها و دسترسی‌های سه‌گانه: `admin` / `manager` / `viewer`.
-- محدودسازی دسترسی بر اساس **دفاتر/ساب‌نت‌های مجاز** و **ماژول‌های مجاز**.
-- **CSRF protection**، **rate limiting**، reCAPTCHA، **security audit log**.
-- صفحه مدیریت کاربران و داشبورد امنیت اختصاصی.
-
-### 🧩 رابط کاربری
-- تم **دارک / لایت**، چیدمان واکنش‌گرا (responsive)، راست‌به‌چپ (RTL) فارسی.
-- Drag & Drop برای مرتب‌سازی کارت‌ها (Sortable.js).
-- Tooltip ،Toast notification و آکاردئون برای شمارنده‌های تکمیلی.
+1. [Features](#-features)
+2. [Overall architecture and layers](#-overall-project-architecture)
+3. [Data flow and pipelines](#-data-flow)
+4. [Project structure and file descriptions](#-project-structure)
+5. [Prerequisites and installation](#-prerequisites)
+6. [Setup and running](#-installation-and-run)
+7. [Important environment settings](#-important-environment-settings)
+8. [Important APIs](#-important-apis)
+9. [Notes on toner and the Yield Engine](#-notes-on-toner-and-consumables)
+10. [Log and counter accuracy](#-log-and-counter-accuracy)
+11. [Tools and helper scripts (CLI)](#-tools-and-cli-scripts)
+12. [Tests and quality assurance](#-tests-and-quality-assurance)
+13. [Enterprise security](#-enterprise-security)
+14. [Excel export and reports](#-excel-export-and-reports)
+15. [Operational notes](#-operational-notes-and-deployment)
+16. [License](#-license)
 
 ---
 
-## 🧱 معماری کلی پروژه
+## ✨ Features
 
-| لایه | تکنولوژی / ماژول | توضیحات |
+### 🖨️ Support for multiple enterprise brands
+- **Toshiba e‑STUDIO:** per-function counters for multifunction models, A3/A4 paper-size breakdown, paper-tray status, toner reading from SNMP or extraction from the TopAccess web panel.
+- **HP LaserJet / FutureSmart / JetDirect:** support for enterprise models (such as M527, E52645, M577), handling of NPCL percentages, sensor alerts and colour breakdown.
+- **Canon i‑SENSYS / imageRUNNER / LBP:** support for MF and single-function models (such as LBP233dw), interpretation of discrete toner codes (`0/5/7`) and extraction from the Remote UI web panel.
+- **Brother MFC / NC Series:** monitoring of counters, drum and cartridge status.
+- **ECS100G:** online monitoring of temperature and humidity in the server room and print hall.
+
+### 💾 Dual database architecture (Dual Backend)
+- Native, integrated support for **SQLite** (local development and isolated servers) and **PostgreSQL 16** (production and high-traffic enterprise environments) with no hard dependency on a single database engine.
+- A shared data adapter layer (`core/db/`) that keeps queries, parameters and cross-backend UPSERTs consistent.
+- Strict adherence to the **UTC time-zone contract** at the database level (`docs/timezone-contract.md`), with conversion to Tehran local time (`Asia/Tehran`) in the display and report layers.
+- Formal schema migrations with **Alembic** (`0001` to `0005`), including logical `BOOLEAN` columns, modern `IDENTITY` fields and storage of log details in the high-performance `JSONB` data type.
+
+### 🚀 Prometheus pipeline and resilience (Prometheus & Resilience)
+- Standard exposition of metrics on the `/metrics` path, protected by a dedicated authentication token (`METRICS_TOKEN`).
+- Optional high-speed hybrid pipeline (`USE_SNMP_EXPORTER=1`) based on `snmp_exporter` for concurrent, low-load collection of SNMP data across the printer fleet.
+- A fault-tolerant client (`core/exporter_client.py`) implementing **exponential backoff** and a **circuit breaker**, so that unresponsive printers or an unstable network cannot exhaust server resources or block threads.
+- Automatic, intelligent fallback to web scraping (HTTP fallback) when raw SNMP data is incomplete, without code duplication or loss of monitoring coverage.
+
+### 📊 Device monitoring
+- **Online / offline** detection with a **minimum of 2 consecutive failed cycles**, so that a momentary network outage does not produce a false offline status.
+- Shows the **model, serial number, firmware and uptime**.
+- Print counters: total / colour / black-and-white / copy / print / fax / scan.
+- **Paper-size breakdown (A3/A4)** with a reconciliation cycle for snapshots (verified by precise simulation).
+- Shows the **paper trays** and their levels.
+- Shows **toner / cartridge / drum** in unified cards.
+- Shows the device's **active alerts**.
+
+### 🎨 Toner and consumables
+- Reads toner levels over **SNMP** and, for some brands, by **HTTP scraping** (Toshiba TopAccess / Canon Remote UI).
+- Support for RFC 3805 units: percentage (`unit=19`), Canon discrete codes (`0/5/7`), and the `-2/-3` sentinels.
+- Support for **manual toner reset** and calculation of **pages since last reset**.
+- Intelligent **Yield Engine** (`core/yield_engine.py`):
+  - Automatic learning of `yield_per_page` from real consumption history.
+  - **Anchor-based learning** method for low-usage printers.
+  - Confidence levels `low` / `medium` / `high`.
+  - Yield sharing between cartridges of the same model or name.
+  - History of snapshots and learning samples.
+- **Local cartridge catalogue** (`cartridge_yield_catalog.json` — more than 30 models), used instead of a raw fallback of 2,000 pages.
+- Capacity source priority: `auto_learn` → `shared_profile` → `device_capacity` → `catalog` → `default`.
+- Shows **dot count / mega dots** on models that actually report this data.
+
+### 📜 Events and logs
+- Automatic recording of `PRINT` / `STATUS` / `ALERT` / `REFILL` / `SERVICE` events.
+- `CARTRIDGE_CHANGED` — **definitive detection of a cartridge change based on its unique identifier (Chip ID / chip serial)**:
+  - **Automatic OID discovery:** on the first successful poll of each printer, the `cartridge_discovery.py` module walks the standard Printer-MIB branch (`prtMarkerSuppliesDescription`, for colour mapping) and the vendor branches of all four brands (HP / Canon / Brother / Toshiba), and extracts serial-like values.
+  - **Stability gate:** a candidate is confirmed only when its value stays the same over 3 consecutive probes (dynamic values such as toner level are discarded).
+  - Confirmed OIDs are saved automatically in `config/cartridge_id_map.json` (the `learned` section); manual entries you make take priority and are not overwritten.
+  - A change of identifier ⇒ an immediate `CARTRIDGE_CHANGED` event with the previous/new identifier and the cartridge colour. Complementary signals: a reset of the "pages printed with this cartridge" counter and (as a fallback) a jump in toner level.
+  - The current identifier of each cartridge is shown on the dashboard (summary card and each consumable card) with a 🧩 label.
+- `SENSOR_CHANGE` for significant sensor changes (temperature ≥ 1 °C, humidity ≥ 5%).
+- Records `paper_size` (`Large (A3/B4)` / `Small (A4/A5)` / `Mixed`) and `paper_split` in the log details.
+- Records `poll_timestamp` on `PRINT` events.
+- **Protection against false logs:** ignoring the first poll, and detection of `COUNTER_RESET`, `COUNTER_DROP`, `PRINT_OVERFLOW` and `COUNTER_ANOMALY` (details in the section [Log and counter accuracy](#-log-and-counter-accuracy)).
+
+### 👥 Printer grouping
+- Create, rename and delete **custom groups** with an icon and colour (`groups.json`).
+- A group remains even with no printers in it; the `id` is stable and separate from the display name.
+- Default groups based on **office subnets**.
+
+### 📈 Reporting and export
+- Daily consumption chart (Chart.js).
+- Structured **Excel** export (sheets: Printer Status / Job Log / Reset History).
+- **CSV** and **JSON** export.
+- **Database import** with analysis, selection of sections, IP/date filtering, duplicate handling and automatic backup.
+
+### 👤 Users and security
+- Authentication with **username/password** (bcrypt hashing) and **Google OAuth**.
+- Three roles and permissions: `admin` / `manager` / `viewer`.
+- Access restriction by **permitted offices/subnets** and **permitted modules**.
+- **CSRF protection**, **rate limiting**, reCAPTCHA, and a **security audit log**.
+- A user management page and a dedicated security dashboard.
+
+### 🧩 User interface
+- **Dark / light** theme, responsive layout, and right-to-left (RTL) Persian support.
+- Drag & drop to reorder cards (Sortable.js).
+- Tooltips, toast notifications and an accordion for supplementary counters.
+
+---
+
+## 🧱 Overall project architecture
+
+| Layer | Technology / module | Description |
 |---|---|---|
-| **رابط کاربری (Frontend)** | HTML5 / CSS3 / Vanilla JS + Chart.js + Sortable.js (`web/templates`, `web/static`) | طراحی مدرن، واکنش‌گرا، سازگار با موبایل، دارای تم‌های روشن و تاریک |
-| **وب‌سرور و API** | Flask + Blueprints (`web/`) | پورت پیش‌فرض **۵۰۵۰** (`FLASK_PORT`) با روت‌های ماژولار |
-| **منطق هسته (Core Engine)** | Poller + Collectors + Yield Engine (`core/`) | ترد‌های پس‌زمینه، الگوریتم‌های انطباق شمارنده و یادگیری بازدهی تونر |
-| **پروتکل دستگاه** | SNMP v1/v2c پیاده‌سازی داخلی روی **UDP/161** (`core/snmp/`) + HTTP scraping | ارتباط مستقیم با تجهیزات شبکه و استخراج کاتالوگ OIDها |
-| **اکسپورت و مانیتورینگ** | Prometheus Exposition (`/metrics`) + `snmp_exporter` | لایه پیوندی پرسرعت همراه با کلاینت Backoff / Circuit Breaker |
-| **پایگاه‌داده (Dual Backend)** | **SQLite** (`logs.db`) یا **PostgreSQL 16+** (سازگار با 16، 17.5 و 18.1) از طریق `core/db/` | مهاجرت‌های ساختار رسمی با **Alembic** (`0001` تا `0005`)، قفل زمان روی UTC و تمامیت داده‌های کارتریج |
+| **User interface (Frontend)** | HTML5 / CSS3 / Vanilla JS + Chart.js + Sortable.js (`web/templates`, `web/static`) | Modern, responsive design, mobile-friendly, with light and dark themes |
+| **Web server and API** | Flask + Blueprints (`web/`) | Default port **5050** (`FLASK_PORT`) with modular routes |
+| **Core engine** | Poller + Collectors + Yield Engine (`core/`) | Background threads, counter reconciliation algorithms and toner-yield learning |
+| **Device protocol** | SNMP v1/v2c implemented in-house over **UDP/161** (`core/snmp/`) + HTTP scraping | Direct communication with network devices and extraction of the OID catalogue |
+| **Export and monitoring** | Prometheus exposition (`/metrics`) + `snmp_exporter` | High-speed hybrid layer with a backoff / circuit-breaker client |
+| **Database (Dual Backend)** | **SQLite** (`logs.db`) or **PostgreSQL 16** via `core/db/` | Formal schema migrations with **Alembic** (`0001` to `0005`) and time locked to UTC |
 
-🗺️ برای دیدن **فلوچارت کامل و تعاملی** ارتباط فایل‌ها و جریان داده (با خروجی XML برای draw.io)، فایل **[docs/architecture.html](docs/architecture.html)** را در مرورگر باز کنید.
+🗺️ To see the **full interactive flowchart** of how files and data flow relate (with XML export for draw.io), open **[docs/architecture.html](docs/architecture.html)** in your browser.
 
 ---
 
-## 🔄 جریان داده
+## 🔄 Data flow
 
-### چرخه‌ی Polling (هر ۶۰ ثانیه — `POLL_INTERVAL`)
+### Polling cycle (every 60 seconds — `POLL_INTERVAL`)
 
 ```text
 run.py ──▶ polling_loop (thread)
    │
    ├─▶ core/poller.py : poll_all()
-   │      │  لیست پرینترها از core/store.py (printers.json)
+   │      │  list of printers from core/store.py (printers.json)
    │      ▼
-   │   collect(ip) ──▶ مسیر اول: core/collectors/exporter_adapter.py (اگر USE_SNMP_EXPORTER=1)
+   │   collect(ip) ──▶ first path: core/collectors/exporter_adapter.py (if USE_SNMP_EXPORTER=1)
    │      │                 └─▶ core/exporter_client.py ──▶ Prometheus snmp_exporter
    │      │
-   │      ▼            مسیر اصلی/مستقیم: core/enhanced_collector.py
+   │      ▼            main/direct path: core/enhanced_collector.py
    │                   (Generic MIB-2 + Host Resources + Printer MIB + Vendor OIDs)
-   │                      اگر ناقص/ناموفق ─▶ fallback به collector برند:
+   │                      if incomplete/failed ─▶ fallback to the brand collector:
    │                          toshiba.py / hp.py / canon.py / brother.py
-   │                          (+ در صورت نیاز HTTP scraping تونر با _merge_scraped)
+   │                          (+ HTTP scraping of toner with _merge_scraped if needed)
    │      ▼
-   │   core/snmp/protocol.py ──▶ SNMP GET روی UDP/161
-   │      │                    (v2c اول، fallback به v1؛ cache نسخه هر IP)
+   │   core/snmp/protocol.py ──▶ SNMP GET over UDP/161
+   │      │                    (v2c first, fallback to v1; version cache per IP)
    │      ▼
-   │   core/collectors/base.py ──▶ پردازش:
-   │      │   • _counters_event: تشخیص چاپ واقعی vs ریست/ناهنجاری
-   │      │   • attribute_paper_size: تفکیک A3/A4 با چرخه تطبیق
-   │      │   • محاسبات تونر + Yield Engine (yield_engine.py + کاتالوگ)
+   │   core/collectors/base.py ──▶ processing:
+   │      │   • _counters_event: detection of real print vs reset/anomaly
+   │      │   • attribute_paper_size: A3/A4 breakdown with reconciliation cycle
+   │      │   • toner calculations + Yield Engine (yield_engine.py + catalogue)
    │      ▼
-   ├─▶ core/store.py  ──▷ حافظه زنده (printer_data) برای APIها
-   └─▶ core/db/       ──▷ ذخیره در پایگاه‌داده (SQLite یا PostgreSQL) با تبدیل UTC
+   ├─▶ core/store.py  ──▷ live memory (printer_data) for the APIs
+   └─▶ core/db/       ──▷ storage in the database (SQLite or PostgreSQL) with UTC conversion
             │
             ▼
-   مرورگر کاربر ──▶ dashboard.js هر چند ثانیه GET /api/printers
-            └──── Web routes از store/db می‌خوانند و JSON برمی‌گردانند
+   user's browser ──▶ dashboard.js GETs /api/printers every few seconds
+            └──── Web routes read from store/db and return JSON
 ```
 
-### Threadهای پس‌زمینه (`run.py`)
-| Thread | وظیفه و عملکرد |
+### Background threads (`run.py`)
+| Thread | Task and behaviour |
 |---|---|
-| `poll-init` / `poll-loop` | اولین poll فوری پس از بوت + اجرای حلقه‌ی منظم مانیتورینگ هر ۶۰ ثانیه |
-| `weekly-scan` | اسکن هفتگی OIDها در شبکه و به‌روزرسانی خودکار `oid_profiles.json` |
-| `cleanup-loop` | پاک‌سازی دوره‌ای لاگ‌های قدیمی و نگهداری دیتابیس (prune بر مبنای سیاست نگهداری) |
-| Flask (thread اصلی) | سرویس‌دهی وب‌سرور و پذیرش درخواست‌های HTTP روی `0.0.0.0:5050` |
+| `poll-init` / `poll-loop` | First immediate poll after boot, then the regular monitoring loop every 60 seconds |
+| `weekly-scan` | Weekly OID scan across the network and automatic update of `oid_profiles.json` |
+| `cleanup-loop` | Periodic cleanup of old logs and database maintenance (pruning according to the retention policy) |
+| Flask (main thread) | Serves the web application and accepts HTTP requests on `0.0.0.0:5050` |
 
-### مسیرهای جریان داده‌ی دیگر
-- **سنسور ECS100G** → `core/collectors/sensor.py` → جدول `sensor_readings` + رویداد `SENSOR_CHANGE`.
-- **اسکن OID** → `core/oid/scanner.py` → ساخت `oid_profiles.json` + `core/device_classifier.py`.
-- **اکشن‌های کاربر** (افزودن پرینتر، toner reset، مدیریت گروه‌ها و کاربران) → کنترلرهای `web/routes/` → اعمال در `store` و لایه `db`.
-- **گزارش‌گیری** → `web/routes/export_bp.py` → تولید فایل‌های Excel و CSV از جداول پایگاه‌داده.
-- **پرومتئوس** → `GET /metrics` با هدر `Authorization: Bearer <TOKEN>` → استخراج متریک‌های تجمعی از دیتابیس و حافظه زنده.
+### Other data-flow paths
+- **ECS100G sensor** → `core/collectors/sensor.py` → `sensor_readings` table + `SENSOR_CHANGE` event.
+- **OID scan** → `core/oid/scanner.py` → builds `oid_profiles.json` + `core/device_classifier.py`.
+- **User actions** (add printer, toner reset, manage groups and users) → controllers in `web/routes/` → applied in `store` and the `db` layer.
+- **Reporting** → `web/routes/export_bp.py` → generates Excel and CSV files from database tables.
+- **Prometheus** → `GET /metrics` with the header `Authorization: Bearer <TOKEN>` → extracts aggregated metrics from the database and live memory.
 
 ---
 
-## 📁 ساختار پروژه
+## 📁 Project structure
 
 ```text
 Multi-Printer/
-├── run.py                      # نقطه ورود پروژه: وب‌سرور Flask + ترد‌های polling/scan/cleanup
-├── models.py                   # مدل احراز هویت User (Flask-Login) با اعتبارسنجی bcrypt
-├── utils.py                    # توابع کمکی: ارسال ایمیل، توکن reset password، اعتبارسنجی reCAPTCHA
-├── create_admin.py             # ابزار CLI ساخت یا ارتقای کاربر ادمین اولیه
-├── requirements.txt            # فهرست کامل وابستگی‌های پایتون (نسخه‌های فریز شده)
-├── printers.example.json       # نمونه استاندارد فایل پیکربندی پرینترها
-├── cartridge_yield_catalog.json# کاتالوگ استاندارد مرجع ظرفیت کارتریج‌ها (۳۰+ مدل با ضرایب محلی)
-├── groups.json                 # ساختار اولیه‌ی گروه‌های سفارشی پرینترها
-├── start.bat / stop-project.bat# اسکریپت‌های اتوماسیون راه‌اندازی و توقف در ویندوز
-├── alembic.ini                 # فایل پیکربندی مایگریشن‌های Alembic (سازگار با محیط ویندوز)
+├── run.py                      # entry point: Flask web server + polling/scan/cleanup threads
+├── models.py                   # User authentication model (Flask-Login) with bcrypt validation
+├── utils.py                    # helper functions: sending email, password-reset token, reCAPTCHA validation
+├── create_admin.py             # CLI tool to create or promote the initial admin user
+├── requirements.txt            # full list of Python dependencies (pinned versions)
+├── printers.example.json       # standard sample of the printer configuration file
+├── cartridge_yield_catalog.json# standard reference catalogue of cartridge capacities (30+ models with local coefficients)
+├── groups.json                 # initial structure of custom printer groups
+├── start.bat / stop-project.bat# start-up and shut-down automation scripts on Windows
+├── alembic.ini                 # Alembic migration configuration file (compatible with Windows)
 │
-├── alembic/                    # مایگریشن‌های پایگاه‌داده
-│   ├── env.py                  # اسکریپت اجرای مایگریشن‌ها با استخراج داینامیک DSN
-│   └── versions/               # تغییرات ساختار جدول‌ها
-│       ├── 0001_initial_schema.py          # ساخت اسکیمای پایه دیتابیس (۱۱ جدول اصلی)
-│       ├── 0002_boolean_columns.py         # تبدیل ستون‌های پرچمی به BOOLEAN استاندارد
-│       ├── 0003_identity_columns.py        # تبدیل شناسه‌های کلیدی به GENERATED BY DEFAULT AS IDENTITY
-│       ├── 0004_jsonb_columns.py           # تبدیل ستون details جدول logs به نوع داده JSONB
-│       └── 0005_add_legacy_log_columns.py  # افزودن ۵ ستون legacy جهت سازگاری کامل
+├── alembic/                    # database migrations
+│   ├── env.py                  # migration runner script with dynamic DSN extraction
+│   └── versions/               # table structure changes
+│       ├── 0001_initial_schema.py          # creates the base database schema (11 main tables)
+│       ├── 0002_boolean_columns.py         # converts flag columns to standard BOOLEAN
+│       ├── 0003_identity_columns.py        # converts key identifiers to GENERATED BY DEFAULT AS IDENTITY
+│       ├── 0004_jsonb_columns.py           # converts the details column of the logs table to JSONB
+│       └── 0005_add_legacy_log_columns.py  # adds 5 legacy columns for full compatibility
 │
-├── config/                     # تنظیمات سامانه
+├── config/                     # system configuration
 │   ├── __init__.py
-│   ├── settings.py             # متغیرهای محیطی، مسیر فایل‌ها، ساب‌نت‌ها، کلیدهای رمزنگاری و پورت‌ها
-│   └── cartridge_id_map.json   # نگاشت دستی و خودکار OIDهای شماره سریال کارتریج‌ها
+│   ├── settings.py             # environment variables, file paths, subnets, encryption keys and ...
+│   └── cartridge_id_map.json   # manual and automatic mapping of cartridge serial-number OIDs
 │
-├── core/                       # منطق پردازشی هسته
-│   ├── database.py             # پل ارتباطی رویدادها، شمارنده‌ها، کاربران و ثبت لاگ‌ها
-│   ├── poller.py               # مدیریت ترد نظرسنجی، انتخاب کلکتور، مکانیزم تاب‌آوری قطعی
-│   ├── store.py                # حافظه موقت بلادرنگ (printer_data) و نگهداری آخرین وضعیت
-│   ├── enhanced_collector.py   # کلکتور ترکیبی استاندارد برای تمام برندها
-│   ├── yield_engine.py         # موتور هوشمند محاسبه و یادگیری بازدهی کارتریج
-│   ├── groups.py               # مدیریت گروه‌های سفارشی پرینترها
-│   ├── device_classifier.py    # تشخیص برند و مدل دستگاه بر مبنای OIDهای اسکن‌شده
-│   ├── security_audit.py       # مدیریت و ثبت وقایع امنیتی سامانه
-│   ├── time_utils.py           # توابع یکنواخت تبدیل زمان محلی/UTC و انطباق فرمت‌ها
-│   ├── exporter_client.py      # کلاینت snmp_exporter با Exponential Backoff و Circuit Breaker
+├── core/                       # core processing logic
+│   ├── database.py             # bridge for events, counters, users and log recording
+│   ├── poller.py               # polling thread management, collector selection, fault-tolerance mechanism
+│   ├── store.py                # real-time in-memory cache (printer_data) and last-state storage
+│   ├── enhanced_collector.py   # standard combined collector for all brands
+│   ├── yield_engine.py         # intelligent cartridge-yield calculation and learning engine
+│   ├── groups.py               # management of custom printer groups
+│   ├── device_classifier.py    # detects device brand and model from scanned OIDs
+│   ├── security_audit.py       # management and recording of system security events
+│   ├── time_utils.py           # uniform functions for local/UTC time conversion and format consistency
+│   ├── exporter_client.py      # snmp_exporter client with exponential backoff and circuit breaker
 │   │
-│   ├── db/                     # لایه انتزاعی پایگاه‌داده (Dual Backend)
-│   │   ├── __init__.py         # نقطه ورودی و توابع اتصال عمومی
-│   │   ├── connection.py       # مدیریت کانکشن‌پول PostgreSQL و اتصال امن SQLite
-│   │   ├── exceptions.py       # استثناهای یکپارچه پایگاه‌داده
-│   │   ├── placeholders.py     # تبدیل‌کننده نشانگرهای پارامتر (?, %s) میان SQLite و PG
-│   │   ├── schema.py           # تعریف ساختار جداول و اسامی ستون‌ها
-│   │   ├── scripts.py          # اجرای اسکریپت‌های DDL پایگاه‌داده
-│   │   └── upsert.py           # تولید دستورات UPSERT سازگار با هر دو موتور
+│   ├── db/                     # database abstraction layer (Dual Backend)
+│   │   ├── __init__.py         # entry point and general connection functions
+│   │   ├── connection.py       # PostgreSQL connection-pool management and safe SQLite connection
+│   │   ├── exceptions.py       # unified database exceptions
+│   │   ├── placeholders.py     # converts parameter placeholders (?, %s) between SQLite and PG
+│   │   ├── schema.py           # table structure and column name definitions
+│   │   ├── scripts.py          # runs database DDL scripts
+│   │   └── upsert.py           # generates UPSERT statements compatible with both engines
 │   │
-│   ├── collectors/             # کلکتورهای اختصاصی برندها
-│   │   ├── base.py             # محاسبات پایه، اعتبارسنجی شمارنده‌ها و تفکیک A3/A4
-│   │   ├── base_enhanced.py    # اتصال‌دهنده کلکتورهای پایه به موتور ترکیبی
-│   │   ├── toshiba.py          # کلکتور اختصاصی Toshiba e-STUDIO (A3/A4 و TopAccess)
-│   │   ├── hp.py               # کلکتور اختصاصی HP LaserJet (درصدهای NPCL و کدهای خطا)
-│   │   ├── canon.py            # کلکتور اختصاصی Canon MF/LBP (کدهای گسسته و Remote UI)
-│   │   ├── brother.py          # کلکتور اختصاصی Brother MFC/NC (تونر و درام)
-│   │   ├── sensor.py           # کلکتور سنسور محیطی ECS100G (دما و رطوبت)
-│   │   ├── cartridge_id.py     # استخراج سریال تراشه کارتریج
-│   │   ├── cartridge_discovery.py # کشف خودکار OIDهای شماره سریال کارتریج
-│   │   └── exporter_adapter.py # آداپتور مصرف خروجی پرومتئوس با fallback به اسکرپ وب
+│   ├── collectors/             # vendor-specific collectors
+│   │   ├── base.py             # base calculations, counter validation and A3/A4 breakdown
+│   │   ├── base_enhanced.py    # connects the base collectors to the combined engine
+│   │   ├── toshiba.py          # dedicated collector for Toshiba e-STUDIO (A3/A4 and TopAccess)
+│   │   ├── hp.py               # dedicated collector for HP LaserJet (NPCL percentages and error codes)
+│   │   ├── canon.py            # dedicated collector for Canon MF/LBP (discrete codes and Remote UI)
+│   │   ├── brother.py          # dedicated collector for Brother MFC/NC (toner and drum)
+│   │   ├── sensor.py           # collector for the ECS100G environmental sensor (temperature and humidity)
+│   │   ├── cartridge_id.py     # extracts the cartridge chip serial
+│   │   ├── cartridge_discovery.py # automatic discovery of cartridge serial-number OIDs
+│   │   └── exporter_adapter.py # Prometheus output consumer adapter with fallback to web scraping
 │   │
-│   ├── snmp/                   # لایه ارتباطی پروتکل SNMP
-│   │   ├── protocol.py         # پیاده‌سازی سبک SNMP v1/v2c روی سوکت UDP/161 با کش نسخه
-│   │   └── oid_map.py          # نگاشت شناسه OIDها برای شمارنده‌ها و تجهیزات
+│   ├── snmp/                   # SNMP protocol communication layer
+│   │   ├── protocol.py         # lightweight SNMP v1/v2c implementation over a UDP/161 socket, with version cache
+│   │   └── oid_map.py          # OID identifier mapping for counters and devices
 │   │
-│   └── oid/                    # کاتالوگ و اسکنر OIDها
-│       ├── scanner.py          # اسکن OIDهای دستگاه و ایجاد پروفایل اولیه
-│       ├── catalog.py          # پایگاه‌داده OIDهای استاندارد و اختصاصی
-│       └── validator.py        # اعتبارسنجی مقادیر OID و ثبت خطاها
+│   └── oid/                    # OID catalogue and scanner
+│       ├── scanner.py          # scans device OIDs and creates the initial profile
+│       ├── catalog.py          # database of standard and vendor-specific OIDs
+│       └── validator.py        # validates OID values and records errors
 │
-├── web/                        # لایه وب و نمایش
-│   ├── __init__.py             # ساخت اپلیکیشن Flask، ثبت Blueprintها و میان‌افزارها
-│   ├── auth.py                 # کنترل دسترسی، نشست‌های کاربری، ورود با گوگل و دکوریتورها
-│   ├── security.py             # لایه‌های محافظتی CSRF، Rate Limiter و هدرهای امنیتی
-│   ├── routes/                 # کنترلرهای ماژولار سامانه
-│   │   ├── dashboard.py        # صفحه اصلی مانیتورینگ
-│   │   ├── printers.py         # مدیریت پرینترها، ریست دستی تونر و دیباگ
-│   │   ├── logs.py             # نمایش و فیلتر وقایع سیستم و ثبت رویداد دستی
-│   │   ├── metrics.py          # اکسپوزیشن متریک‌های پرومتئوس با توکن امنیتی
-│   │   ├── export_bp.py        # صدور گزارش‌های ساخت‌یافته‌ی Excel و CSV
-│   │   ├── discover.py         # کشف خودکار تجهیزات جدید در ساب‌نت شبکه
-│   │   ├── scan.py             # مدیریت اسکن شبکه و پروفایل OIDها
-│   │   ├── stats.py            # نمودارها و شاخص‌های آماری چاپ
-│   │   ├── system.py           # وضعیت سلامت سرور و اجرای مانیتورینگ دستی
-│   │   ├── security.py         # پنل امنیت و گزارش وقایع مشکوک
-│   │   ├── users.py            # مدیریت کاربران، نقش‌ها و دفاتر مجاز
-│   │   ├── groups.py           # مدیریت گروه‌های سفارشی
-│   │   ├── import_db.py        # تحلیل و وارد کردن پشتیبان دیتابیس
-│   │   ├── validation.py       # اعتبارسنجی شمارنده‌ها و پروفایل دستگاه‌ها
-│   │   └── yield_status.py     # پنل گزارش‌های Yield Engine
+├── web/                        # web and display layer
+│   ├── __init__.py             # builds the Flask application, registers Blueprints and middleware
+│   ├── auth.py                 # access control, user sessions, Google sign-in and decorators
+│   ├── security.py             # protective layers: CSRF, rate limiter and security headers
+│   ├── routes/                 # modular system controllers
+│   │   ├── dashboard.py        # main monitoring page
+│   │   ├── printers.py         # printer management, manual toner reset and debugging
+│   │   ├── logs.py             # display and filtering of system events, and manual event recording
+│   │   ├── metrics.py          # Prometheus metric exposition with a security token
+│   │   ├── export_bp.py        # generates structured Excel and CSV reports
+│   │   ├── discover.py         # automatic discovery of new devices on the network subnet
+│   │   ├── scan.py             # network scan management and OID profiles
+│   │   ├── stats.py            # charts and print statistics indicators
+│   │   ├── system.py           # server health status and manual monitoring run
+│   │   ├── security.py         # security panel and suspicious-event report
+│   │   ├── users.py            # user management, roles and permitted offices
+│   │   ├── groups.py           # custom group management
+│   │   ├── import_db.py        # analyses and imports a database backup
+│   │   ├── validation.py       # counter validation and device profile validation
+│   │   └── yield_status.py     # Yield Engine reports panel
 │   │
-│   ├── templates/              # قالب‌های رابط کاربری Jinja2
-│   └── static/                 # دارایی‌های ایستا (CSS و فایل‌های JS)
+│   ├── templates/              # Jinja2 UI templates
+│   └── static/                 # static assets (CSS and JS files)
 │
-├── monitoring/                 # پیکربندی‌های پایش پرومتئوس
-│   ├── snmp.yml                # قوانین کامپایل‌شده استخراج OIDها برای snmp_exporter
-│   ├── generator.yml          # تعاریف ماژول‌های برندها برای ساخت snmp.yml
-│   └── snmp-manifest.json      # مانیفست OIDهای معتبر پرینت‌گارد
+├── monitoring/                 # Prometheus monitoring configurations
+│   ├── snmp.yml                # compiled OID extraction rules for snmp_exporter
+│   ├── generator.yml          # brand module definitions for building snmp.yml
+│   └── snmp-manifest.json      # manifest of valid Printguard OIDs
 │
-├── tools/                      # جعبه‌ابزار خط فرمان (CLI)
-│   ├── auto_migrate.py         # مایگریشن خودکار و هوشمند با سنجش ایمنی داده
-│   ├── migrate_sqlite_to_pg.py # ابزار مهاجرت کامل داده از SQLite به PostgreSQL با بازنشانی توالی‌ها
-│   ├── migrate_timestamps_to_utc.py # تبدیل و استانداردسازی زمان‌ها به UTC-Z طبق قرارداد پروژه
-│   ├── check_cutover_readiness.py   # بررسی جامع چک‌لیست آمادگی جهت Cutover به دیتابیس
-│   ├── diagnose_data_quality.py# ابزار اعتبارسنجی کیفیت داده و کشف ناهنجاری‌ها
-│   ├── export_from_pg.py       # برون‌بری معکوس داده‌ها از PostgreSQL به SQLite (Rollback)
-│   ├── build_snmp_yml.py       # ابزار تولید پیکربندی پرومتئوس از OIDهای پروژه
-│   ├── compare_snmp_sources.py # مقایسه خروجی‌های SNMP مستقیم با snmp_exporter
-│   ├── check_oid_coverage.py   # سنجش میزان پوشش OIDها
-│   ├── diagnose_printer.py     # ابزار عیب‌یابی عمیق پرینتر جدید و استخراج OIDها
-│   ├── init_pg_database.py     # راه‌اندازی اولیه کاربر و دیتابیس PostgreSQL
-│   ├── test_pg_connection.py   # اعتبارسنجی دسترسی‌ها و اتصال به پایگاه‌داده PostgreSQL
-│   └── verify_server_timezone.py# اعتبارسنجی انطباق منطقه زمانی سرور با قرارداد سامانه
+├── tools/                      # command-line toolbox (CLI)
+│   ├── auto_migrate.py         # automatic, intelligent migration with data-safety checks
+│   ├── migrate_sqlite_to_pg.py # complete data migration tool from SQLite to PostgreSQL
+│   ├── diagnose_data_quality.py# data-quality validation tool and anomaly detection
+│   ├── build_snmp_yml.py       # generates the Prometheus configuration from the project's OIDs
+│   ├── compare_snmp_sources.py # compares direct SNMP output with snmp_exporter
+│   ├── check_oid_coverage.py   # measures OID coverage
+│   ├── diagnose_printer.py     # deep troubleshooting tool for a printer and OID extraction
+│   ├── init_pg_database.py     # initial setup of the PostgreSQL user and database
+│   └── verify_server_timezone.py# checks that the server time zone matches the system contract
 │
-├── tests/                      # آزمون‌های خودکار و تضمین کیفیت
-│   ├── conftest.py             # پیکربندی ریشه Pytest با جداسازی اسکیمای تست
-│   ├── golden_harness.py       # شبیه‌ساز اجرای سناریوهای طلایی با پاسخ‌های از‌پیش‌ثبت‌شده
-│   ├── test_golden.py          # آزمون اعتبارسنجی Diff-Zero برای سناریوهای طلایی
-│   └── fixtures/               # داده‌های مرجع آزمون‌ها
-│       ├── golden/             # داده‌های ضبط‌شده واقعی ناوگان پرینترها
-│       └── migration_sample/   # نمونه‌های تست اسکیمای مهاجرت
+├── tests/                      # automated tests and quality assurance
+│   ├── conftest.py             # Pytest root configuration with test-schema isolation
+│   ├── golden_harness.py       # simulator for running golden scenarios with pre-recorded responses
+│   ├── test_golden.py          # Diff-Zero validation test for golden scenarios
+│   └── fixtures/               # reference test data
+│       ├── golden/             # real recorded data from the printer fleet
+│       └── migration_sample/   # migration schema test samples
 │
-└── docs/                       # مستندات معماری، قراردادها و راهنماها
-    ├── architecture.html       # نمودار بصری و تعاملی گردش داده‌ها
-    ├── cutover-runbook.md      # دستورالعمل عملیاتی مرحله‌به‌مرحله Cutover
-    ├── timezone-contract.md    # قرارداد سخت‌گیرانه زمان UTC در دیتابیس
-    └── tech-debt.md            # ثبت بدهی‌های فنی و تصمیمات مهندسی
+└── docs/                       # architecture documentation, contracts and guides
+    ├── architecture.html       # interactive visual diagram of data flow
+    ├── cutover-runbook.md      # step-by-step operational runbook for the cutover
+    ├── timezone-contract.md    # strict UTC time contract for the database
+    └── tech-debt.md            # record of technical debt and engineering decisions
 ```
 
-### فایل‌های اجرایی خودکارسازی ویندوز (Root Scripts)
-- **`setup.bat`:** اسکریپت خودترمیم‌شونده‌ی ۷ مرحله‌ای جهت آماده‌سازی محیط، پایتون، venv، ابزارهای PG و دایرکتوری‌ها.
-- **`migrate.bat`:** اسکریپت مهاجرت امن داده به PostgreSQL همراه با بکاپ خودکار در `E:\pgbackup` و تبدیل زمانی UTC-Z.
-- **`start.bat`:** راه‌انداز روزمره و مقاوم سامانه با رفع تداخل پورت، کشف داینامیک سرویس و باز کردن داشبورد.
-
-### فایل‌های Runtime (در گیت ذخیره نمی‌شوند)
-`logs.db` (در حالت SQLite) ،`printers.json` ،`groups.json` ،`oid_profiles.json` ،`oid_validation_errors.txt` ،`toner_report.txt` ،`yield_status_report.txt` ،`.env`.
+### Runtime files (not stored in Git)
+`logs.db` (in SQLite mode), `printers.json`, `groups.json`, `oid_profiles.json`, `oid_validation_errors.txt`, `toner_report.txt`, `yield_status_report.txt`, `.env`.
 
 ---
 
-## 🔧 پیش‌نیازها
+## 🔧 Prerequisites
 
-- **Python 3.8+** (نسخه پیشنهادی و تست‌شده: **3.10+**)
-- دسترسی شبکه محلی به نشانی IP پرینترها و باز بودن پورت **161/UDP** (SNMP v1 یا v2c).
-- دسترسی وب‌پنل به پرینترها روی پورت‌های **80/TCP** یا **443/TCP** (جهت وب‌اسکرپینگ در برندهای سازگار).
-- پایگاه‌داده: فایل محلی **SQLite** (پیش‌فرض) یا **PostgreSQL 16+** (محیط عملیاتی سازمانی؛ تست‌شده روی 16.x، 17.5 و 18.1).
-- کتابخانه‌های لازم از طریق `requirements.txt` نصب می‌شوند (شامل `Flask`, `openpyxl`, `psycopg[binary]`, `alembic`, `bcrypt`, `authlib` و `tzdata`).
+- **Python 3.8+** (recommended and tested version: **3.10+**)
+- Local network access to the printers' IP addresses, and port **161/UDP** open (SNMP v1 or v2c).
+- Access to the printers' web panels on port **80/TCP** or **443/TCP** (for web scraping on compatible brands).
+- Database: a local **SQLite** file (default) or **PostgreSQL 16** (for production traffic).
+- Required libraries are installed from `requirements.txt` (including `Flask`, `openpyxl`, `psycopg[binary]`, `alembic`, `bcrypt`, `authlib` and `tzdata`).
 
 ---
 
-## 🚀 نصب و اجرا
+## 🚀 Installation and run
 
-### ۱. دریافت مخزن و نصب وابستگی‌ها
+### 1. Clone the repository and install dependencies
 ```bash
 git clone https://github.com/mhgazmeh2000/multi-printer.git
 cd multi-printer
 
-# ساخت و فعال‌سازی محیط مجازی
+# create and activate the virtual environment
 python3 -m venv .venv
-# در لینوکس / مک:
+# on Linux / macOS:
 source .venv/bin/activate
-# در ویندوز:
+# on Windows:
 .venv\Scripts\activate
 
-# نصب پکیج‌ها
+# install packages
 pip install -r requirements.txt
 ```
 
-### ۲. تنظیم فایل پرینترها
-فایل نمونه را کپی کرده و پرینترهای شبکه خود را تعریف کنید:
+### 2. Configure the printers file
+Copy the sample file and define the printers on your network:
 ```bash
-# در لینوکس:
+# on Linux:
 cp printers.example.json printers.json
-# در ویندوز:
+# on Windows:
 copy printers.example.json printers.json
 ```
 
-### ۳. اجرا در محیط خط فرمان
+### 3. Run from the command line
 ```bash
 python run.py
 ```
-سامانه به‌صورت پیش‌فرض روی نشانی **`http://localhost:5050`** در دسترس خواهد بود.
+By default, the system is available at **`http://localhost:5050`**.
 
-اگر هیچ کاربری در سیستم ثبت نشده باشد، **اولین ثبت‌نام** از طریق وب به صورت خودکار نقش `admin` با وضعیت `verified` می‌گیرد؛ یا می‌توانید مستقیماً از CLI کاربر ادمین بسازید:
+If no user has been registered in the system, the **first sign-up** through the web automatically gets the `admin` role with `verified` status; alternatively, you can create the admin user directly from the CLI:
 ```bash
 python create_admin.py
 ```
 
-### 🪟 بسته خودکارسازی ویندوز (Windows Automation Suite)
-
-جهت ساده‌سازی عملیات استقرار، مهاجرت و اجرای روزمره بدون خطای انسانی در سرور ویندوز، سه اسکریپت خودکار دسته‌ای (Batch) تعبیه شده است:
-
-#### ۱. راه‌اندازی و پیش‌نیازهای خودترمیم‌شونده (`setup.bat` — ۷ گام)
-اسکریپت `setup.bat` به‌صورت خودکار و در ۷ گام متوالی زیرساخت سرور را بازبینی و آماده‌سازی می‌کند:
-1. **بررسی دسترسی Administrator:** سنجش مجوزهای مدیریتی کامل جهت اجرای تغییرات سیستمی.
-2. **کشف مفسر پایتون:** تشخیص نسخه پایتون (توصیه‌شده ۳.۱۰+) و شناسایی مسیر اجرایی آن.
-3. **خودترمیمی محیط مجازی (`.venv`):** ساخت خودکار یا تعمیر محیط مجازی آسیب‌دیده در صورت جابه‌جایی دایرکتوری‌ها.
-4. **نصب و به‌روزرسانی وابستگی‌ها:** نصب بی‌صدای بسته‌های `requirements.txt` و ارتقای ابزار Pip.
-5. **کشف کلاینت و سرویس PostgreSQL:** اعتبارسنجی ابزارهای `psql`, `pg_dump`, `pg_restore` و تشخیص سرویس فعال ویندوز.
-6. **آماده‌سازی اسکیمای پایگاه‌داده:** بررسی و اعمال مهاجرت‌های ساختار رسمی Alembic (`alembic upgrade head`).
-7. **آماده‌سازی دایرکتوری‌ها و فایل‌های پیکربندی:** ایجاد دایرکتوری نسخه پشتیبان `E:\pgbackup`، پوشه‌های لاگ و فایل‌های اولیه پیکربندی.
-
-#### ۲. مهاجرت قطعی و بدون ریسک به PostgreSQL (`migrate.bat`)
-اسکریپت `migrate.bat` کلیه مراحل گذار داده از SQLite به PostgreSQL را با نهایت ضریب اطمینان به اجرا درمی‌آورد:
-- **اعتبارسنجی پیش‌پرواز (Preflight Check):** فراخوانی `tools/check_cutover_readiness.py` برای تایید کامل اتصال و الزامات سیستمی.
-- **پشتیبان‌گیری خودکار مبدأ و مقصد در `E:\pgbackup`:** پیش از هر تغییری، یک نسخه Snapshot از SQLite و یک فایل دامپ سفارشی (`pg_dump -Fc`) از پایگاه‌داده PostgreSQL تهیه و چک‌سام SHA256 آن محاسبه می‌شود.
-- **استانداردسازی زمان‌ها به UTC-Z:** اجرای `tools/migrate_timestamps_to_utc.py` جهت تبدیل یکپارچه تمام زمان‌های تاریخی به فرمت دقیق UTC با پسوند `Z` مطابق قرارداد زمانی پروژه.
-- **اعمال ساختار اسکیما:** اعمال مهاجرت‌های رسمی ساختار Alembic تا آخرین نسخه (`0005`).
-- **انتقال داده‌ها و اعتبارسنجی نهایی:** اجرای `tools/migrate_sqlite_to_pg.py --verify` همراه با اعتبارسنجی نوع داده‌ها، مدیریت ستون‌های محاسباتی (GENERATED)، بازنشانی توالی‌های کلید اصلی (Sequence Sync) و ارزیابی مطابقت کامل سطرها.
-
-#### ۳. راه‌انداز روزمره و مقاوم سامانه (`start.bat`)
-اسکریپت `start.bat` برای راه‌اندازی پایدار سامانه مجهز به مکانیزم‌های خودکار زیر است:
-- **پایداری در مسیرهای پیچیده (UNC / Parentheses):** استفاده از دستور `pushd` برای نگاشت مسیرهای دارای پرانتز به درایو موقت جهت جلوگیری از خطاهای متداول ویندوز.
-- **کشف چندسطحی پایتون:** بررسی به ترتیب اولویت: `.venv\Scripts\python.exe` سپس `py launcher` سپس `PATH` سیستم و در نهایت مسیرهای استاندارد AppData نسخه‌های ۳.۱۰ تا ۳.۱۴.
-- **پاک‌سازی خودکار کش:** حذف فایل‌های کامپایل‌شده `__pycache__` و `*.pyc` جهت جلوگیری از تداخل کدها.
-- **انتخاب تعاملی پورت و رفع تداخل:** دریافت پورت دلخواه کاربر (پیش‌فرض: `5050`؛ در محیط عملیاتی قابل تنظیم روی `5053`)، اسکن پروسه‌های اشغال‌کننده پورت با `netstat -aon` و بستن اجباری PID متداخل با `taskkill /F /PID`.
-- **کشف پویای سرویس PostgreSQL:** پایش سرویس‌های در حال اجرای ویندوز بدون وابستگی به شماره نسخه (`postgresql-x64-16`, `postgresql-x64-17`, `postgresql-x64-18`)؛ در صورت متوقف بودن سرویس، راهنمای روشن `net start` ارائه می‌شود.
-- **گارد محافظت از بازنویسی داده (`auto_migrate.py`):** در صورت وجود کاربر یا داده در دیتابیس مقصد، دستورات مخرب لغو می‌شوند.
-- **باز کردن خودکار مرورگر:** نمایش صفحه داشبورد در مرورگر پس از راه‌اندازی موفق پروسه پایش.
+### 🪟 Quick start on a Windows server (`start.bat`)
+On Windows servers, the bundled `start.bat` file carries out all the steps of checking prerequisites, starting up and health-checking automatically:
+* **PostgreSQL test mode:** if a `.env` file with test database settings (`DB_BACKEND=postgresql`) is present, the script automatically finds the PostgreSQL service, applies the Alembic migrations, and transfers the data through `tools/auto_migrate.py` with full safety checks.
+* **Production mode:** in the production environment there is no test `.env` file, and `start.bat` starts safely with the default database.
+* **Safety check before TRUNCATE:** the `auto_migrate.py` tool has a safety guard; if a user exists in the database or the printer data is not empty, the migration is stopped to prevent accidental overwriting.
 
 ---
 
-## 🐘 مدیریت سرویس ویندوز و پشتیبان‌گیری PostgreSQL
+## ⚙️ Important environment settings
 
-### ۱. ثبت و مدیریت سرویس ویندوز PostgreSQL
-در سرورهای عملیاتی، PostgreSQL می‌تواند به صورت یک سرویس رسمی ویندوز با قابلیت راه‌اندازی خودکار ثبت و مدیریت شود:
+System settings are controlled through the `.env` file or system environment variables:
 
-```cmd
-:: ثبت سرویس PostgreSQL با pg_ctl (دسترسی Administrator)
-"C:\Program Files\PostgreSQL\17\bin\pg_ctl.exe" register -N "postgresql-x64-17" -D "C:\Program Files\PostgreSQL\17\data" -w
-
-:: تنظیم شروع خودکار در زمان بوت ویندوز
-sc.exe config "postgresql-x64-17" start= auto
-
-:: تنظیم بازیابی خودکار پس از خطای سرویس (Auto-Recovery)
-sc.exe failure "postgresql-x64-17" reset= 86400 actions= restart/60000/restart/60000/restart/60000
-
-:: کنترل و استعلام وضعیت سرویس
-net start postgresql-x64-17
-sc query postgresql-x64-17
-net stop postgresql-x64-17
-```
-
-### ۲. پشتیبان‌گیری سازمانی و بازیابی (Backup & Restore در `E:\pgbackup`)
-عملیات پشتیبان‌گیری منظم بر مبنای ابزار قدرتمند `pg_dump` در قالب فشرده سفارشی (Custom Format) به مقصد درایو اختصاصی پشتیبان (`E:\pgbackup`) انجام می‌شود:
-
-#### الف) ایجاد نسخه پشتیبان سازمانی (`pg_dump -Fc`):
-```powershell
-# PowerShell با سطح دسترسی سرور
-$timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-$backupFile = "E:\pgbackup\printguard_$timestamp.dump"
-$env:PGPASSWORD = "your_secure_db_password"
-
-pg_dump -Fc -h localhost -p 5432 -U printguard -f $backupFile printguard
-Write-Host "Backup created at: $backupFile"
-```
-
-#### ب) راستی‌آزمایی صحت فایل پشتیبان (`pg_restore -l`):
-```powershell
-# استعلام فهرست محتوا (TOC) جهت اطمینان از سلامت کامل فایل پشتیبان
-pg_restore -l $backupFile | Measure-Object -Line
-# باید بیش از ۷۴۰ ردیف جدول، ایندکس و توالی بدون خطا گزارش شود
-```
-
-#### ج) بازیابی در شرایط بحران (Disaster Recovery):
-```powershell
-$env:PGPASSWORD = "your_secure_db_password"
-# بازیابی کامل ساختار و داده‌ها با جایگزینی جداول موجود
-pg_restore --clean --if-exists -h localhost -p 5432 -U printguard -d printguard "E:\pgbackup\printguard_live_cutover.dump"
-```
-
----
-
-## ⚙️ تنظیمات مهم محیطی
-
-تنظیمات سامانه از طریق فایل `.env` یا متغیرهای سیستمی کنترل می‌شوند:
-
-### امنیت و پایگاه‌داده
+### Security and database
 ```bash
 export ENVIRONMENT=production                         # development | production
-export SECRET_KEY=your-strong-random-secret-key-here   # کلید ۳۲ بایتی تصادفی
-export FLASK_PORT=5050                                 # پورت وب‌سرور
+export SECRET_KEY=your-strong-random-secret-key-here   # 32-byte random key
+export FLASK_PORT=5050                                 # web server port
 
-# تنظیمات پایگاه‌داده (پیش‌فرض: sqlite)
+# database settings (default: sqlite)
 export DB_BACKEND=sqlite                              # sqlite | postgresql
 export PG_DSN="postgresql://user:pass@127.0.0.1:5432/printguard"
 ```
 
-### مانیتورینگ پرومتئوس و Exporter
+### Prometheus monitoring and Exporter
 ```bash
-export METRICS_TOKEN="your-secure-prometheus-bearer-token" # توکن مسیر /metrics
-export USE_SNMP_EXPORTER=0                                # فعال‌سازی خط‌لوله‌ی snmp_exporter (1 یا 0)
-export SNMP_EXPORTER_URL="http://127.0.0.1:9116"          # آدرس سرویس snmp_exporter
+export METRICS_TOKEN="your-secure-prometheus-bearer-token" # token for the /metrics path
+export USE_SNMP_EXPORTER=0                                # enable the snmp_exporter pipeline (1 or 0)
+export SNMP_EXPORTER_URL="http://127.0.0.1:9116"          # address of the snmp_exporter service
 ```
 
-### پرینترهای پیش‌فرض (اختیاری)
+### Default printers (optional)
 ```bash
 export DEFAULT_PRINTERS_JSON='[
   {"ip":"192.168.1.10","name":"Printer-HQ","community":"public"}
 ]'
 ```
 
-### ساب‌نت دفاتر و گروه‌بندی خودکار
+### Office subnets and automatic grouping
 ```bash
 export OFFICE_SUBNET_IMAMAT=172.16.25
 export OFFICE_SUBNET_SOROUSH=172.16.24
@@ -495,211 +404,190 @@ export OFFICE_SUBNET_FALESTIN=172.16.0
 export OFFICE_SUBNET_ELAHIYE=172.16.32
 ```
 
-### تنظیمات بازدهی کارتریج (Yield Engine)
+### Cartridge yield settings (Yield Engine)
 ```bash
 export CARTRIDGE_YIELD_CATALOG="cartridge_yield_catalog.json"
 export CARTRIDGE_YIELD_MODE=local                      # local | oem | compatible | refill
-export CARTRIDGE_YIELD_FACTOR=0.90                     # ضریب محافظه‌کارانه برای بازار ایران
+export CARTRIDGE_YIELD_FACTOR=0.90                     # conservative factor for the Iranian market
 ```
 
-### ایمیل، OAuth و CORS
+### Email, OAuth and CORS
 ```bash
 export CORS_ALLOWED_ORIGINS="https://monitor.example.com"
-export ASSET_VERSION=20261013-1                        # کنترل کش فایل‌های استاتیک
-# تنظیمات SMTP، Google OAuth و reCAPTCHA در پنل تنظیمات ادمین یا config/settings.py
+export ASSET_VERSION=20261013-1                        # static-file cache control
+# SMTP, Google OAuth and reCAPTCHA settings are in the admin settings panel or config/settings.py
 ```
 
 ---
 
-## 🔌 APIهای مهم
+## 🔌 Important APIs
 
-### وضعیت سیستم و مانیتورینگ
-- `GET /api/status` — وضعیت سلامت سیستم، تعداد پرینترها، وضعیت تردها و دیتابیس فعال
-- `GET /metrics` — اکسپوزیشن متریک‌های استاندارد پرومتئوس (نیازمند هدر `Authorization: Bearer <METRICS_TOKEN>`)
-- `POST /api/poll/now` — فراخوانی فوری یک چرخه‌ی نظرسنجی برای کلیه پرینترها
+### System status and monitoring
+- `GET /api/status` — system health, number of printers, status of threads and the active database
+- `GET /metrics` — standard Prometheus metric exposition (requires the header `Authorization: Bearer <METRICS_TOKEN>`)
+- `POST /api/poll/now` — immediately trigger one polling cycle for all printers
 
-### پرینترها
-- `GET /api/printers` — لیست جامع تمام پرینترها با آخرین وضعیت برخط، شمارنده‌ها و تونر
-- `GET /api/printer/<ip>` — اطلاعات جزئی و تاریخچه یک پرینتر خاص
-- `POST /api/printers/add` · `POST /api/printers/bulk-add` · `POST /api/printers/remove` — مدیریت پرینترها
-- `POST /api/printer/<ip>/update` — ویرایش مشخصات پرینتر (نام، گروه، IP و ...)
-- `POST /api/printer/<ip>/toner_reset` — ثبت رویداد ریست دستی کارتریج پس از تعویض یا شارژ
-- `POST /api/printers/discover` · `POST /api/discover/auto-add` — جستجو و افزودن خودکار پرینترهای شبکه
+### Printers
+- `GET /api/printers` — full list of all printers with latest online status, counters and toner
+- `GET /api/printer/<ip>` — detailed information and history for one specific printer
+- `POST /api/printers/add` · `POST /api/printers/bulk-add` · `POST /api/printers/remove` — manage printers
+- `POST /api/printer/<ip>/update` — edit printer details (name, group, IP, etc.)
+- `POST /api/printer/<ip>/toner_reset` — record a manual cartridge reset event after a replacement or refill
+- `POST /api/printers/discover` · `POST /api/discover/auto-add` — search for and automatically add printers on the network
 
-### وقایع و لاگ‌ها
-- `GET /api/logs/all` — دریافت لیست لاگ‌های سیستمی با قابلیت صفحه‌بندی و فیلتر
-- `GET /api/printer/<ip>/log` — دریافت لاگ‌های مربوط به یک پرینتر خاص
-- `POST /api/logs/clear` — پاک‌سازی لاگ‌های قدیمی بر اساس زمان یا فیلتر
-- `POST /api/events/manual` — ثبت دستی رویداد در سیستم
+### Events and logs
+- `GET /api/logs/all` — list system logs with paging and filtering
+- `GET /api/printer/<ip>/log` — logs for one specific printer
+- `POST /api/logs/clear` — clear old logs by time or filter
+- `POST /api/events/manual` — manually record an event in the system
 
-### گروه‌ها
-- `GET /api/groups` · `POST /api/groups` — مشاهده و تعریف گروه‌های پرینتر
-- `POST /api/groups/<gid>/rename` · `DELETE /api/groups/<gid>` — ویرایش و حذف گروه
+### Groups
+- `GET /api/groups` · `POST /api/groups` — view and define printer groups
+- `POST /api/groups/<gid>/rename` · `DELETE /api/groups/<gid>` — edit and delete a group
 
-### واردسازی دیتابیس (Import)
-- `POST /api/import/analyze` — تحلیل فایل بکاپ SQLite قبل از ورود داده
-- `POST /api/import/confirm` — اعمال قطعی اطلاعات بکاپ همراه با فیلتر تاریخ و ایجاد نسخه پشتیبان امن
+### Database import
+- `POST /api/import/analyze` — analyse an SQLite backup file before importing data
+- `POST /api/import/confirm` — finally apply the backup data, with a date filter, and create a safe backup copy
 
-### خروجی‌ها و گزارش‌گیری
-- `GET /api/export/excel` — دریافت خروجی جامع اکسل چند شیتی
-- `GET /api/export/logs?format=csv` / `?format=excel` — خروجی لاگ‌ها در قالب‌های مختلف
+### Exports and reporting
+- `GET /api/export/excel` — download the comprehensive multi-sheet Excel export
+- `GET /api/export/logs?format=csv` / `?format=excel` — export logs in various formats
 
-### اسکن و اعتبارسنجی
-- `POST /api/scan/oids` · `GET /api/scan/oids/<ip>` — اسکن و بازخوانی کلیه OIDهای پرینتر
-- `POST /api/scan/all` · `GET /api/scan/profiles` — مدیریت پروفایل‌های اسکن‌شده تجهیزات
-- `GET /api/validate/counters` · `GET /api/validate/oids/<ip>` — اعتبارسنجی صحت شمارنده‌ها
+### Scanning and validation
+- `POST /api/scan/oids` · `GET /api/scan/oids/<ip>` — scan and read back all OIDs of a printer
+- `POST /api/scan/all` · `GET /api/scan/profiles` — manage the scanned device profiles
+- `GET /api/validate/counters` · `GET /api/validate/oids/<ip>` — validate the accuracy of counters
 
-### موتور بازدهی کارتریج (Yield Engine)
-- `GET /api/yield/status` — وضعیت یادگیری و درصد اطمینان بازدهی کارتریج‌ها
-- `POST /api/yield/report` — تولید گزارش جامع بازدهی کارتریج‌های ناوگان
+### Cartridge yield engine (Yield Engine)
+- `GET /api/yield/status` — learning status and confidence level of cartridge yield
+- `POST /api/yield/report` — generate a comprehensive yield report for the fleet's cartridges
 
-### آمار و نمودارها
-- `GET /api/stats/daily` — آمار مصرف روزانه و تجمیعی چاپ
-- `GET /api/stats/sensor/daily` — سابقه تغییرات دما و رطوبت سنسورهای محیطی
+### Statistics and charts
+- `GET /api/stats/daily` — daily and cumulative print consumption statistics
+- `GET /api/stats/sensor/daily` — history of temperature and humidity changes from environmental sensors
 
-### مدیریت کاربران و امنیت
-- `GET /users` · `GET /api/users` · `POST /api/users` — مدیریت کاربران سامانه
-- `POST /api/users/<id>/role` · `.../verify` · `.../access` · `DELETE /api/users/<id>` — کنترل نقش‌ها و دسترسی دفاتر
-- `GET /security` · `GET /api/security/events` · `GET /api/security/stats` — پنل وقایع امنیتی
+### User management and security
+- `GET /users` · `GET /api/users` · `POST /api/users` — manage system users
+- `POST /api/users/<id>/role` · `.../verify` · `.../access` · `DELETE /api/users/<id>` — control roles and office access
+- `GET /security` · `GET /api/security/events` · `GET /api/security/stats` — security events panel
 
 ---
 
-## 📊 نکات مربوط به تونر و مواد مصرفی
+## 📊 Notes on toner and consumables
 
-### کاتالوگ ظرفیت کارتریج
-فایل `cartridge_yield_catalog.json` زمانی که دستگاه اطلاعات ظرفیت ارائه ندهد یا یادگیری آغاز نشده باشد، به جای یک مقدار ثابت و خام (مانند ۲۰۰۰ صفحه)، مقدار واقع‌بینانه‌ای بر اساس مدل دقیق کارتریج فراهم می‌کند.
+### Cartridge capacity catalogue
+When the device does not report capacity information, or learning has not yet started, the file `cartridge_yield_catalog.json` provides a realistic value based on the exact cartridge model, instead of a fixed raw value (such as 2,000 pages).
 
-اولویت انتخاب ظرفیت:  
+Capacity selection priority:  
 **`auto_learn → shared_profile → device_capacity → catalog → default`**
 
 ```bash
-# تنظیم حالت بازدهی (پیش‌فرض: local مناسب بازار ایران و شارژهای متعدد)
+# set the yield mode (default: local, suitable for the Iranian market and multiple refills)
 export CARTRIDGE_YIELD_MODE=local     # local | oem | compatible | refill
-export CARTRIDGE_YIELD_FACTOR=0.90    # ضریب اطمینان برای پوشش واقعی چاپ
+export CARTRIDGE_YIELD_FACTOR=0.90    # confidence factor for real print coverage
 ```
 
-### ویژگی‌ها و رفتارهای خاص برندها
-- **Canon i‑SENSYS (مانند LBP233dw):** این دستگاه‌ها به جای درصد، کدهای گسسته وضعیت (`0=خالی / 5=کم / 7=عادی`) بازمی‌گردانند. سامانه این مقادیر را به صورت درصد نمایشی معادل (`۰٪ / ۱۵٪ / ۷۰٪`) با منبع مشخص نگاشت می‌کند تا یادگیری خراب نشود. در صورت نیاز، صفحه وب Remote UI اسکرپ می‌گردد.
-- **HP FutureSmart (مانند M527 و E52645):** مقدار `MaxCapacity` برابر مقادیر منفی (`-3` یا `-2`) برگردانده می‌شود و فیلد `Remaining` خودِ **درصد** است (`unit=19`). سامانه به طور خودکار این ساختار را تشخیص داده و کارتریج‌های سری 87A/87X/87Y و 89A/89X/89Y را پشتیبانی می‌کند.
-- **Brother:** در برخی مدل‌ها تنها «وجود یا عدم وجود تونر» گزارش می‌شود؛ در این حالت داشبورد با نمایش خط تیره (`—`) از تولید درصد‌های فرضی و غلط جلوگیری می‌کند.
-- **RFC 3805 Sentinel `-3`:** نشان‌دهنده این است که مخزن تونر موجود است ولی میزان دقیق مشخص نیست؛ این وضعیت به درستی به عنوان `unknown` ثبت می‌شود نه `not_supported`.
-- **Toshiba e-STUDIO:** علاوه بر پروتکل SNMP، در صورت نیاز پنل وب TopAccess برای دریافت اطلاعات دقیق تونر و شمارنده‌ها اسکرپ می‌شود و شاخص `pages_since_last_reset` برای ارزیابی عمر کارتریج محاسبه می‌گردد.
+### Behaviour specific to brands and features
+- **Canon i‑SENSYS (such as LBP233dw):** these devices return discrete status codes (`0=empty / 5=low / 7=normal`) instead of a percentage. The system maps these values to equivalent display percentages (`0% / 15% / 70%`) with a stated source, so that learning is not corrupted. If necessary, the Remote UI web page is scraped.
+- **HP FutureSmart (such as M527 and E52645):** the `MaxCapacity` value is returned as a negative value (`-3` or `-2`), and the `Remaining` field is itself a **percentage** (`unit=19`). The system automatically detects this structure and supports cartridges of the 87A/87X/87Y and 89A/89X/89Y series.
+- **Brother:** on some models only "toner present or absent" is reported; in this case the dashboard shows a dash (`—`) to avoid generating assumed and incorrect percentages.
+- **RFC 3805 sentinel `-3`:** indicates that the toner reservoir is present but the exact level is not known; this state is correctly recorded as `unknown` rather than `not_supported`.
+- **Toshiba e-STUDIO:** in addition to the SNMP protocol, if needed, the TopAccess web panel is scraped for accurate toner and counter information, and the `pages_since_last_reset` indicator is calculated to assess cartridge life.
 
 ---
 
-## 🧮 صحت لاگ‌ها و شمارنده‌ها
+## 🧮 Log and counter accuracy
 
-برای تضمین این که آمار چاپ صادقانه و عاری از داده‌های بادکرده یا غلط باشد، تابع پردازشی `_counters_event` قوانین سخت‌گیرانه‌ای اعمال می‌کند:
+To ensure that print statistics are honest and free of inflated or incorrect data, the processing function `_counters_event` applies strict rules:
 
-| سناریوی مانیتورینگ | رفتار سامانه و رویداد ثبت‌شده |
+| Monitoring scenario | System behaviour and recorded event |
 |---|---|
-| **اولین نظرسنجی (First Poll)** | صرفاً Snapshot پایه ثبت می‌شود؛ **هیچ لاگ پرینتی تولید نمی‌شود**. |
-| **ریست شمارنده سخت‌افزاری** (افت ناگهانی به صفر با uptime صفر) | ثبت رویداد `COUNTER_RESET` بدون ثبت آمار چاپ کاذب. |
-| **افت اندک شمارنده / تنظیم نرم** | ثبت رویداد `COUNTER_DROP` و تنظیم مجدد مقدار مبنا. |
-| **جهش غیرواقعی شمارنده** (بیش از ظرفیت فیزیکی چاپ در یک دقیقه) | رویداد `PRINT_OVERFLOW` ثبت و لاگ چاپ مشکوک رد می‌شود. |
-| **کاهش شمارنده پس از راه‌اندازی مجدد** | ثبت رویداد `COUNTER_ANOMALY` با جزئیات کامل رخداد. |
-| **چاپ معمول و استاندارد** | ثبت رویداد رسمی `PRINT` با تفکیک دقیق A3/A4 و ثبت `poll_timestamp`. |
+| **First poll** | Only the base snapshot is recorded; **no print log is produced**. |
+| **Hardware counter reset** (sudden drop to zero with zero uptime) | Records a `COUNTER_RESET` event without recording false print statistics. |
+| **Small counter drop / soft adjustment** | Records a `COUNTER_DROP` event and resets the baseline value. |
+| **Unrealistic counter jump** (more than the physical print capacity in one minute) | Records a `PRINT_OVERFLOW` event and the suspicious print log is rejected. |
+| **Counter decrease after a restart** | Records a `COUNTER_ANOMALY` event with full details of the occurrence. |
+| **Normal, standard printing** | Records the official `PRINT` event with a precise A3/A4 breakdown and the `poll_timestamp`. |
 
-**تفکیک دقیق اندازه کاغذ:** با مقایسه دیفرانسیل شمارنده‌های کل نسبت به شمارنده‌های تفکیکی اندازه کاغذ در Snapshotها انجام می‌شود. اگر شمارنده‌های A3 یا A4 دیرتر از شمارنده کل دستگاه به‌روزرسانی شوند، پرچم‌های `a3_lagged` یا `a4_lagged` ثبت می‌شوند تا محاسبات بعدی دچار انحراف نگردد.
+**Precise paper-size breakdown:** this is done by a differential comparison of the total counters against the per-paper-size counters in the snapshots. If the A3 or A4 counters are updated later than the device's total counter, the flags `a3_lagged` or `a4_lagged` are recorded so that later calculations are not skewed.
 
 ---
 
-## 🛠️ ابزارها و اسکریپت‌های کمکی (CLI)
+## 🛠️ Tools and CLI scripts
 
-در پوشه `tools/` ابزارهای مستقلی برای مدیریت، عیب‌یابی و مهاجرت تدارک دیده شده است:
+Standalone tools for management, troubleshooting and migration are provided in the `tools/` folder:
 
-### ۱. ابزار عیب‌یابی عمیق پرینتر (`tools/diagnose_printer.py`)
+### 1. Deep printer diagnostics tool (`tools/diagnose_printer.py`)
 ```bash
 python tools/diagnose_printer.py 192.168.1.50
 ```
-دامپ خام کلیه OIDهای سیستمی، شمارنده‌ها، سینی‌ها، وضعیت مواد مصرفی و صفحات وب پرینتر را در فایلی با نام `diagnose_<IP>.md` ذخیره می‌کند.
+Saves a raw dump of all system OIDs, counters, trays, consumables status and the printer's web pages to a file named `diagnose_<IP>.md`.
 
-### ۲. مهاجرت داده و بررسی کیفیت (`tools/`)
-- **`tools/auto_migrate.py`:** بررسی خودکار وضعیت پایگاه‌داده در زمان استارت و اجرای بدون ریسک مهاجرت داده در صورت خالی بودن دیتابیس مقصد با سپرهای امنیتی در برابر بازنویسی ناخواسته.
-- **`tools/migrate_sqlite_to_pg.py`:** انتقال فوق‌العاده پرسرعت داده‌ها از SQLite به PostgreSQL با اعتبارسنجی انواع داده، مدیریت ستون‌های محاسباتی (GENERATED)، بازنشانی دنباله‌ها (Sequence Sync) و ارزیابی نهایی با `--verify`.
-- **`tools/migrate_timestamps_to_utc.py`:** استانداردسازی تمامی مقادیر تاریخی جدول‌ها به قالب استاندارد زمان UTC با پسوند `Z` طبق قرارداد زمانی پروژه همراه با حالت `--dry-run` و ایجاد پشتیبان مطمئن.
-- **`tools/check_cutover_readiness.py`:** ارزیابی خودکار چک‌لیست آمادگی برای مهاجرت به پایگاه‌داده (کدهای خروجی ۰ برای آمادگی کامل، ۱ برای موانع بحرانی، ۲ برای هشدارها).
-- **`tools/diagnose_data_quality.py`:** بررسی و اعتبارسنجی سلامت داده‌های دیتابیس، کشف انحراف ستون‌ها و ارائه گزارش تفصیلی JSON.
-- **`tools/export_from_pg.py`:** برون‌بری معکوس داده‌ها از PostgreSQL به یک دیتابیس تمیز SQLite جهت بازگشت اضطراری به عقب (Rollback).
-- **`tools/init_pg_database.py`:** راه‌اندازی اولیه کاربر، ساخت دیتابیس، تنظیم یونیکد UTF8 و Collation استاندارد `C` روی PostgreSQL.
-- **`tools/test_pg_connection.py`:** اعتبارسنجی اتصال و سطوح دسترسی DDL/DML کاربر اپلیکیشن روی پایگاه‌داده PostgreSQL.
-- **`tools/verify_server_timezone.py`:** آزمون تطابق تایم‌زون سرور با قرارداد UTC سامانه.
-- **`tools/build_snmp_yml.py`:** تولید خودکار پیکربندی `monitoring/snmp.yml` برای خط‌لوله‌ی پرسرعت `snmp_exporter`.
-- **`tools/compare_snmp_sources.py`:** مقایسه خروجی‌های SNMP زنده با خروجی‌های Prometheus Exporter برای اطمینان از تطابق صد درصدی.
-- **`tools/check_oid_coverage.py`:** سنجش میزان پوشش OIDهای استخراج‌شده در برابر کاتالوگ جامع پروژه.
-- **`tools/probe_cartridge_id.py`:** پروب میدانی شناسه‌های یکتای کارتریج و شماره سریال چیپ‌ها روی تجهیزات شبکه.
-- **`tools/audit_pages.py`:** ابزار ممیزی و حسابرسی مقادیر صفحات چاپ‌شده در بازه‌های زمانی مختلف.
+### 2. Data migration and quality check (`tools/`)
+- **`tools/auto_migrate.py`:** automatic checking of the database state at start-up, and risk-free data migration when the target database is empty.
+- **`tools/migrate_sqlite_to_pg.py`:** very fast transfer of data from SQLite to PostgreSQL, with data-type validation, handling of computed (GENERATED) columns, sequence reset (Sequence Sync) and a final check with `--verify`.
+- **`tools/diagnose_data_quality.py`:** checks and validates the health of database data, detects column drift and produces a detailed JSON report.
+- **`tools/compare_snmp_sources.py`:** compares live SNMP output with Prometheus Exporter output to confirm a full match.
+- **`tools/build_snmp_yml.py`:** automatically generates the `monitoring/snmp.yml` configuration for `snmp_exporter`.
+- **`tools/verify_server_timezone.py`:** tests whether the server time zone matches the UTC contract.
 
-### ۳. مسیرهای اختصاصی دیباگ در مرورگر
-- `GET /api/debug/printer/<ip>` — خروجی خام استخراج‌شده از پرینتر
-- `GET /api/debug/brother-toner/<ip>` — دیباگ تخصصی سنسورهای کارتریج Brother
-- `GET /api/debug/toshiba-snmp/<ip>` — دیباگ جدول OIDهای پرینتر Toshiba
+### 3. Dedicated browser debug paths
+- `GET /api/debug/printer/<ip>` — raw output extracted from the printer
+- `GET /api/debug/brother-toner/<ip>` — specialised debug of Brother cartridge sensors
+- `GET /api/debug/toshiba-snmp/<ip>` — debug of the Toshiba printer's OID table
 
 ---
 
-## 🧪 تست‌ها و تضمین کیفیت
+## 🧪 Tests and quality assurance
 
-این پروژه دارای بیش از **۸۵۰ تست خودکار** جامع در پوشه `tests/` با پشتیبانی از هر دو دیتابیس است:
+The project has more than **850 automated tests** in the `tests/` folder, supporting both databases:
 
-### اجرای آزمون‌ها روی دیتابیس محلی (SQLite)
+### Running tests on the local database (SQLite)
 ```bash
 python -m pytest tests/ -v
 ```
 
-### اجرای آزمون‌ها روی دیتابیس PostgreSQL
+### Running tests on the PostgreSQL database
 ```bash
-# با تنظیم متغیر PG_DSN، فیکسچرهای تست به طور خودکار دیتابیس ایزوله تستی ایجاد می‌کنند
+# setting the PG_DSN variable makes the test fixtures create an isolated test database automatically
 PG_DSN="postgresql://postgres:pass@127.0.0.1:5432/printguard_test" python -m pytest tests/ -v
 ```
 
-### آزمون سناریوهای طلایی (Golden Scenarios)
-تست‌های `tests/test_golden.py` رفتار سامانه را با سناریوهای ضبط‌شده واقعی ناوگان پرینترها (`tests/fixtures/golden/*.json`) مقایسه کرده و تغییرناپذیری محاسبات را با معیار **Diff-Zero** تضمین می‌کنند.
+### Golden scenarios test
+The `tests/test_golden.py` tests compare system behaviour with real recorded scenarios from the printer fleet (`tests/fixtures/golden/*.json`), and guarantee that the calculations do not change under the **Diff-Zero** criterion.
 
 ---
 
-## 🗺️ نقشه راه و وضعیت فازها
+## 🛡️ Enterprise security
 
-| فاز | موضوع | وضعیت | توضیحات |
-|---|---|---|---|
-| **فاز A–D** | پایش چندبرندی، کلکتور ترکیبی، Yield Engine و تشخیص تراشه کارتریج | ✅ تکمیل‌شده | استقرار پایدار روی ناوگان سازمانی |
-| **فاز E** | معماری Dual Backend (SQLite + PostgreSQL) و قرارداد زمان UTC | ✅ تکمیل‌شده | پیاده‌سازی آداپتور دیتابیس، مایگریشن‌های Alembic 0001 تا 0005 |
-| **فاز F** | مهاجرت قطعی داده‌ها و Cutover به PostgreSQL | ✅ تکمیل‌شده | استقرار موفق عملیاتی روی سرور اصلی، پایش ۲۷ تجهیز شبکه، پوشش کامل ۵۱/۵۱ سطر کارتریج، ثبت بکاپ در `E:\pgbackup` |
-| **فاز G** | خط‌لوله‌ی پرسرعت Prometheus snmp_exporter و کلاینت تاب‌آور | ✅ تکمیل‌شده | پیاده‌سازی Exporter Adapter، Circuit Breaker و اسکریپت نصب سرویس |
-| **فاز H** | پالایش کلکتورها و رفع جفت‌شدگی اسکرپرها | ✅ تکمیل‌شده | ایزولاسیون کامل ماژول‌ها و استانداردهای تست یکپارچه |
-| **فاز I** | نگهداری داده‌های سری زمانی، خلاصه‌سازی و رفع TD-006 | ✅ تکمیل‌شده | مایگریشن 0006، پیاده‌سازی Retention Policy و Rollup Jobs، زمان‌بند پس‌زمینه، ۶ بهبود Yield Engine توشیبا، رفع منطقه زمانی هشدارهای سنسور و ارتقاء تست‌های Dual-Backend |
-
----
-
-## 🛡️ امنیت سازمانی
-
-- **احراز هویت:** رمزنگاری گذرواژه‌ها با الگوریتم امن **bcrypt**؛ امکان ورود یکپارچه سازمانی با **Google OAuth**.
-- **کنترل دسترسی نقش‌محور (RBAC):** سطوح دسترسی سه‌گانه (`admin` دسترسی کامل، `manager` مدیریت پرینترها و خروجی‌ها، `viewer` مشاهده صرف).
-- **تفکیک دسترسی ساب‌نت/دفاتر:** امکان تخصیص دفاتر مجاز به کاربران برای محدودسازی دید آن‌ها فقط به پرینترهای شعبه خود.
-- **حفاظت CSRF:** اجباری روی تمام متدهای تغییر وضعیت (POST/PUT/DELETE) در فرانت‌اند با `apiFetch`.
-- **Rate Limiting:** محدودسازی نرخ درخواست‌ها برای جلوگیری از حملات Brute-Force روی روت‌های حساس.
-- **لاگ امنیتی:** ثبت رویدادهای ورود، خروج، تلاش‌های ناموفق و ارتقای دسترسی در جدول `security_events` و پنل `/security`.
-- **مدیریت کلیدها:** الزام مقداردهی `SECRET_KEY` امن در محیط پروداکشن از طریق محیط.
+- **Authentication:** passwords are encrypted with the secure **bcrypt** algorithm; integrated enterprise sign-in is supported with **Google OAuth**.
+- **Role-based access control (RBAC):** three access levels (`admin` full access, `manager` manages printers and exports, `viewer` view only).
+- **Office/subnet access separation:** permitted offices can be assigned to users to limit their view to the printers of their own branch only.
+- **CSRF protection:** mandatory on all state-changing methods (POST/PUT/DELETE) in the front end, through `apiFetch`.
+- **Rate limiting:** limits request rates to prevent brute-force attacks on sensitive routes.
+- **Security log:** sign-ins, sign-outs, failed attempts and privilege escalations are recorded in the `security_events` table and the `/security` panel.
+- **Key management:** a secure `SECRET_KEY` must be set in the production environment through the environment.
 
 ---
 
-## 📈 خروجی Excel و گزارش‌ها
+## 📈 Excel export and reports
 
-ماژول خروجی اکسل فایل‌های ساخت‌یافته با شیت‌های مجزا تولید می‌کند:
-1. **Printer Status:** آخرین وضعیت برخط، آدرس IP، مدل، سریال، شمارنده‌های کل، مصرفی‌ها و هشدارهای فعال.
-2. **Job Log:** سوابق تفکیکی کارهای چاپ انجام‌شده با ذکر تاریخ و ساعت، کاربر (در صورت وجود)، حجم چاپ و سهم اندازه‌های A3/A4.
-3. **Reset History:** سوابق دقیق ریست کارتریج‌ها شامل تاریخ ریست، درصد تنظیم‌شده، کارکرد لحظه‌ای دستگاه، صفحات چاپ‌شده پس از آخرین ریست و تخمین بازدهی `yield_per_page`.
-
----
-
-## ⚠️ نکات اجرایی و استقرار
-
-- **سیستم Cache Busting:** فایل‌های ایستا در فرانت‌اند با متغیر `ASSET_VERSION` کنترل می‌شوند تا پس از به‌روزرسانی نیاز به خالی کردن کش مرورگر نباشد.
-- **استقرار پشت Reverse Proxy:** در محیط عملیاتی، پروژه را پشت **Nginx** یا **IIS** با فعال‌سازی HTTPS مستقر کنید (`docs/deployment_reverse_proxy.md`).
-- **مسیرهای دیباگ:** در محیط عملیاتی، دسترسی به روت‌های دیباگ محدود به ادمین است.
-- **فایل‌های محلی:** فایل‌های دیتابیس محلی و کلیدهای پیکربندی در مخزن گیت ذخیره نمی‌شوند و در `.gitignore` محافظت شده‌اند.
+The Excel export module produces structured files with separate sheets:
+1. **Printer Status:** latest online status, IP address, model, serial number, total counters, consumables and active alerts.
+2. **Job Log:** records of individual print jobs performed, with date and time, user (where available), print volume and the A3/A4 share.
+3. **Reset History:** exact records of cartridge resets, including reset date, the percentage set, the device's live usage, pages printed since the last reset and an estimate of `yield_per_page`.
 
 ---
 
-## 📄 مجوز / License
+## ⚠️ Operational notes and deployment
 
-تمامی حقوق این سامانه متعلق به تیم توسعه Multi-Printer می‌باشد. استفاده، توسعه و استقرار بر مبنای سیاست‌های سازمانی مجموعه مجاز است.
+- **Cache busting system:** static files in the front end are controlled by the `ASSET_VERSION` variable, so that after an update the browser cache does not need to be cleared.
+- **Deployment behind a reverse proxy:** in production, deploy the project behind **Nginx** or **IIS** with HTTPS enabled (`docs/deployment_reverse_proxy.md`).
+- **Debug paths:** in the production environment, access to the debug routes is limited to administrators.
+- **Local files:** local database files and configuration keys are not stored in the Git repository and are protected in `.gitignore`.
+
+---
+
+## 📄 License
+
+All rights to this system belong to the Multi-Printer development team. Use, development and deployment are permitted under the organisation's policies.

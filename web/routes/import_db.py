@@ -1,9 +1,23 @@
+# =============================================================================
+# @file:         web/routes/import_db.py
+# @brief:        Routes for analysing and importing an uploaded SQLite database.
+# @details:      Responsibilities: Analyse the uploaded file and confirm the import.
+#                Main API: analyze_db(), confirm_import()
+#                Side effects: database access, defines HTTP routes
+# @dependencies: internal: config.settings, core.database, core.db, web.auth | external: flask
+# @notes:        None.
+# =============================================================================
+
+"""SQLite database import API routes (analyse and confirm)."""
+
+import logging
 import os
 import shutil
-import logging
+from contextlib import closing
 from datetime import datetime
-from pathlib import Path
+
 from flask import Blueprint, jsonify, request, session
+
 from web.auth import admin_required
 from core.database import db_connection, init_db
 from config.settings import DB_PATH
@@ -23,10 +37,11 @@ TEMP_UPLOAD_PATH = "temp_import.db"
 
 
 def _temp_upload_path() -> str:
+    """Return the path of the temporary upload file kept in the session."""
     path = session.get("import_temp_path")
     return path if isinstance(path, str) and path else TEMP_UPLOAD_PATH
 
-# جدول‌هایی که import آن‌ها مجاز است. عمداً users/security_events وارد نمی‌شوند.
+# Tables whose import is allowed. Users/security_events are not logged intentionally.
 ALLOWED_IMPORT_TABLES = {
     "logs": {
         "label": "لاگ‌ها و رویدادها",
@@ -90,18 +105,22 @@ YIELD_TABLES = ("cartridge_state", "yield_samples", "toner_snapshots_v2", "cartr
 
 
 def _q(name: str) -> str:
+    """Quote an identifier for SQLite."""
     return '"' + str(name).replace('"', '""') + '"'
 
 
 def _tables(conn) -> set:
+    """Return the set of table names in a SQLite database."""
     return {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
 
 
 def _columns(conn, table: str) -> list:
+    """Return the column names of a table."""
     return [r[1] for r in conn.execute(f"PRAGMA table_info({_q(table)})").fetchall()]
 
 
 def _table_count(conn, table: str) -> int:
+    """Return the number of rows in a table, or 0 when it cannot be read."""
     try:
         return int(conn.execute(f"SELECT COUNT(*) FROM {_q(table)}").fetchone()[0] or 0)
     except Exception:
@@ -109,6 +128,7 @@ def _table_count(conn, table: str) -> int:
 
 
 def _table_range(conn, table: str, ts_col: str):
+    """Return the minimum and maximum of a timestamp column in a table."""
     cols = _columns(conn, table)
     if ts_col not in cols:
         return {"start": None, "end": None}
@@ -117,6 +137,7 @@ def _table_range(conn, table: str, ts_col: str):
 
 
 def _table_printers(conn, table: str, ip_col: str) -> list:
+    """Return the distinct printer IPs of a table."""
     cols = _columns(conn, table)
     if ip_col not in cols:
         return []
@@ -133,11 +154,11 @@ def _table_printers(conn, table: str, ip_col: str) -> list:
 
 def _discard_upload() -> None:
     """
-    فایل آپلودی موقت را دور می‌اندازد و کلید session را پاک می‌کند.
+    Discards the temporary upload file and clears the session key.
 
-    E.6.1: چون مسیر نوشتن import روی PG بازنشسته شد، آپلودِ بی‌نتیجه نباید روی
-    دیسک بماند (پیش از این فقط اجرای بعدیِ analyze فایل قبلی را پاک می‌کرد).
-    خطای حذف عمداً بلعیده می‌شود: این یک پاک‌سازی است، نه بخشی از نتیجهٔ عملیات.
+    E.6.1: Since the import write path on PG has been retired, fruitless upload should not occur
+    keep the disk (previously only the next run of analyze would delete the previous file).
+    A delete error is swallowed intentionally: it is a cleanup, not part of the operation's result.
     """
     path = session.get("import_temp_path")
     if isinstance(path, str) and path:
@@ -150,6 +171,7 @@ def _discard_upload() -> None:
 
 
 def _make_backup() -> str:
+    """Make a backup copy of the database before an import and return its path."""
     if not os.path.exists(DB_PATH):
         return ""
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -159,6 +181,7 @@ def _make_backup() -> str:
 
 
 def _build_where(cols: list, meta: dict, filters: dict):
+    """Build the WHERE clause and its parameters for an import filter."""
     where = ["1=1"]
     params = []
     ip_col = meta.get("ip_col")
@@ -177,6 +200,7 @@ def _build_where(cols: list, meta: dict, filters: dict):
 
 
 def _exists_by_cols(conn, table: str, cols: tuple, row_map: dict) -> bool:
+    """Return True when a row with the same key columns already exists."""
     usable = [c for c in cols if c in row_map]
     if not usable:
         return False
@@ -189,13 +213,13 @@ def _exists_by_cols(conn, table: str, cols: tuple, row_map: dict) -> bool:
 
 def _prepare_row(table: str, cols: list, row, *, for_postgres: bool):
     """
-    یک ردیف مبدأ (خروجی SQLite) را برای درج در مقصد آماده می‌کند.
+    Prepares a source row (SQLite output) for insertion into the destination.
 
-    فاز E.4.8: روی PostgreSQL ستون‌های بولی (migration ``0002``) مقدار
-    ``bool`` می‌خواهند و ``int`` را با خطای نوع رد می‌کنند؛ روی SQLite
-    ``0/1`` شکل کانونیک است. پس تبدیل **فقط** برای مقصد PG انجام می‌شود تا
-    مسیر SQLite بایت‌به‌بایت همان امروز بماند. ``None`` دست‌نخورده می‌ماند
-    (NULL یعنی «نامعلوم»، نه False).
+    Phase E.4.8: On PostgreSQL boolean columns (migration ``0002'') value
+    want ``bool'' and reject ``int'' with a type error; on SQLite
+    ``0/1'' is the canonical form. So the conversion is done **only** for the PG destination
+    The path of SQLite remains the same byte by byte as it is today. ``None'' is left untouched
+    (NULL means "Unknown", not False).
     """
     if not for_postgres:
         return row
@@ -211,6 +235,7 @@ def _prepare_row(table: str, cols: list, row, *, for_postgres: bool):
 
 
 def _import_table(source_conn, target_conn, table: str, filters: dict, duplicate_mode: str):
+    """Import the rows of one table from the source database into the target."""
     meta = ALLOWED_IMPORT_TABLES[table]
     src_cols_all = _columns(source_conn, table)
     dst_cols_all = _columns(target_conn, table)
@@ -231,22 +256,22 @@ def _import_table(source_conn, target_conn, table: str, filters: dict, duplicate
     cols_sql = ",".join(_q(c) for c in common_cols)
     verb = "INSERT"
     if duplicate_mode == "replace" and meta.get("replaceable"):
-        # قاعدهٔ E.4.8 (تصمیم مالک): «INSERT OR REPLACE» نحو SQLite است و روی PG با
-        # 42601 می‌شکند، ولی به‌جای گارد پراکنده در هر جدول، **یک گارد یکپارچه**
-        # ابتدای endpoint همهٔ مسیرهای import روی PG را می‌بندد
-        # (``_reject_import_on_postgres``). پس این‌جا فقط نحو SQLite ساخته می‌شود.
+        # Rule E.4.8 (Owner's Decision): "INSERT OR REPLACE" is SQLite syntax and on PG with
+        # 42601 breaks, but instead of scattered guards in each table, **a unified guard**
+        # The beginning of the endpoint closes all the import paths on the PG
+        # (``_reject_import_on_postgres''). So, only SQLite syntax is created here.
         verb = "INSERT OR REPLACE"
     insert_sql = f"{verb} INTO {_q(table)} ({cols_sql}) VALUES ({placeholders})"
 
     imported = 0
     skipped = 0
     dedupe_cols = meta.get("dedupe_cols") or ()
-    # فاز E.4.8: رفتار هر backend با «خطای یک ردیف» تفاوت بنیادی دارد.
-    #   • SQLite: خطای یک ردیف، تراکنش را باطل نمی‌کند؛ حلقه مستقیم ادامه می‌دهد.
-    #   • PostgreSQL: اولین خطا کل تراکنش را abort می‌کند (25P02) و همه‌ی
-    #     ردیف‌های درج‌شدهٔ همان دسته از دست می‌رود (سنجیده‌شده: imported=1
-    #     skipped=1 ⇒ rows_now=0). پس هر ردیف در SAVEPOINT خودش می‌رود و
-    #     خطا به همان SAVEPOINT برمی‌گردد.
+    # Phase E.4.8: The behavior of each backend with "single row error" is fundamentally different.
+    # • SQLite: a single row error does not invalidate the transaction; The loop continues straight.
+    # • PostgreSQL: the first error aborts the entire transaction (25P02) and all
+    # Inserted rows of the same category are lost (measured: imported=1
+    # skipped=1 ⇒ rows_now=0). So each row goes in its own SAVEPOINT and
+    # The error goes back to the SAVEPOINT itself.
     per_row_savepoint = target_conn.backend == BACKEND_POSTGRESQL
     for row in rows:
         row_map = dict(zip(common_cols, row))
@@ -259,7 +284,7 @@ def _import_table(source_conn, target_conn, table: str, filters: dict, duplicate
             target_conn.execute(insert_sql, _prepare_row(table, common_cols, row,
                                                          for_postgres=per_row_savepoint))
             imported += 1
-        except UniqueViolation:      # فاز E.4.4: نوع مشترک (کل خانوادهٔ integrity)
+        except UniqueViolation:      # Phase E.4.4: common type (whole integrity family)
             skipped += 1
             if per_row_savepoint:
                 target_conn.execute("ROLLBACK TO SAVEPOINT sp_row")
@@ -271,31 +296,31 @@ def _import_table(source_conn, target_conn, table: str, filters: dict, duplicate
 
 def _reject_import_on_postgres() -> None:
     """
-    گارد یکپارچۀ import روی PostgreSQL — **تصمیم E.6.1: بازنشستگی، نه ترجمه**.
+    Integrated import guard on PostgreSQL — **Decision E.6.1: Retirement, not translation**.
 
-    ``docs/phase-e-decisions.md`` ردیف ۱ (دلیل، جایگزین‌های ردشده، اثر بر کاربر).
-    سه نقصی که این گارد می‌پوشاند، همه در یک نقطه و همه با یک تصمیم بسته می‌شوند:
+    ``docs/phase-e-decisions.md'' row 1 (reason, rejected alternatives, effect on user).
+    The three flaws that this guard covers are all closed at the same point and all with the same decision:
 
-      • TD-007 — ``INSERT OR REPLACE`` نحو SQLite است ⇒ 42601 روی PG؛
-      • TD-009 — ``_exists_by_cols`` شرط ``col IS ?`` می‌سازد؛ ``IS`` در PG
-        پارامتر نمی‌پذیرد، و چون حالت پیش‌فرض ``duplicate_mode`` همان ``skip`` است،
-        این مسیر **همیشه** روی PG می‌شکست؛
-      • ردیف ۱۱ جدول ۱۷ ردیفی — خواندن اسکیمای **مقصد** با ``PRAGMA table_info`` /
-        ``sqlite_master`` که PG نمی‌شناسد (TD-008).
+      • TD-007 — ``INSERT OR REPLACE'' is SQLite syntax ⇒ 42601 on PG;
+      • TD-009 — ``_exists_by_cols'' creates a ``col IS?'' condition; ``IS'' in PG
+        parameter is not accepted, and since the default ``duplicate_mode'' is ``skip'',
+        This path **always** breaks on PG;
+      • Row 11 of the 17-row table — reading the **destination** schema with ``PRAGMA table_info'' /
+        ``sqlite_master'' not recognized by PG (TD-008).
 
-    **چرا ترجمه نشد:** ``_import_table`` فقط *ستون‌های مشترک* مبدأ و مقصد را می‌نویسد.
-    SQLite با ``REPLACE`` ردیف را حذف و بازسازی می‌کند ⇒ ستونِ نوشته‌نشده به
-    پیش‌فرض برمی‌گردد؛ ``ON CONFLICT DO UPDATE`` همان ستون را با ارزش قبلی نگه
-    می‌دارد. برای ``printer_counters`` / ``cartridge_state`` / ``cartridge_yield_profiles``
-    (حالت ``replace``) این دو **یک معنا ندارند**، و تفاوت فقط روی PG و در جریانِ
-    بازنویسی دادهٔ تاریخی ظاهر می‌شد — همان‌جا که تشخیصش گران است.
+    **Why it didn't translate:** ``_import_table'' only writes the *common columns* of source and destination.
+    SQLite deletes and rebuilds the row with ``REPLACE'' ⇒ column not written to
+    Default returns; ``ON CONFLICT DO UPDATE'' keep the same column with the previous value
+    takes for ``printer_counters'' / ``cartridge_state'' / ``cartridge_yield_profiles''
+    (``replace'' mode) These two **do not have the same meaning**, and the difference is only on the PG and in the stream
+    Overwriting historical data would appear - where it is expensive to detect.
 
-    مسیر ``analyze`` باز است: او فقط فایل مبدأ را می‌خواند و فایل مبدأ همیشه SQLite
-    است (``core.db.connect_to`` از E.6.1 backend را صریح قفل می‌کند).
+    The ``analyze'' path is open: it only reads the source file, and the source file is always SQLite
+    (``core.db.connect_to'' from E.6.1 explicitly locks the backend).
 
     Raises:
-        UnsupportedFeatureError: اگر backend فعال PostgreSQL باشد (روی SQLite هیچ
-            کاری نمی‌کند و import مثل امروز کار می‌کند).
+        UnsupportedFeatureError: If the backend is enabled PostgreSQL (on SQLite none
+            It doesn't work and import works like today).
     """
     if not is_postgres():
         return
@@ -311,6 +336,8 @@ def _reject_import_on_postgres() -> None:
 @bp.route('/api/import/analyze', methods=['POST'])
 @admin_required
 def analyze_db():
+    """Analyse an uploaded SQLite file and report what would be imported (dry run)."""
+
     if 'file' not in request.files:
         return jsonify({"error": "فایلی ارسال نشده است"}), 400
     file = request.files['file']
@@ -319,8 +346,8 @@ def analyze_db():
 
     old_path = session.get("import_temp_path")
     if old_path and old_path != TEMP_UPLOAD_PATH:
-        # همان قاعدۀ _discard_upload؛ این‌جا فقط آپلود قبلی پاک می‌شود و کلید
-        # session بی‌درنگ با مسیر جدید جایگزین می‌شود.
+        # the same rule as _discard_upload; Here, only the previous upload is deleted and the key
+        # The session is immediately replaced with the new route.
         try:
             if os.path.exists(old_path):
                 os.remove(old_path)
@@ -330,8 +357,11 @@ def analyze_db():
     session["import_temp_path"] = temp_path
     file.save(temp_path)
     try:
-        # فاز D: اتصال به DB موقت آپلودی از adapter؛ timeout پیش‌فرض قبلی sqlite3 (۵s).
-        with connect_to(temp_path, timeout=5.0) as conn:
+        # Phase D: connecting to the temporary DB upload of the adapter; Previous sqlite3 default timeout (5s).
+        # closing is required: __exit__ The adapter only commits/rollbacks and the file handle
+        # does not close; On an open Windows handle, it refuses to delete the temporary file with WinError 32
+        # (analyze ⇒ 500 instead of JSON, and leaving temp_import_* on disk).
+        with closing(connect_to(temp_path, timeout=5.0)) as conn:
             existing_tables = _tables(conn)
             importable = [t for t in ALLOWED_IMPORT_TABLES if t in existing_tables]
             summary = {"tables": {}, "printers_in_logs": [], "all_printers": []}
@@ -349,7 +379,7 @@ def analyze_db():
                 for p in printers:
                     printer_map.setdefault(p["ip"], p.get("name"))
 
-            # سازگاری با UI قبلی
+            # Compatibility with previous UI
             logs_info = summary["tables"].get("logs", {})
             summary["logs_count"] = logs_info.get("count", 0)
             summary["logs_range"] = logs_info.get("range", {"start": None, "end": None})
@@ -357,7 +387,7 @@ def analyze_db():
             summary["all_printers"] = [{"ip": ip, "name": name} for ip, name in sorted(printer_map.items())]
             summary["importable_tables"] = importable
             return jsonify({"status": "ok", "summary": summary})
-    except Exception as e:
+    except Exception:
         if os.path.exists(temp_path):
             os.remove(temp_path)
         session.pop("import_temp_path", None)
@@ -368,13 +398,15 @@ def analyze_db():
 @bp.route('/api/import/confirm', methods=['POST'])
 @admin_required
 def confirm_import():
-    # گارد یکپارچه — نخستین کار این endpoint (E.4.8). پیش از هر بررسی فایل و
-    # هر نوشتنی، تا خطای نحوی مبهم درایور جای پیام روشن را نگیرد.
+    # Integrated guard — the first task of this endpoint (E.4.8). Before each file check and
+    # Any writing, so that the driver's obscure syntax error does not replace the clear message.
+    """Import the analysed rows from an uploaded SQLite file."""
+
     try:
         _reject_import_on_postgres()
     except UnsupportedFeatureError as e:
         log.warning("Import rejected on postgresql: %s", e)
-        _discard_upload()          # E.6.1: آپلودِ ردشده نباید روی دیسک بماند
+        _discard_upload()          # E.6.1: Rejected upload should not remain on disk
         return jsonify({"error": str(e), "backup": ""}), 400
 
     temp_path = _temp_upload_path()
@@ -398,20 +430,20 @@ def confirm_import():
         if options.get("backup", True):
             backup_path = _make_backup()
 
-        source_conn = connect_to(temp_path, timeout=5.0)
-        source_tables = _tables(source_conn)
-        results = {}
-        with db_connection(commit=True) as target_conn:
-            target_tables = _tables(target_conn)
-            for table in selected_tables:
-                if table not in source_tables:
-                    results[table] = {"imported": 0, "skipped": 0, "reason": "در فایل مبدا وجود ندارد"}
-                    continue
-                if table not in target_tables:
-                    results[table] = {"imported": 0, "skipped": 0, "reason": "در دیتابیس مقصد وجود ندارد"}
-                    continue
-                results[table] = _import_table(source_conn, target_conn, table, filters, duplicate_mode)
-        source_conn.close()
+        with closing(connect_to(temp_path, timeout=5.0)) as source_conn:
+            source_tables = _tables(source_conn)
+            results = {}
+            with db_connection(commit=True) as target_conn:
+                target_tables = _tables(target_conn)
+                for table in selected_tables:
+                    if table not in source_tables:
+                        results[table] = {"imported": 0, "skipped": 0, "reason": "در فایل مبدا وجود ندارد"}
+                        continue
+                    if table not in target_tables:
+                        results[table] = {"imported": 0, "skipped": 0, "reason": "در دیتابیس مقصد وجود ندارد"}
+                        continue
+                    results[table] = _import_table(source_conn, target_conn, table, filters, duplicate_mode)
+        # closing closes the source file handle before deleting (Windows: otherwise WinError 32)
         os.remove(temp_path)
         session.pop("import_temp_path", None)
         total_imported = sum(r.get("imported", 0) for r in results.values())
@@ -423,6 +455,6 @@ def confirm_import():
             "results": results,
             "backup": backup_path,
         })
-    except Exception as e:
+    except Exception:
         log.exception("Import failed")
         return jsonify({"error": "خطای داخلی هنگام import رخ داد", "backup": backup_path}), 500

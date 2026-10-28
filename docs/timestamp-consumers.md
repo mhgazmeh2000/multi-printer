@@ -1,4 +1,4 @@
-# مصرف‌کنندگان timestamp و تصمیم یکسان‌سازی — فاز E.0، کار E.0.0
+# Consumers of timestamps and the unification decision — phase E.0, task E.0.0
 
 **وضعیت:** فهرستِ شناسایی (E.0.0) — **اجرا شد در فاز E.3**؛ نگاشتِ هر گروهِ
 مصرف‌کننده به تغییرِ انجام‌شده در **بخش ۷** همین سند (و جزئیات کامل در
@@ -9,7 +9,7 @@
 
 ---
 
-## خلاصه‌ی اجرایی (۵ نکته)
+## Executive summary (5 points)
 
 ۱. **پیش‌فرض نویسنده‌ها naive local است:** در کد برنامه (core+web) **۲۷ فراخوانی واقعی `add_event`** وجود دارد؛ تنها **۱** مورد timestamp صریح می‌فرستد (مسیر موتور کارتریج، `core/collectors/base.py:800`) و ۲۶ مورد دیگر مقدار پیش‌فرض `datetime.now().isoformat()` می‌گیرند (`core/database.py:658`). در تست‌ها هم ۱۸ فراخوانی دیگر همین پیش‌فرض را دارند.)
 
@@ -23,7 +23,7 @@
 
 ---
 
-## ۱. نویسنده‌ها (چه کسی و با چه فرمتی می‌نویسد)
+## 1. Writers (who writes what, and in which format)
 
 ### ۱.۱ مسیر عمومی `logs`
 
@@ -61,7 +61,7 @@
 
 ---
 
-## ۲. یافته‌ی بحرانی: `CARTRIDGE_CHANGED` مختلط است
+## 2. Critical finding: `CARTRIDGE_CHANGED` is mixed
 
 `details.detection` می‌تواند تا حدی تفکیک کند، ولی **کافی نیست**:
 
@@ -78,7 +78,7 @@
 
 ---
 
-## ۳. مصرف‌کننده‌ها (readers)
+## 3. Consumers (readers)
 
 ستون «با Z» و «با naive»: آیا مصرف‌کننده مقدار را درست می‌فهمد؟
 
@@ -152,7 +152,7 @@
 
 ---
 
-## ۴. جفت‌شدگی نویسنده/خواننده (چرا یکسان‌سازیِ فقط-writers خطرناک است)
+## 4. Writer/reader coupling (why unifying only the writers is dangerous)
 
 اگر فقط نویسنده‌ها به UTC بروند ولی خواننده‌ها دست‌نخورده بمانند:
 
@@ -169,7 +169,7 @@
 
 ---
 
-## ۵. وضعیت داده‌های واقعی (شاهد)
+## 5. State of the real data (evidence)
 
 `logs.db` مخزن (فقط با اتصال `mode=ro` خوانده شد؛ هیچ نوشتنی انجام نشد):
 
@@ -188,7 +188,7 @@
 
 ---
 
-## ۶. تصمیم نهایی (E.0.0)
+## 6. Final decision (E.0.0)
 
 > ### تصمیم: **خیر** — writers در فاز E.0 یکسان نمی‌شوند. گام E.0.14b اجرا نمی‌شود.
 
@@ -226,7 +226,7 @@
 
 ---
 
-## ۷. دستور بازتولید این فهرست
+## 7. Command to reproduce this list
 
 ```bash
 python tools/find_timestamp_consumers.py                     # خلاصه‌ی خوانا (۲۳۹ یافته)
@@ -241,7 +241,7 @@ python tools/find_timestamp_consumers.py --only W3           # فقط نویسن
 
 ---
 
-## ۷. وضعیت اجرا (فاز E.3) — هر گروه بسته شد
+## 7. Execution status (phase E.3) — each group closed
 
 | گروه (بخش ۳) | وضعیت | تغییر انجام‌شده |
 |---|---|---|

@@ -1,3 +1,11 @@
+{#
+  @file:         web/templates/security.html
+  @brief:        Admin page that shows security events and statistics.
+  @details:      Responsibilities: Render the security events table and summary cards.
+  @dependencies: template base.html
+  @notes:        None.
+#}
+
 {% extends "base.html" %}
 
 {% block title %}امنیت سیستم{% endblock %}
@@ -485,9 +493,9 @@
 
   function formatTimestamp(value) {
     if (!value) return '—';
-    // فاز E.3: API زمان را UTC با ۶ رقم میکروثانیه می‌فرستد («…123456Z»). بعضی
-    // موتورهای جاوااسکریپت بیش از ۳ رقم اعشار را نمی‌پذیرند ⇒ پیش از تجزیه،
-    // به میلی‌ثانیه کوتاه می‌شود تا رشته‌ی معتبر «Invalid Date» نشود.
+    // Phase E.3: The API sends the time in UTC with 6 microsecond digits ("...123456Z"). some
+    // JavaScript engines do not accept more than 3 decimal places ⇒ before parsing,
+    // It is shortened to milliseconds so that the valid string does not become "Invalid Date".
     const normalized = String(value).replace(/(\.\d{3})\d+/, '$1');
     const date = new Date(normalized);
     if (Number.isNaN(date.getTime())) return escapeHtml(value);

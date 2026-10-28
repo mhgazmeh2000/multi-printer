@@ -1,4 +1,4 @@
-# سرویس‌های ویندوز — `snmp_exporter` با NSSM (فاز G · گام G.4)
+# Windows services — `snmp_exporter` with NSSM (phase G · step G.4)
 
 > **مبنا:** اعداد و عبارت‌های این صفحه از خروجیِ همان session ای است که
 > `windows/install-snmp-exporter.ps1` نوشته شد (گام‌های G.4.1–G.4.3 روی `phase-c`).
@@ -8,7 +8,7 @@
 
 ---
 
-## ۱. چرا NSSM (و نه `sc.exe` یا Task Scheduler)
+## 1. Why NSSM (and not `sc.exe` or Task Scheduler)
 
 | نیازِ این فاز | `sc.exe create` | Task Scheduler | NSSM |
 |---|---|---|---|
@@ -26,7 +26,7 @@
 
 ---
 
-## ۲. پیش‌نیازها
+## 2. Prerequisites
 
 - **PowerShell 5.1 یا بالاتر** و **اجرای Elevated**: اسکریپت اولِ کار با
   `[Security.Principal.WindowsPrincipal]::IsInRole(Administrator)` چک می‌کند؛ اگر
@@ -53,7 +53,7 @@
 
 ---
 
-## ۳. اجرا
+## 3. Running
 
 ```powershell
 cd C:\PrintGuard\multi-printer
@@ -119,7 +119,7 @@ nssm start printguard-snmp-exporter
 
 ---
 
-## ۴. چک‌لیست پس از نصب
+## 4. Post-installation checklist
 
 ```powershell
 # ۱) سرویس Running و autostart است؟
@@ -157,7 +157,7 @@ nssm get printguard-snmp-exporter AppRotateBytes
 
 ---
 
-## ۵. حذف / به‌روزرسانی / بازگشت
+## 5. Removal / update / rollback
 
 ```powershell
 # توقفِ موقت (poller دست‌نخورده می‌ماند؛ دلیلش پایینِ همین بند)
@@ -183,7 +183,7 @@ powershell -ExecutionPolicy Bypass -File windows\install-snmp-exporter.ps1
 
 ---
 
-## ۶. چه چیزی سنجیده شد و چه چیزی **اجرا نشد**
+## 6. What was verified and what was **not run**
 
 **سنجیده‌شده** (بدونِ ویندوز، بدونِ pwsh): `tests/test_install_ps1.py` — ۱۳ تست.
 لایهٔ اول، parser-check است **اگر** PowerShell روی PATH باشد
@@ -205,7 +205,7 @@ PS7. `windows/install-snmp-exporter.ps1` = ۳۶۹ خط / ۱۹٬۸۷۳ بایت،
 
 ---
 
-## ۷. عیب‌یابیِ سریع
+## 7. Quick troubleshooting
 
 | نشانه | معنی / کار |
 |---|---|

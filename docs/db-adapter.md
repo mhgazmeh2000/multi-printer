@@ -1,11 +1,11 @@
-# لایه‌ی داده `core/db/` — قرارداد adapter (فاز D + dual backend در E.2)
+# Data layer `core/db/` — adapter contract (phase D + dual backend in E.2)
 
 **وضعیت:** پایدار و کامیت‌شده در فاز D (`4e99e47` + کامیت D.3).
 **دامنه:** فقط لایه‌ی اتصال. هیچ منطق دامنه، هیچ کوئری و هیچ schema‌ای تغییر نکرده است.
 
 ---
 
-## ۱. چرا adapter؟
+## 1. Why an adapter?
 
 **مسئله:** فاز E باید PostgreSQL اضافه کند. امروز کد روی **۲۸ نقطه‌ی فراخوانی
 `db_connection(...)`** در `core/` و `web/` (۱۷ مورد با `commit=True`) و همچنین
@@ -32,7 +32,7 @@
 
 ---
 
-## ۲. قرارداد `ConnectionAdapter`
+## 2. The `ConnectionAdapter` contract
 
 فایل: `core/db/connection.py`
 
@@ -81,7 +81,7 @@ for r in conn.execute("SELECT ..."): ...                           # iteration
 
 ---
 
-## ۳. تفاوت‌های SQLite / PostgreSQL (نقشه‌ی فاز E)
+## 3. Differences between SQLite and PostgreSQL (phase E map)
 
 | موضوع | SQLite (امروز) | PostgreSQL (فاز E) | وضعیت پس از E.2 |
 |---|---|---|---|
@@ -109,7 +109,7 @@ for r in conn.execute("SELECT ..."): ...                           # iteration
 
 ---
 
-## ۴. نحوه‌ی monkeypatch / تعویض مسیر دیتابیس
+## 4. How to monkeypatch / switch the database path
 
 ۱. **`core.db` مسیر را در زمان import بایند نمی‌کند.**
    `core.db.connection.default_db_path()` هر بار `config.settings.DB_PATH` را
@@ -145,7 +145,7 @@ for r in conn.execute("SELECT ..."): ...                           # iteration
 
 ---
 
-## ۵. چیزهایی که adapter **انجام نمی‌دهد** (فاز E)
+## 5. What the adapter **does not do** (phase E)
 
 این‌ها عمداً دست‌نخورده ماندند تا تغییر رفتاری رخ ندهد:
 
@@ -164,7 +164,7 @@ for r in conn.execute("SELECT ..."): ...                           # iteration
 
 ---
 
-## ۶. Dual backend — وضعیت پس از E.2 (اندازه‌گیری‌شده)
+## 6. Dual backend — status after E.2 (measured)
 
 ### ۶.۱ انتخاب backend و نشانی
 
@@ -226,7 +226,7 @@ python tools\test_dual_backend.py --backend sqlite                # بدون ن�
 
 ---
 
-## ۷. وضعیت پذیرش فاز D
+## 7. Phase D acceptance status
 
 | معیار | نتیجه |
 |---|---|
@@ -238,7 +238,7 @@ python tools\test_dual_backend.py --backend sqlite                # بدون ن�
 
 ---
 
-## ۸. هِلپرهای backend-aware روی SQL (E.4.9 / E.4.5 / E.5)
+## 8. Backend-aware helpers for SQL (E.4.9 / E.4.5 / E.5)
 
 این چهار هِلپر تنها نقاطی هستند که «نحوِ متفاوت دو backend» را می‌پوشانند؛ هیچ‌کدام
 منطق دامنه را دست نمی‌زنند و هیچ fallback بی‌صدایی ندارند.

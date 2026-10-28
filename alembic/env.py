@@ -1,29 +1,43 @@
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         alembic/env.py
+# @brief:        Alembic environment: resolves the target DB URL (SQLite or PostgreSQL) and runs
+#                migrations.
+# @details:      Responsibilities: Choose backend and DSN, mask secrets, configure Alembic
+#                online/offline migration runs.
+#                Main API: ConfigurationError, mask_dsn(), resolve_backend(), sqlite_url(),
+#                get_url(), run_migrations_offline(), run_migrations_online()
+#                Side effects: database access, network I/O
+# @dependencies: internal: alembic, config.settings, core.db.connection | external: sqlalchemy
+# @notes:        Targets PostgreSQL when DB_BACKEND=postgresql; otherwise uses the local SQLite
+#                file.
+# =============================================================================
+
 """
-alembic/env.py — پیکربندی Alembic برای پروژه‌ی PrintGuard (فاز E.1).
+alembic/env.py — Alembic configuration for the PrintGuard project (Phase E.1).
 
-دو backend، یک مجموعه migration
+Two backends, one migration set
 -------------------------------
-Migrationها **دست‌نویس** هستند (بدون ORM؛ `target_metadata = None`) و باید روی هر دو
-دیتابیس اجرا شوند:
+Migrations are **handwritten** (no ORM; `target_metadata = None`) and must be on both
+Run the database:
 
-  • `DB_BACKEND=sqlite` (پیش‌فرض، همان وضعیت امروزِ برنامه) ⇒ مسیر از `config.settings.DB_PATH`
-  • `DB_BACKEND=postgresql` ⇒ نشانی از `PG_DSN`
+  • `DB_BACKEND=sqlite` (default, the same as the current state of the application) ⇒ path from `config.settings.DB_PATH`
+  • `DB_BACKEND=postgresql` ⇒ address of `PG_DSN`
 
-قاعده‌ی طلایی: **fallback بی‌صدا وجود ندارد.** اگر backend روی postgresql باشد و `PG_DSN`
-خالی باشد، اجرا با خطای صریح متوقف می‌شود؛ چون اجرای migration روی دیتابیس اشتباه
-خطرناک‌تر از بالا نیامدن است (همان قاعده‌ای که `core/db/connection.resolve_backend` دارد).
+Golden rule: **There is no silent fallback.** If the backend is on postgresql and `PG_DSN'
+is empty, execution stops with an explicit error; Because running the migration on the wrong database
+It is more dangerous than not coming up (the same rule as `core/db/connection.resolve_backend`).
 
-نکته‌ی مسیر SQLite
+Note the SQLite path
 -------------------
-مسیر نسبیِ `DB_PATH` (پیش‌فرض `logs.db`) نسبت به **ریشه‌ی پروژه** مطلق می‌شود، نه نسبت به
-پوشه‌ی جاری؛ تا اجرای alembic از هر جایی، همان فایل موردنظر برنامه را ببیند و فایل
-خالیِ ناخواسته ساخته نشود.
+The relative path of `DB_PATH` (default `logs.db`) is absolute relative to **project root**, not relative to
+current folder; To run alembic from anywhere, it will see the desired file of the program and the file
+Don't make unwanted blanks.
 
-قلاب override (فقط برای آزمون/سناریوهای ویژه)
+Override hook (only for test/special scenarios)
 ---------------------------------------------
-`ALEMBIC_DB_URL` در محیط، کل تشخیص را دور می‌زند (مثلاً برای اجرای migration روی یک کپی
-موقت: `ALEMBIC_DB_URL=sqlite:////tmp/copy.db`). هنگام استفاده، هشدار چاپ می‌شود.
+`ALEMBIC_DB_URL' in the environment bypasses the entire detection (e.g. to run a migration on a copy
+temporary: `ALEMBIC_DB_URL=sqlite://///tmp/copy.db`). When used, a warning is printed.
 """
 
 from __future__ import annotations
@@ -38,32 +52,23 @@ from sqlalchemy import engine_from_config, event, pool
 from alembic import context
 
 # ─────────────────────────────────────────────────────────────
-# مسیرها و import پروژه
+# Routes and project import
 # ─────────────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-
-# بارگذاری خودکار متغیرهای .env در صورت وجود
-env_file = PROJECT_ROOT / ".env"
-if env_file.is_file():
-    try:
-        from dotenv import load_dotenv
-        load_dotenv(dotenv_path=env_file, override=False)
-    except ImportError:
-        pass
 
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-#: بدون ORM: هیچ MetaDataای برای autogenerate وجود ندارد؛ migrationها دست‌نویس‌اند.
+#: No ORM: No MetaData to autogenerate; Migrations are handwritten.
 target_metadata = None
 
 BACKEND_SQLITE = "sqlite"
 BACKEND_POSTGRESQL = "postgresql"
-#: همان نام‌های جایگزینی که لایه‌ی داده‌ی برنامه می‌شناسد (`core/db/connection.py`).
+#: the same alternative names that the data layer of the application knows (`core/db/connection.py`).
 BACKEND_ALIASES = {"postgres": BACKEND_POSTGRESQL, "pg": BACKEND_POSTGRESQL}
 ENV_DB_BACKEND = "DB_BACKEND"
 ENV_PG_DSN = "PG_DSN"
@@ -71,11 +76,11 @@ ENV_OVERRIDE_URL = "ALEMBIC_DB_URL"
 
 
 class ConfigurationError(RuntimeError):
-    """پیکربندی محیط برای migration ناقص یا متناقض است."""
+    """The environment configuration for migration is incomplete or inconsistent."""
 
 
 def mask_dsn(dsn: str) -> str:
-    """رمز را از DSN حذف می‌کند (هیچ‌وقت رمز چاپ نشود)."""
+    """Removes the password from the DSN (never print the password)."""
     out = []
     for token in str(dsn).split():
         out.append("password=***" if token.lower().startswith("password=") else token)
@@ -83,7 +88,7 @@ def mask_dsn(dsn: str) -> str:
 
 
 def resolve_backend(value: str | None = None) -> str:
-    """backend را از پارامتر/`DB_BACKEND` تعیین می‌کند (خالی ⇒ sqlite)."""
+    """Specifies the backend from the /`DB_BACKEND` parameter (empty ⇒ sqlite)."""
     raw = (value if value is not None else os.getenv(ENV_DB_BACKEND, "")) or ""
     backend = raw.strip().lower()
     backend = BACKEND_ALIASES.get(backend, backend)
@@ -97,8 +102,8 @@ def resolve_backend(value: str | None = None) -> str:
 
 
 def sqlite_url() -> str:
-    """URL کامل SQLite از `config.settings.DB_PATH` (نسبی ⇒ نسبت به ریشه‌ی پروژه)."""
-    from config.settings import DB_PATH  # noqa: PLC0415 — مطابق قرارداد پروژه
+    """Full SQLite URL from `config.settings.DB_PATH` (relative ⇒ to project root)."""
+    from config.settings import DB_PATH  # noqa: PLC0415 — according to the project contract
 
     path = Path(DB_PATH)
     if not path.is_absolute():
@@ -107,10 +112,10 @@ def sqlite_url() -> str:
 
 
 def get_url() -> str:
-    """نشانی دیتابیس مقصد برای migration (بدون fallback بی‌صدا)."""
+    """Destination database address for migration (without silent fallback)."""
     override = os.getenv(ENV_OVERRIDE_URL, "").strip()
     if override:
-        # تضمین استفاده از psycopg v3 (postgresql+psycopg://) به جای psycopg2
+        # Guaranteed to use psycopg v3 (postgresql+psycopg://) instead of psycopg2
         if "://" not in override:
             override = "postgresql+psycopg://" + _dsn_to_url(override)
         elif override.startswith("postgresql://"):
@@ -138,12 +143,12 @@ def get_url() -> str:
 
 
 def _dsn_to_url(dsn: str) -> str:
-    """DSN به سبک libpq (`host=... dbname=...`) را به بخشِ بعد از `://` تبدیل می‌کند.
+    """Converts a libpq-style DSN (`host=... dbname=...`) to the part after `://`.
 
-    پشتیبانی: کلیدهای رایج libpq + فرم URI (`postgresql://...`) که دست‌نخورده رد می‌شود.
+    Support: common libpq keys + URI form (`postgresql://...`) which is passed intact.
     """
     if "://" in dsn:
-        # از قبل URI است (مثل postgresql://user:pass@host/db)
+        # is already a URI (like postgresql://user:pass@host/db)
         return dsn.split("://", 1)[1]
 
     from core.db.connection import _tokenize_conninfo
@@ -163,7 +168,7 @@ def _dsn_to_url(dsn: str) -> str:
 
     auth = ""
     if user:
-        from urllib.parse import quote  # noqa: PLC0415 — فقط برای escape رمز/کاربر
+        from urllib.parse import quote  # noqa: PLC0415 — only for password/user escape
         auth = quote(user, safe="")
         if password:
             auth += ":" + quote(password, safe="")
@@ -182,19 +187,21 @@ def _dsn_to_url(dsn: str) -> str:
 
 
 def _is_sqlite(url: str) -> bool:
+    """Return True when the Alembic target URL points to SQLite."""
     return url.startswith("sqlite")
 
 
 def _install_sqlite_pragmas(engine) -> None:
-    """`PRAGMA foreign_keys=ON` را روی هر اتصال تازه اعمال می‌کند.
+    """Applies `PRAGMA foreign_keys=ON` to every new connection.
 
-    چرا event و نه اجرای دستور در بدنه؟ اجرای PRAGMA روی `Connection` باعث
-    autobegin (باز شدن تراکنش سطح SQLAlchemy) می‌شود و همان چیزی است که در E.1.4
-    باعث شد سطر `alembic_version` گم شود؛ اینجا PRAGMA در لایه‌ی DBAPI و پیش از هر
-    تراکنشی اجرا می‌شود.
+    Why event and not command execution in the body? Running PRAGMA on `Connection` causes
+    becomes autobegin (open SQLAlchemy level transaction) and is the same as in E.1.4
+    caused the `alembic_version' line to be missing; Here PRAGMA in the DBAPI layer and before any
+    A transaction is executed.
     """
     @event.listens_for(engine, "connect")
-    def _set_sqlite_pragma(dbapi_connection, _connection_record):  # pragma: no cover - رویداد
+    def _set_sqlite_pragma(dbapi_connection, _connection_record):  # pragma: no cover - event
+        """Apply SQLite connection pragmas on each new DB-API connection."""
         cursor = dbapi_connection.cursor()
         try:
             cursor.execute("PRAGMA foreign_keys=ON")
@@ -203,12 +210,12 @@ def _install_sqlite_pragmas(engine) -> None:
 
 
 def _configure(connection=None, url: str | None = None) -> None:
-    """پیکربندی مشترک online/offline (با تنظیمات مناسب هر dialect)."""
+    """Common online/offline configuration (with appropriate settings for each dialect)."""
     opts = {
         "target_metadata": target_metadata,
-        # مقایسه‌ی نوع ستون‌ها در autogenerate (فازهای بعدی که migration تولید می‌کنند).
+        # Comparing the type of columns in autogenerate (later phases that generate migration).
         "compare_type": True,
-        # روی SQLite هر ALTER باید به‌صورت batch (بازسازی جدول) اجرا شود.
+        # On SQLite, every ALTER must be executed as a batch (table reconstruction).
         "render_as_batch": True,
         "include_schemas": False,
     }
@@ -220,16 +227,16 @@ def _configure(connection=None, url: str | None = None) -> None:
 
 
 def run_migrations_offline() -> None:
-    """حالت offline: فقط SQL تولید می‌شود (بدون اتصال)."""
+    """Offline mode: only SQL is generated (no connection)."""
     _configure(url=get_url())
     with context.begin_transaction():
         context.run_migrations()
 
 
 def run_migrations_online() -> None:
-    """حالت online: اتصال واقعی و اجرای migrationها."""
+    """online mode: real connection and execution of migrations."""
     url = get_url()
-    # مقداردهی از کد (نه از alembic.ini): `%` در رمز/URL باید escape شود.
+    # Initialization from code (not from alembic.ini): `%` in password/URL must be escaped.
     config.set_main_option("sqlalchemy.url", url.replace("%", "%%"))
 
     section = config.get_section(config.config_ini_section, {})
@@ -237,8 +244,8 @@ def run_migrations_online() -> None:
                                      poolclass=pool.NullPool)
 
     if _is_sqlite(url):
-        # روی SQLite، foreign key enforcement پیش‌فرض خاموش است؛ برای migration
-        # آیندهٔ این پروژه (که FK ندارد ولی قابل افزودن است) روشنش می‌کنیم.
+        # On SQLite, foreign key enforcement is off by default; for migration
+        # We will clarify the future of this project (which does not have FK but can be added).
         _install_sqlite_pragmas(connectable)
 
     with connectable.connect() as connection:
@@ -246,14 +253,14 @@ def run_migrations_online() -> None:
         with context.begin_transaction():
             context.run_migrations()
 
-        # ⚠ هشدار اندازه‌گیری‌شده (E.1.4): روی SQLite، alembic `transactional_ddl=False`
-        # می‌بیند و برای «تراکنش بیرونی» فقط nullcontext برمی‌گرداند؛ در نتیجه تراکنش
-        # سطح SQLAlchemy در پایان باز می‌ماند و `Connection.close()` آن را **rollback**
-        # می‌کند. DDL به‌خاطر رفتار implicit-commit درایور sqlite3 باقی می‌ماند، ولی سطر
-        # `alembic_version` (که DML است) **گم می‌شد**: جدول‌ها ساخته می‌شدند و نسخه
-        # ثبت نمی‌شد (اثبات: alembic_version خالی و `alembic current` بی‌خروجی).
-        # این commit صریح مشکل را می‌بندد و روی PostgreSQL (که transactional_ddl دارد)
-        # بی‌اثر است، چون آنجا تراکنش پیش از این بسته شده است.
+        # ⚠ Measured warning (E.1.4): on SQLite, alembic `transactional_ddl=False`
+        # sees and only returns nullcontext for "outer transaction"; As a result of the transaction
+        # The SQLAlchemy level remains open at the end, and `Connection.close()` will **rollback** it.
+        # does The DDL remains because of the implicit-commit behavior of the sqlite3 driver, but the line
+        # `alembic_version' (which is DML) **would be lost**: tables would be created and the version
+        # It was not registered (proof: alembic_version is empty and `alembic current` has no output).
+        # This explicit commit closes the issue and on PostgreSQL (which has transactional_ddl)
+        # It is ineffective, because there the transaction has already been closed.
         if connection.in_transaction():
             connection.commit()
 

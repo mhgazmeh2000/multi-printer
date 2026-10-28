@@ -1,25 +1,39 @@
+# =============================================================================
+# @file:         web/routes/discover.py
+# @brief:        API endpoint that discovers printers on the network.
+# @details:      Responsibilities: Run discovery and return the found devices.
+#                Main API: api_discover()
+#                Side effects: network I/O, starts threads, defines HTTP routes
+# @dependencies: internal: core.snmp.protocol | external: flask
+# @notes:        None.
+# =============================================================================
+
+"""Network discovery API routes."""
+
+import logging
 import re
 import threading
-import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from flask import Blueprint, jsonify, request
+
 from core.snmp.protocol import snmp_get
 
 bp = Blueprint("discover", __name__)
 log = logging.getLogger("PrinterMonitor")
 
 _SUBNET_RE = re.compile(r"^\d{1,3}\.\d{1,3}\.\d{1,3}$")
-_MAX_TOTAL_IPS = 512          # سقف کلی آدرس‌های اسکن در یک درخواست
-_MAX_RANGE_SIZE = 254         # سقف هر بازه
+_MAX_TOTAL_IPS = 512          # Total limit of scan addresses in one request
+_MAX_RANGE_SIZE = 254         # The ceiling of each span
 
 _FULL_IP_RE = re.compile(r"^(\d{1,3}\.\d{1,3}\.\d{1,3})\.\d{1,3}$")
 
 
 def _normalize_subnet(raw: str) -> str:
-    """نرمال‌سازی ورودی کاربر قبل از اعتبارسنجی (رفع 400 رایج در UI):
-    - فاصله و نقطه‌ی احتمالی آخر حذف می‌شود («172.16.25.» ← «172.16.25»)
-    - اگر کاربر IP کامل ۴بخشی وارد کرد («172.16.25.54») به subnet سه‌بخشی (/24) تبدیل می‌شود
-    اعتبارسنجی امنیتی (_is_valid_subnet) بعد از نرمال‌سازی و بدون تغییر اعمال می‌شود."""
+    """Normalization of user input before validation (Fix common 400 in UI):
+    - The distance and the last possible point are removed ("172.16.25" → "172.16.25")
+    - If the user enters a full 4-part IP ("172.16.25.54"), it will be converted to a 3-part subnet (/24)
+    The security validation (_is_valid_subnet) is applied unchanged after normalization."""
     s = str(raw or "").strip().rstrip(".")
     m = _FULL_IP_RE.match(s)
     if m:
@@ -28,7 +42,7 @@ def _normalize_subnet(raw: str) -> str:
 
 
 def _is_valid_subnet(subnet: str) -> bool:
-    """اعتبارسنجی subnet سه‌بخشی (مثل 172.16.25) — جلوگیری از اسکن دلخواه/مخرب."""
+    """3-part subnet validation (eg 172.16.25) — prevent arbitrary/malicious scanning."""
     if not subnet or not _SUBNET_RE.match(subnet):
         return False
     try:
@@ -52,13 +66,13 @@ FALLBACK_COMMUNITIES = ["public", "private", "TOSHIBA", "toshiba"]
 
 
 def _try_snmp(ip, oid, comm, timeout=0.5):
-    """تلاش با v2c، در صورت شکست و فقط برای PRIMARY_OID با v1 مجدد تلاش کن"""
-    # 1. ابتدا v2c
+    """Try with v2c, retry with v1 if failed and only for PRIMARY_OID"""
+    # 1. v2c first
     val = snmp_get(ip, oid, comm, timeout=timeout, version=2)
     if val and str(val) not in ("N/A", "None", ""):
         return val, "v2c"
 
-    # 2. در صورت عدم پاسخ و فقط برای OID اصلی، fallback به v1
+    # 2. If there is no response and only for the original OID, fallback to v1
     if oid == PRIMARY_OID:
         val = snmp_get(ip, oid, comm, timeout=timeout, version=1)
         if val and str(val) not in ("N/A", "None", ""):
@@ -69,6 +83,8 @@ def _try_snmp(ip, oid, comm, timeout=0.5):
 
 @bp.route('/api/printers/discover', methods=['POST'])
 def api_discover():
+    """Probe the requested addresses for SNMP printers and return the ones that answer."""
+
     body      = request.get_json() or {}
     community = str(body.get("community", "public") or "public")[:32]
     ranges    = body.get("ranges")
@@ -83,7 +99,7 @@ def api_discover():
     if not isinstance(ranges, list) or not ranges:
         return jsonify({"error": "ranges نامعتبر است"}), 400
 
-    # 🔒 اعتبارسنجی ورودی‌ها + سقف تعداد آدرس‌های قابل اسکن (جلوگیری از سوءاستفاده)
+    # 🔒 Validation of entries + limit on the number of addresses that can be scanned (to prevent abuse)
     normalized_ranges = []
     total_ips = 0
     for rng in ranges:
@@ -112,6 +128,7 @@ def api_discover():
     lock  = threading.Lock()
 
     def probe(ip):
+        """Probe one IP with the SNMP communities until one of them responds."""
         communities = [community] + [c for c in FALLBACK_COMMUNITIES if c != community]
 
         for comm in communities:
@@ -130,7 +147,7 @@ def api_discover():
                     })
                 return
 
-        # مرحله ۲: OIDهای اختصاصی برند (فقط v2c)
+        # Step 2: Brand Specific OIDs (v2c only)
         for oid in SECONDARY_OIDS:
             for version in (2, 1):
                 val = snmp_get(ip, oid, community, timeout=0.5, version=version)

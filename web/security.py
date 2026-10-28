@@ -1,12 +1,24 @@
+# =============================================================================
+# @file:         web/security.py
+# @brief:        Central security configuration for the Flask app: rate limiting, CSRF and headers.
+# @details:      Responsibilities: Initialise Flask-Limiter, Flask-WTF CSRF and security headers.
+#                Main API: init_security()
+#                Side effects: none at import time
+# @dependencies: internal: config | external: flask, flask_limiter, flask_wtf
+# @notes:        Rate limits and CSRF are configured here. Check the Flask-Limiter storage backend
+#                when running several workers.
+# =============================================================================
+
 """
-ماژول متمرکز برای پیکربندی‌های امنیتی Flask:
+Centralized module for Flask security configurations:
 - Rate Limiting (Flask-Limiter)
 - CSRF Protection (Flask-WTF)
 - Security Headers (CSP, X-Frame-Options, ...)
 """
 
 import logging
-from flask import jsonify, request, current_app
+
+from flask import jsonify, request
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import CSRFProtect, CSRFError
@@ -16,15 +28,15 @@ from config import settings
 log = logging.getLogger("PrinterMonitor")
 
 # ─── Rate Limiter ────────────────────────────────────────────────
-# پیش‌فرض: ۲۰۰ درخواست در ساعت برای همه endpointها (سراسری)
-# برای endpointهای حساس مثل login/register/forgot-password محدودیت سخت‌گیرانه‌تری اعمال می‌شود
-# (با @limiter.limit("...") decorator).
+# Default: 200 requests per hour for all endpoints (overall)
+# For sensitive endpoints such as login/register/forgot-password, stricter restrictions are applied
+# (with @limiter.limit("...") decorator).
 limiter = Limiter(
-    key_func=get_remote_address,  # شناسایی کاربر بر اساس IP
+    key_func=get_remote_address,  # User identification based on IP
     default_limits=["1000 per hour"],
-    storage_uri="memory://",  # برای production توصیه می‌شود redis://localhost:6379
+    storage_uri="memory://",  # For production, redis://localhost:6379 is recommended
     strategy="fixed-window",
-    headers_enabled=True,  # اضافه کردن X-RateLimit-* headers به پاسخ
+    headers_enabled=True,  # Add X-RateLimit-* headers to the response
 )
 
 
@@ -34,27 +46,27 @@ csrf = CSRFProtect()
 
 # ─── Security Headers ────────────────────────────────────────────
 def _security_headers(response):
-    """اضافه کردن header های امنیتی به همه پاسخ‌ها."""
-    # جلوگیری از clickjacking
+    """Add security headers to all responses."""
+    # Prevent clickjacking
     response.headers.setdefault("X-Frame-Options", "DENY")
-    # جلوگیری از MIME-type sniffing
+    # Prevent MIME-type sniffing
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
-    # Referrer policy: فقط origin بفرستد (نه full URL)
+    # Referrer policy: send only origin (not full URL)
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
-    # Permissions policy: غیرفعال کردن feature های غیرضروری
+    # Permissions policy: disabling unnecessary features
     response.headers.setdefault(
         "Permissions-Policy",
         "geolocation=(), microphone=(), camera=(), payment=()",
     )
-    # HSTS فقط در production و فقط روی HTTPS
+    # HSTS only in production and only on HTTPS
     if settings.ENVIRONMENT == "production" and request.is_secure:
         response.headers.setdefault(
             "Strict-Transport-Security",
             "max-age=31536000; includeSubDomains",
         )
     # Content-Security-Policy:
-    # نکته: چون از Google reCAPTCHA و Chart.js استفاده می‌شود، باید CDN ها را whitelist کنیم.
-    # 'unsafe-inline' برای style ها در ابتدا لازم است (تا حذف inline styles شود)
+    # Note: Because Google reCAPTCHA and Chart.js are used, we need to whitelist CDNs.
+    # 'unsafe-inline' is required for styles at first (to remove inline styles)
     if "Content-Security-Policy" not in response.headers:
         csp_parts = [
             "default-src 'self'",
@@ -73,29 +85,30 @@ def _security_headers(response):
 
 
 def init_security(app):
-    """راه‌اندازی همه ابزارهای امنیتی روی Flask app."""
+    """Setting up all security tools on Flask app."""
     # Rate limiter
     limiter.init_app(app)
 
     # CSRF protection
-    # فعال‌سازی محافظت CSRF فقط روی فرم‌های HTML (POST/PUT/DELETE/PATCH)
-    # برای endpointهای JSON API (که با X-CSRFToken header کار می‌کنند) باید جداگانه exempt کرد یا token استفاده کرد
+    # Enable CSRF protection only on HTML forms (POST/PUT/DELETE/PATCH)
+    # For JSON API endpoints (which work with X-CSRFToken header) it is necessary to exempt or use token separately
     csrf.init_app(app)
 
-    # تنظیم مدت اعتبار CSRF token (پیش‌فرض ۱۲ ساعت)
-    # داشبورد یک صفحه long-lived است (ساعت‌ها باز می‌ماند)؛ با مقدار ۳۶۰۰ ثانیه
-    # همه دکمه‌های POST بعد از یک ساعت با 400 می‌مردند. توکن تازه هم از
-    # /api/status به‌صورت سایلنت تزریق می‌شود و apiFetch روی انقضا retry می‌کند.
+    # Setting the CSRF token validity period (default 12 hours)
+    # The dashboard is a long-lived page (it stays open for hours); with a value of 3600 seconds
+    # All POST buttons were dying with 400 after an hour. New token from
+    # /api/status is silently injected and apiFetch retries on expiration.
     app.config.setdefault("WTF_CSRF_TIME_LIMIT", 43200)
     app.config.setdefault("WTF_CSRF_SSL_STRICT", settings.ENVIRONMENT == "production")
 
-    # مدیریت خطای CSRF (پاسخ JSON برای API، redirect برای HTML)
+    # CSRF error handling (JSON response for API, redirect for HTML)
     @app.errorhandler(CSRFError)
     def handle_csrf_error(e):
+        """Return a JSON error response for a CSRF failure."""
         log.warning("CSRF error from %s: %s", request.remote_addr, e.description)
         if request.path.startswith("/api/") or request.is_json:
             return jsonify({"error": "csrf_token_invalid", "message": e.description}), 400
-        # برای فرم‌های HTML: پیام واضح
+        # For HTML forms: clear message
         return jsonify({
             "error": "csrf_token_invalid",
             "message": "Session منقضی شده است. لطفاً صفحه را تازه کنید و دوباره تلاش کنید.",
@@ -104,9 +117,10 @@ def init_security(app):
     # Security Headers
     app.after_request(_security_headers)
 
-    # مدیریت خطای rate limit
+    # Rate limit error management
     @app.errorhandler(429)
     def ratelimit_handler(e):
+        """Return a 429 response when the rate limit is exceeded."""
         retry_after = getattr(e, "retry_after", None)
         log.warning(
             "Rate limit exceeded for %s on %s (retry_after=%s)",

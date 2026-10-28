@@ -1,3 +1,11 @@
+{#
+  @file:         web/templates/users.html
+  @brief:        Admin page for managing users, roles and office access.
+  @details:      Responsibilities: Render the users table, forms and the settings panel.
+  @dependencies: template base.html
+  @notes:        None.
+#}
+
 {% extends "base.html" %}
 
 {% block title %}مدیریت کاربران{% endblock %}
@@ -320,10 +328,10 @@ if (typeof window.toast !== 'function') {
   };
 }
 
-// ✅ فیکس ReferenceError در پنل تنظیمات سیستم: کد ماژول showToast(...) را صدا
-// می‌زد ولی فقط window.toast تعریف شده بود. آداپتور زیر همان نام را روی همان
-// toast سراسری صفحه می‌نشاند و نوع متنی را به کلاس CSS صحیح (s/e/w) نگاشت
-// می‌کند — دقیقاً همان استایل toast داشبورد (المان #toast موجود در این صفحه).
+// ✅ Fix ReferenceError in the system settings panel: call the showToast(...) module code
+// but only window.toast was defined. Adapter under the same name on the same
+// global toast sets the page and maps the text type to the correct CSS class (s/e/w).
+// does — exactly the same style as the dashboard toast (the #toast element on this page).
 function showToast(message, type) {
   const clsMap = { success: 's', error: 'e', warning: 'w', warn: 'w', info: '' };
   toast(message, clsMap[type] || type || '');

@@ -1,40 +1,52 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tools/check_cutover_readiness.py
+# @brief:        Read-only readiness checker for the PostgreSQL cutover (phase E.7.2).
+# @details:      Responsibilities: Run the checks and print a go/no-go verdict.
+#                Main API: paint(), Result, ok(), warn(), fail(), skipped(), parse_dsn(), mask()
+#                (+17 more)
+#                Side effects: database access, network I/O, runs external processes, file I/O
+# @dependencies: external: psycopg
+# @notes:        Reads environment variables: NO_COLOR, PGDATABASE, PGHOST, PGPASSWORD, PGPORT,
+#                PGUSER, PG_DSN, PRINTGUARD_FORCE_COLOR. Can be run directly as a script.
+# =============================================================================
+
 """
-tools/check_cutover_readiness.py — سنجش **آمادگی** cutover (فاز E.7.2).
+tools/check_cutover_readiness.py — cutover **readiness** test (phase E.7.2).
 
-چرا این ابزار هست؟
+Why is this tool?
 ------------------
-`docs/cutover-runbook.md` ده گامِ روز اجرا را با «گیت» تعریف می‌کند. نیمی از آن گیت‌ها
-قابل ماشین‌سازی‌اند؛ این ابزار همان نیمه را در یک اجرا بررسی می‌کند و رنگی گزارش می‌دهد،
-تا هیچ cutoverی با پیش‌نیازِ ناکامل شروع نشود. **این ابزار چیزی را تغییر نمی‌دهد** —
-همه‌ی اتصال‌ها فقط‌خواندنی‌اند و تنها نوشتن، گزارش `--out` است (اگر خواسته شود).
+`docs/cutover-runbook.md` defines the ten steps of the day of execution with ``gate''. Half of those gates
+can be machined; This tool examines the same half in one run and reports color,
+so that no cutover starts with an incomplete prerequisite. **This tool does not change anything** —
+All connections are read-only, and the only write is the `--out' log (if requested).
 
-نه سنجه (به همان ترتیبِ خواسته‌شده):
-    ۱) پایتون ≥ ۳٫۱۰
-    ۲) درایور `psycopg` نصب باشد
-    ۳) سرویس PostgreSQL در دسترس باشد (pg_isready یا سوکت)
-    ۴) DSN واقعاً کار کند (SELECT 1)
-    ۵) `alembic head` روی PG = سرشاخه‌ی مخزن (امروز `0004`)
-    ۶) `PRAGMA integrity_check` روی logs.db
-    ۷) timestampها UTC-Z باشند (از راه `tools/analyze_old_events.py`)
-    ۸) فضای دیسک برای بکاپ‌ها کافی باشد
-    ۹) پورت PG (پیش‌فرض ۵۴۳۲) باز باشد
+Nine gauges (in the same order as requested):
+    1) Python ≥ 3.10
+    2) The `psycopg' driver must be installed
+    3) PostgreSQL service is available (pg_isready or socket)
+    4) DSN really works (SELECT 1)
+    5) ``alembic head'' on PG = tank branch (today `0004`)
+    6) `PRAGMA integrity_check` on logs.db
+    7) Timestamps should be UTC-Z (via `tools/analyze_old_events.py`)
+    8) Disk space is sufficient for backups
+    9) PG port (default 5432) should be open
 
-کد خروج:
-    0 = آماده (هیچ blocker و هیچ هشداری نیست)
-    1 = **مسدود**: حداقل یک سنجهٔ قرمز ⇒ cutover مجاز نیست
-    2 = فقط هشدار (زرد) ⇒ اجرا با «اقدام انسانی» ثبت‌شده مجاز است
-  با `--strict` هشدارها هم قرمز می‌شوند (خروجی ۱).
+Exit code:
+    0 = ready (no blocker and no warning)
+    1 = **blocked**: at least one red gauge ⇒ cutover not allowed
+    2 = warning only (yellow) ⇒ execution is allowed with registered "human action".
+  With `--strict' the warnings are also red (output 1).
 
-نشانی اتصال (به همین ترتیب اولویت):
-    ۱) `--dsn`  ۲) متغیر محیطی `PG_DSN`  ۳) متغیرهای libpq (`PGHOST`/`PGPORT`/…)
+Connection address (in order of priority):
+    1) `--dsn` 2) environment variable `PG_DSN` 3) libpq variables (`PGHOST`/`PGPORT`/...)
 
-نمونه:
+Example:
     python tools/check_cutover_readiness.py
     python tools/check_cutover_readiness.py --db D:\\printguard\\logs.db --out D:\\pgbackup\\ready.json
-    python tools/check_cutover_readiness.py --skip-pg          # روی ماشینِ بدون PG
-    python tools/check_cutover_readiness.py --self-test        # بدون شبکه، فقط منطق داخلی
+    python tools/check_cutover_readiness.py --skip-pg # On machine without PG
+    python tools/check_cutover_readiness.py --self-test # No network, just internal logic
 """
 
 from __future__ import annotations
@@ -63,7 +75,7 @@ EXIT_WARN = 2
 MIN_PYTHON: Tuple[int, int] = (3, 10)
 DEFAULT_PORT = 5432
 
-#: چند برابر اندازهٔ `logs.db` باید فضای آزاد باشد (بکاپ SQLite + dump PG + دیتای PG).
+#: How many times the size of `logs.db` should be free space (SQLite backup + PG dump + PG data).
 DISK_FACTOR_BLOCK = 2.0
 DISK_FACTOR_WARN = 4.0
 
@@ -71,9 +83,9 @@ STATUS_ORDER = ("ok", "skip", "warn", "fail")
 MARK = {"ok": "✔", "skip": "–", "warn": "!", "fail": "✘"}
 
 
-# ─────────────────────────────── خروجی رنگی ───────────────────────────────
+# Color output
 def _color_enabled(force: Optional[bool]) -> bool:
-    """رنگ فقط وقتی روشن می‌شود که ترمینال آن را پشتیبانی کند (در پایپ/CI خاموش)."""
+    """The color is only lit when the terminal supports it (on pipe/CI off)."""
     if force is not None:
         return force
     if os.environ.get("NO_COLOR"):
@@ -84,6 +96,8 @@ def _color_enabled(force: Optional[bool]) -> bool:
 
 
 def paint(text: str, status: str, enabled: bool) -> str:
+    """Colour a text for the terminal according to its status, when colour is enabled."""
+
     if not enabled:
         return text
     codes = {"ok": "32", "warn": "33", "fail": "31", "skip": "90"}
@@ -92,34 +106,45 @@ def paint(text: str, status: str, enabled: bool) -> str:
 
 
 class Result(dict):
-    """یک ردیف چک‌لیست: `key`/`label`/`status`/`detail`/`action`."""
+    """A checklist row: `key`/`label`/`status`/`detail`/`action`."""
 
     def __init__(self, key: str, label: str, status: str, detail: str = "",
                  action: str = "") -> None:
+        """Create a check result with its key, label, status, detail and suggested action."""
         super().__init__(key=key, label=label, status=status, detail=detail, action=action)
 
     @property
     def status(self) -> str:
+        """Status of this check: ok, warn, fail or skip."""
+
         return self["status"]
 
 
 def ok(key: str, label: str, detail: str = "") -> Result:
+    """Build a passing check result."""
+
     return Result(key, label, "ok", detail)
 
 
 def warn(key: str, label: str, detail: str = "", action: str = "") -> Result:
+    """Build a warning check result."""
+
     return Result(key, label, "warn", detail, action)
 
 
 def fail(key: str, label: str, detail: str = "", action: str = "") -> Result:
+    """Build a failing check result."""
+
     return Result(key, label, "fail", detail, action)
 
 
 def skipped(key: str, label: str, detail: str = "") -> Result:
+    """Build a skipped check result."""
+
     return Result(key, label, "skip", detail)
 
 
-# ─────────────────────────────── خواندن DSN ───────────────────────────────
+# Read DSN ──────────
 _URL_RE = re.compile(
     r"^postgres(?:ql)?(?:\+\w+)?://(?:(?P<user>[^:@/]*)(?::(?P<password>[^@/]*))?@)?"
     r"(?P<host>[^:/?#]*)(?::(?P<port>\d+))?(?:/(?P<dbname>[^?#]*))?",
@@ -129,13 +154,13 @@ _URL_RE = re.compile(
 
 def parse_dsn(raw: Optional[str] = None) -> Dict[str, str]:
     """
-    `PG_DSN` را می‌خواند و به قطعات libpq تبدیل می‌کند.
+    Reads `PG_DSN` and converts it to libpq fragments.
 
-    سه قالب پذیرفته می‌شود (هر سه در این مخزن/مستندات واقعی‌اند):
+    Three formats are accepted (all three are real in this repository/documentation):
       • SQLAlchemy URL:  `postgresql+psycopg://user:pw@host:5432/dbname`
       • conninfo:         `host=localhost port=5432 dbname=printguard …`
-      • خالی:            متغیرهای استاندارد libpq + پیش‌فرض‌ها
-    `options=…` (مثلاً `-csearch_path=…`) حذف نمی‌شود؛ برای اتصال لازم است.
+      • empty: standard libpq variables + defaults
+    `options=…` (eg `-csearch_path=…`) is not removed; Required to connect.
     """
     value = (raw if raw is not None else os.environ.get("PG_DSN", "") or "").strip()
     out: Dict[str, str] = {
@@ -168,7 +193,7 @@ def parse_dsn(raw: Optional[str] = None) -> Dict[str, str]:
                 if part.lower().startswith("options="):
                     out["options"] = part.split("=", 1)[1].replace("%20", " ")
         return out
-    # قالب conninfo: جفت‌های `key=value` (فاصله‌جداسازی‌شده)
+    # conninfo format: `key=value` pairs (space separated)
     tokens = value.split()
     i = 0
     while i < len(tokens):
@@ -178,7 +203,7 @@ def parse_dsn(raw: Optional[str] = None) -> Dict[str, str]:
             key = key.strip().lower()
             if key in out and val:
                 out[key] = val
-            elif key in out:                       # `key=` خالی ⇒ مقدار در توکن بعدی است
+            elif key in out:                       # `key=` is empty ⇒ the value is in the next token
                 nxt = tokens[i + 1] if i + 1 < len(tokens) else ""
                 if nxt and "=" not in nxt:
                     out[key] = nxt
@@ -188,7 +213,7 @@ def parse_dsn(raw: Optional[str] = None) -> Dict[str, str]:
 
 
 def mask(dsn_cfg: Dict[str, str]) -> str:
-    """نشانی را بدون رمز چاپ می‌کند (برای لاگ/گزارش)."""
+    """Prints address without password (for logging/reporting)."""
     bits = [f"host={dsn_cfg.get('host', '')}", f"port={dsn_cfg.get('port', '')}",
             f"dbname={dsn_cfg.get('dbname', '')}"]
     if dsn_cfg.get("user"):
@@ -201,6 +226,8 @@ def mask(dsn_cfg: Dict[str, str]) -> str:
 
 
 def connect_kwargs(dsn_cfg: Dict[str, str], timeout: int = 5) -> Dict[str, Any]:
+    """Build the keyword arguments for a PostgreSQL connection."""
+
     kwargs: Dict[str, Any] = {
         "host": dsn_cfg.get("host") or "localhost",
         "port": int(dsn_cfg.get("port") or DEFAULT_PORT),
@@ -216,7 +243,7 @@ def connect_kwargs(dsn_cfg: Dict[str, str], timeout: int = 5) -> Dict[str, Any]:
     return kwargs
 
 
-# ─────────────────────────────── سرشاخهٔ alembic ───────────────────────────────
+# Alembic head branch
 _REV_RE = re.compile(r"""^\s*revision(?::\s*str)?\s*=\s*['"]([^'"]+)['"]""", re.M)
 _DOWN_RE = re.compile(r"""^\s*down_revision(?::\s*str\?)?\s*=\s*['"]?([^'"\n]+?)['"]?\s*$""",
                       re.M)
@@ -224,11 +251,11 @@ _DOWN_RE = re.compile(r"""^\s*down_revision(?::\s*str\?)?\s*=\s*['"]?([^'"\n]+?)
 
 def discover_heads(versions_dir: Path) -> List[str]:
     """
-    سرشاخهٔ migrationها را از فایل‌های `alembic/versions/*.py` بیرون می‌کشد.
+    It pulls the migrations branch from `alembic/versions/*.py` files.
 
-    عدد `0004` در این ابزار **hardcode نشده** است: اگر فاز F یک migration اضافه کند،
-    سنجهٔ ۵ خودبه‌خود همان را انتظار می‌کشد. اگر دو سرشاخه باشد، لیست دو عضو می‌شود و
-    سنجه قرمز است (merge لازم است).
+    The number `0004` is not **hardcoded** in this tool: if phase F adds a migration,
+    Measure 5 automatically expects the same. If there are two main branches, the list becomes two members
+    The gauge is red (merge required).
     """
     if not versions_dir.is_dir():
         return []
@@ -248,8 +275,10 @@ def discover_heads(versions_dir: Path) -> List[str]:
     return sorted(r for r in revisions if r not in referenced)
 
 
-# ─────────────────────────────── سنجه‌ها ───────────────────────────────
+# Gauges
 def check_python(version: Optional[Tuple[int, ...]] = None) -> Result:
+    """Check that the Python version is supported."""
+
     v = tuple(version or sys.version_info[:3])
     label = "پایتون ≥ ۳٫۱۰"
     got = ".".join(str(x) for x in v[:3])
@@ -260,15 +289,17 @@ def check_python(version: Optional[Tuple[int, ...]] = None) -> Result:
 
 
 def check_psycopg() -> Result:
+    """Check that the PostgreSQL driver is installed."""
+
     label = "درایور psycopg (نسخه ۳)"
     spec = importlib.util.find_spec("psycopg")
     if spec is None:
         return fail("psycopg", label, "import psycopg ناموفق بود",
                     "pip install \"psycopg[binary]\"  (در همان venv که برنامه اجرا می‌شود)")
     try:
-        import psycopg  # noqa: WPS433 — بررسی نسخه، نه استفاده
+        import psycopg  # noqa: WPS433 — Version check, not usage
         ver = getattr(psycopg, "__version__", "?")
-    except Exception as exc:  # noqa: BLE001 — خرابی import هم قرمز است
+    except Exception as exc:  # noqa: BLE001 — import failure is also red
         return fail("psycopg", label, f"import خطا داد: {exc}", "reinstall psycopg")
     if str(ver).startswith("2"):
         return fail("psycopg", label, f"psycopg2 تشخیص داده شد ({ver})",
@@ -277,7 +308,7 @@ def check_psycopg() -> Result:
 
 
 def check_service(dsn_cfg: Dict[str, str]) -> Result:
-    """سنجهٔ ۳: سرویس PG بالا باشد — `pg_isready` اگر در PATH باشد، وگرنه سوکت."""
+    """Criterion 3: PG service is up — `pg_isready` if in PATH, socket otherwise."""
     label = "سرویس PostgreSQL پاسخ می‌دهد"
     host, port = dsn_cfg.get("host") or "localhost", int(dsn_cfg.get("port") or DEFAULT_PORT)
     exe = shutil.which("pg_isready")
@@ -288,8 +319,7 @@ def check_service(dsn_cfg: Dict[str, str]) -> Result:
         if dsn_cfg.get("user"):
             cmd += ["-U", dsn_cfg["user"]]
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True,
-                                  encoding="utf-8", errors="replace", timeout=15)
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
             msg = (proc.stdout or proc.stderr).strip().splitlines()
             detail = msg[-1][:160] if msg else f"exit={proc.returncode}"
             if proc.returncode == 0:
@@ -308,14 +338,15 @@ def check_service(dsn_cfg: Dict[str, str]) -> Result:
 
 
 def _default_connect(dsn_cfg: Dict[str, str], timeout: int):
-    import psycopg  # تنها جایی که به درایور نیاز داریم
+    """Open a psycopg connection with the given DSN configuration and timeout."""
+    import psycopg  # The only place where we need the driver
 
     return psycopg.connect(**connect_kwargs(dsn_cfg, timeout))
 
 
 def check_dsn(dsn_cfg: Dict[str, str], connect: Optional[Callable] = None,
               timeout: int = 5) -> Result:
-    """سنجهٔ ۴: اتصال واقعی + `SELECT 1`."""
+    """Criterion 4: Real connection + `SELECT 1`."""
     label = "DSN کار می‌کند (SELECT 1)"
     conn = connect or _default_connect
     try:
@@ -328,14 +359,14 @@ def check_dsn(dsn_cfg: Dict[str, str], connect: Optional[Callable] = None,
         if one != 1:
             return fail("dsn", label, f"SELECT 1 ⇒ {one!r}", "اتصال را بررسی کنید")
         return ok("dsn", label, f"{mask(dsn_cfg)} | db={dbname} | {str(ver).split(',')[0]}")
-    except Exception as exc:  # noqa: BLE001 — هر خطای اتصال یعنی آماده نیستیم
+    except Exception as exc:  # noqa: BLE001 — Any connection error means we are not ready
         return fail("dsn", label, f"{type(exc).__name__}: {str(exc).strip().splitlines()[0][:170]}",
                     "PG_DSN را با `psql` دستی تست کنید؛ سپس این ابزار را دوباره اجرا کنید")
 
 
 def check_alembic_head(dsn_cfg: Dict[str, str], connect: Optional[Callable] = None,
                        versions_dir: Optional[Path] = None, timeout: int = 5) -> Result:
-    """سنجهٔ ۵: `alembic_version` روی PG = سرشاخهٔ مخزن (schema-aware، بدون hardcode)."""
+    """Criterion 5: `alembic_version' on PG = master repository branch (schema-aware, no hardcode)."""
     label = "alembic head روی PG"
     heads = discover_heads(versions_dir or (PROJECT_ROOT / "alembic" / "versions"))
     if not heads:
@@ -346,7 +377,7 @@ def check_alembic_head(dsn_cfg: Dict[str, str], connect: Optional[Callable] = No
     try:
         with conn(dsn_cfg, timeout) as c:
             cur = c.cursor()
-            # بدون نام‌گذاری schema: search_path (شامل options=-csearch_path=…) رعایت شود
+            # Without naming schema: search_path (including options=-csearch_path=…) should be followed
             cur.execute("SELECT current_schema(), current_setting('search_path', true)")
             cschema, spath = cur.fetchone()
             try:
@@ -370,7 +401,7 @@ def check_alembic_head(dsn_cfg: Dict[str, str], connect: Optional[Callable] = No
 
 
 def check_integrity(db_path: Path) -> Result:
-    """سنجهٔ ۶: `PRAGMA integrity_check` + شمارش خلاصه (فقط‌خواندنی)."""
+    """Criterion 6: `PRAGMA integrity_check` + summary count (read only)."""
     label = "سلامت فایل logs.db"
     if not db_path.is_file():
         return fail("integrity", label, f"یافت نشد: {db_path}",
@@ -404,7 +435,7 @@ def check_integrity(db_path: Path) -> Result:
 
 def check_timestamps(db_path: Path, analyze_tool: Optional[Path] = None,
                       cutover: str = "") -> Result:
-    """سنجهٔ ۷: قالب timestampها — با فراخوانی همان `analyze_old_events.py` (کد خروجش مرجع است)."""
+    """Criterion 7: Format of timestamps — by calling the same `analyze_old_events.py' (the output code is a reference)."""
     label = "timestampها UTC-Z و بازه‌ی pre/post cutover"
     tool = analyze_tool or (TOOLS_DIR / "analyze_old_events.py")
     if not tool.is_file():
@@ -417,9 +448,8 @@ def check_timestamps(db_path: Path, analyze_tool: Optional[Path] = None,
         with tempfile.NamedTemporaryFile("w+", suffix=".json", delete=False) as fh:
             tmp = Path(fh.name)
         cmd += ["--json", str(tmp)]
-        proc = subprocess.run(cmd, capture_output=True, text=True,
-                              encoding="utf-8", errors="replace", timeout=180,
-                              cwd=str(PROJECT_ROOT))  # زمان کامیتِ cutover از git همین مخزن
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180,
+                                cwd=str(PROJECT_ROOT))  # Cutover commit time from git of this repository
         data: Dict[str, Any] = {}
         if tmp.is_file():
             try:
@@ -458,7 +488,7 @@ def check_timestamps(db_path: Path, analyze_tool: Optional[Path] = None,
 
 
 def check_disk(db_path: Path, extra_bytes: int = 0) -> Result:
-    """سنجهٔ ۸: فضای آزاد همان درایو، نسبت به اندازهٔ logs.db (قانون runbook: ۴ برابر)."""
+    """Criterion 8: Free space of the same drive, relative to the size of logs.db (runbook rule: 4 times)."""
     label = "فضای دیسک برای بکاپ‌ها"
     base = db_path.parent if db_path.parent.exists() else Path.cwd()
     try:
@@ -481,7 +511,7 @@ def check_disk(db_path: Path, extra_bytes: int = 0) -> Result:
 
 
 def check_port(dsn_cfg: Dict[str, str], timeout: int = 3) -> Result:
-    """سنجهٔ ۹: پورت از راه TCP باز باشد (firewall/bind را می‌گیرد)."""
+    """Criterion 9: The port must be open through TCP (takes firewall/bind)."""
     host, port = dsn_cfg.get("host") or "localhost", int(dsn_cfg.get("port") or DEFAULT_PORT)
     label = f"پورت {port} باز است"
     try:
@@ -493,7 +523,7 @@ def check_port(dsn_cfg: Dict[str, str], timeout: int = 3) -> Result:
 
 
 def check_marker(db_path: Path) -> Result:
-    """اطلاعات کمکی (بدون نمره): marker cutover نوشته شده یا نه."""
+    """Auxiliary information (no score): cutover marker is written or not."""
     label = "marker cutover (وضعیت فعلی)"
     try:
         conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=10)
@@ -511,8 +541,10 @@ def check_marker(db_path: Path) -> Result:
     return ok("marker", label, "نوشته نشده (وضعیت درست پیش از روز اجرا)")
 
 
-# ─────────────────────────────── گزارش ───────────────────────────────
+# Report
 def exit_code(results: List[Result], strict: bool = False) -> int:
+    """Return the process exit code for a set of check results."""
+
     statuses = [r.status for r in results]
     if "fail" in statuses:
         return EXIT_BLOCKED
@@ -522,6 +554,8 @@ def exit_code(results: List[Result], strict: bool = False) -> int:
 
 
 def render(results: List[Result], color: bool, title: str, strict: bool = False) -> str:
+    """Render the readiness report as text."""
+
     width = max((len(r["label"]) for r in results), default=24)
     lines = ["─" * 72, paint(title, "ok", color), "─" * 72]
     for r in results:
@@ -534,8 +568,8 @@ def render(results: List[Result], color: bool, title: str, strict: bool = False)
                                             color))
     lines.append("─" * 72)
     counts = {s: sum(1 for r in results if r.status == s) for s in STATUS_ORDER}
-    # حکم نهایی از همان exit_code می‌آید، تا «خطِ نتیجه» هیچ‌وقت با کد خروج یکی نباشد نه
-    # (با --strict هشدارها قرمز شمرده می‌شوند).
+    # The final command comes from the same exit_code, so that the "result line" is never the same as the exit code
+    # (with --strict warnings are counted as red).
     code = exit_code(results, strict=strict)
     verdict = {EXIT_OK: "آماده ✔", EXIT_WARN: "آماده با هشدار !", EXIT_BLOCKED: "مسدود ✘"}[code]
     tone = {EXIT_OK: "ok", EXIT_WARN: "warn", EXIT_BLOCKED: "fail"}[code]
@@ -549,7 +583,7 @@ def render(results: List[Result], color: bool, title: str, strict: bool = False)
 def run_checks(db_path: Path, dsn_cfg: Dict[str, str], *, want_pg: bool = True,
                psycopg_ready: bool = True, connect: Optional[Callable] = None,
                cutover: str = "", versions_dir: Optional[Path] = None) -> List[Result]:
-    """ترتیب اجرا = ترتیب گزارش (همان ۹ سنجه، بعد یک ردیف کمکی)."""
+    """Execution order = report order (same 9 gauges, then an auxiliary row)."""
     out: List[Result] = [check_python()]
     out.append(check_psycopg())
     if not want_pg:
@@ -573,22 +607,22 @@ def run_checks(db_path: Path, dsn_cfg: Dict[str, str], *, want_pg: bool = True,
 
 
 def _load_dotenv_into_environ() -> None:
-    """اگر `config.settings` در دسترس باشد، `.env` را وارد محیط می‌کند (بدون fallback بی‌صدا)."""
+    """If `config.settings` is available, imports `.env` into the environment (no silent fallback)."""
     if (PROJECT_ROOT / "config" / "settings.py").is_file() and str(PROJECT_ROOT) not in sys.path:
         sys.path.insert(0, str(PROJECT_ROOT))
     import warnings as _w
 
     try:
-        # side-effect لازم: `config/settings.py` با `load_dotenv()` فایل `.env` را به env می‌آورد
+        # Required side-effect: `config/settings.py` with `load_dotenv()` brings `.env` file to env
         with _w.catch_warnings():
-            _w.simplefilter("ignore", RuntimeWarning)  # هشدار SECRET_KEY اینجا بی‌ربط است
+            _w.simplefilter("ignore", RuntimeWarning)  # The SECRET_KEY warning is irrelevant here
             importlib.import_module("config.settings")
-    except Exception:  # noqa: BLE001 — ابزار نباید به‌خاطر config بمیرد
+    except Exception:  # noqa: BLE001 — Tool should not die because of config
         pass
 
 
 def _self_test() -> int:
-    """منطق داخلی را بدون شبکه/دیتابیس واقعی می‌آزماید (خروجی: ۰ = سبز)."""
+    """Tests internal logic without actual network/database (output: 0 = green)."""
     assert parse_dsn("postgresql+psycopg://u:p@h:6432/db")["port"] == "6432"
     assert parse_dsn("postgresql+psycopg://u:p@h:6432/db")["password"] == "p"
     assert parse_dsn("host=127.0.0.1 port=5432 dbname=pg user=x")["dbname"] == "pg"
@@ -618,6 +652,8 @@ def _self_test() -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the command-line argument parser."""
+
     ap = argparse.ArgumentParser(
         prog="check_cutover_readiness.py",
         description="چک‌لیست رنگی آمادگی cutover به PostgreSQL (فقط‌خواندنی).",
@@ -640,6 +676,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    """Command-line entry point of the cutover readiness check."""
+
     args = build_parser().parse_args(argv)
     if args.self_test:
         return _self_test()
@@ -688,6 +726,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 def _utc_now_iso() -> str:
+    """Return the current UTC time in ISO 8601 format with seconds precision."""
     import datetime as _dt
 
     return _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")

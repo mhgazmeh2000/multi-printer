@@ -1,62 +1,64 @@
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:  alembic/versions/0004_jsonb_columns.py
+# @brief: Alembic migration 0004: converts logs.details to jsonb on PostgreSQL.
+# @notes: Alembic revision kept as migration history. Do not edit it; schema
+#         changes must go into a new revision.
+# =============================================================================
+
 """
-0004_jsonb_columns — ``logs.details`` روی PostgreSQL ⇒ ``jsonb`` (فاز E.6.4).
+0004_jsonb_columns — ``logs.details`` on PostgreSQL ⇒ ``jsonb`` (phase E.6.4).
 
-چرا؟
+Why?
 ----
-معیار مالک برای این تصمیم «``grep json_extract``» بود: ستونی به JSONB می‌رود که
-**SQL** روی آن محتوای JSON می‌خواند. نتیجهٔ گرِپ (و تنها نتیجهٔ آن):
+The owner's criterion for this decision was "``grep json_extract``": a column goes to JSONB if
+**SQL** reads JSON content from it. The result of the grep (and the only result):
 
-    web/routes/metrics.py        details->>'detection'      (GROUP BY روی همهٔ رویدادهای کارتریج)
+    web/routes/metrics.py        details->>'detection'      (GROUP BY over all cartridge events)
     core/database.py             details->>'event_id' / 'prev_total' / 'current_total'  (dedup)
 
-یعنی فقط ``logs.details``. چهار ستون JSON دیگر (``users.allowed_offices``،
-``users.allowed_modules``، ``printer_counters.cartridge_id_state``،
-``printer_counters.toner_overrides``) هیچ‌جا در SQL به‌صورت JSON خوانده نمی‌شوند
-(فقط ``json.dumps``/``json.loads`` در پایتون)؛ تبدیل آن‌ها ریسک migration و
-واگرایی با SQLite را بی‌سود اضافه می‌کرد، پس **TEXT می‌مانند** (تصمیم و عددِ
-اندازه‌گیری در ``docs/phase-e-decisions.md``، ردیف E.6.4).
+That means only ``logs.details``. The four other JSON columns (``users.allowed_offices``,
+``users.allowed_modules``, ``printer_counters.cartridge_id_state``, ``printer_counters.toner_overrides``)
+are never read as JSON in SQL (only ``json.dumps``/``json.loads`` in Python); converting them would add
+migration risk and divergence from SQLite for no benefit, so they **stay TEXT** (decision and measured
+figure in ``docs/phase-e-decisions.md``, row E.6.4).
 
-امروز روی PG هلپر ``core.db.ConnectionAdapter.json_extract`` چنین می‌سازد:
-``(details::jsonb)->>'key'`` — یعنی **هر ردیفِ اسکن‌شده یک بار parse می‌شود**.
-اندازه‌گیری روی همین سرور (PG 16.15، ۲۰۰٬۰۰۰ ردیف، ۱۳۳٬۰۰۰ ردیف
-``CARTRIDGE_CHANGED``، کوئری metrics):
+Today on PG the helper ``core.db.ConnectionAdapter.json_extract`` builds ``(details::jsonb)->>'key'``,
+meaning **every scanned row is parsed once per query**.
+Measured on this same server (PG 16.15, 200,000 rows, 133,000 rows of ``CARTRIDGE_CHANGED``, the metrics query):
 
-    TEXT + cast   ≈ ۱۱۹٫۰ / ۱۱۹٫۱ / ۱۱۹٫۷ ms      (میانگین ۱۱۹٫۳)
-    jsonb         ≈  ۴۶٫۵ /  ۴۶٫۳ /  ۴۷٫۵ ms      (میانگین ۴۶٫۸  ⇒ ۲٫۵× سریع‌تر)
-    dedup (LIMIT 1): ۱۹٫۳ ms ⇒ ۱۷٫۸ ns (ناچیز — همان‌طور که انتظار می‌رفت، چون
-                      روی چند ردیفِ یک پرینتر در ۵ دقیقه کار می‌کند)
-    expression index روی TEXT کمکی نکرد: ۱۱۶ ms (پلن همان seq scan می‌ماند)
-    نوشتن ۲۰٬۰۰۰ ردیف: text ۷۹ ms ⇒ jsonb ۳۶ ms   حجم جدول: هر دو ۴۰ MB
+    TEXT + cast   ≈ 119.0 / 119.1 / 119.7 ms      (average 119.3)
+    jsonb         ≈  46.5 /  46.3 /  47.5 ms      (average 46.8  ⇒ 2.5× faster)
+    dedup (LIMIT 1): 19.3 ms ⇒ 17.8 ns (negligible — as expected, since it works on a few rows of one
+                     printer within 5 minutes)
+    an expression index on TEXT did not help: 116 ms (the plan stays a seq scan)
+    writing 20,000 rows: text 79 ms ⇒ jsonb 36 ms   table size: both 40 MB
 
-کوئری metrics هر scrape پرامتئوس اجرا می‌شود، پس این هزینهٔ تکرارشونده است.
-دومین فایده، **اعتبار در زمان نوشتن** است: امروز یک ردیف با ``details`` نامعتبر
-(دستی/میراثی) کل کوئری را با خطای cast می‌شکند؛ با jsonb همان ردیف در *نوشتن*
-رد می‌شود، نه در *خواندن* — خطا کنار علتش می‌افتد.
+The metrics query runs on every Prometheus scrape, so this cost repeats. The second benefit is
+**validation at write time**: today a row with invalid ``details`` (manual/legacy) breaks the whole
+query with a cast error; with jsonb that same row is rejected at *write* time, not at *read* time —
+the error appears next to its cause.
 
-روی SQLite این migration **no-op** است
+On SQLite this migration is a **no-op**
 -------------------------------------
-SQLite نوع JSON ندارد؛ همان ``TEXT`` می‌ماند و ``json_extract`` کار می‌کند. این
-migration فقط بررسی می‌کند ستون در SQLite واقعاً متنی باشد (و اگر نبود، با پیام
-روشن می‌ایستد) تا دو backend از «انتظارِ اسکیما» جدا نشوند. خواننده‌ها هر دو
-نوع را تحمل می‌کنند: psycopg مقدار ``jsonb`` را دیکد‌شده (dict) برمی‌گرداند و
-``core/database.py::_row_to_dict`` هر دو را می‌پذیرد.
+SQLite has no JSON type; it stays ``TEXT`` and ``json_extract`` works. This migration only checks that
+the column really is text in SQLite (and stops with a clear message if not), so that the two backends
+do not diverge from the "schema expectation". Readers accept both types: psycopg returns a ``jsonb``
+value already decoded (a dict), and ``core/database.py::_row_to_dict`` accepts both.
 
-ایمنی
-----
-• **preflight اجباری:** پیش از ALTER، ردیف‌های نامعتبر با یک تابع ``pg_temp`` که
-  ``EXCEPTION WHEN others`` دارد شمرده می‌شوند (در PG ۱۶ هیچ ``IS JSON`` و هیچ
-  try-cast وجود ندارد؛ این تنها راهِ بی‌استثناست). اگر حتی یک ردیف نامعتبر باشد ⇒
-  **توقف** با شمارش و فهرست idها (تصمیم مالک در E.6.4: «توقف با شمارش»، نه NULL
-  کردن بی‌صدا).
-• ``''`` و فاصلهٔ خالی: ``NULL`` می‌شوند و این **تغییر داده** است، پس پیش از اجرا
-  **هشدار با شمارش** می‌دهد (بی‌صدا رد نمی‌شود).
-• **idempotent:** اگر ستون از قبل ``jsonb`` بود، فقط بررسی و رد.
-• **پایش پس از اجرا:** نوع ستون دوباره از ``information_schema`` خوانده می‌شود؛
-  اگر jsonb نبود، migration می‌ایستد (هیچ «انجام شد» بی‌پشتوانه‌ای نداریم).
-• **برگشت:** ``downgrade`` به ``text`` برمی‌گردد (``USING (details)::text``)؛ ردیف‌هایی
-  که ``''`` بوده‌اند در آنجا ``NULL`` می‌مانند — این تنها تفاوتِ برگشتناپذیر است و
-  در همین‌جا مستند شده، نه پنهان.
+Safety
+------
+• **Mandatory preflight:** before the ALTER, invalid rows are counted with a ``pg_temp`` function that
+  has an ``EXCEPTION WHEN others`` handler (PG 16 has no ``IS JSON`` and no try-cast; this is the only
+  exception-free way). If even one row is invalid ⇒ **stop**, with the count and the list of ids (the
+  owner's decision in E.6.4: "stop with a count", not silently NULL).
+• ``''`` and whitespace-only values become ``NULL``; this is a **data change**, so the migration gives
+  a **warning with a count** before running (it is not skipped silently).
+• **Idempotent:** if the column is already ``jsonb``, it is only checked and skipped.
+• **Post-run monitoring:** the column type is read again from ``information_schema``; if it is not
+  jsonb, the migration stops (we do not accept "done" without evidence).
+• **Rollback:** ``downgrade`` goes back to ``text`` (``USING (details)::text``); rows that were ``''``
+  stay ``NULL`` there. This is the only irreversible difference, and it is documented here, not hidden.
 """
 from __future__ import annotations
 
@@ -72,30 +74,30 @@ depends_on = None
 
 log = logging.getLogger("alembic.runtime.migration")
 
-#: تنها ستون‌هایی که این migration تبدیل می‌کند (تصمیم E.6.4 — با معیار grep).
-#: اگر روزی ستون تازه‌ای لازم شد، همین فهرست + تستِ قفلش باید عوض شود.
+#: The only columns this migration converts (decision E.6.4 — by the grep criterion).
+#: If a new column is ever needed, this list and its lock test must change.
 JSONB_COLUMNS = (
     ("logs", "details"),
 )
 
-#: نوع متنیِ معادل در SQLite (که اینجا تغییر نمی‌کند؛ فقط بررسی می‌شود).
+#: The equivalent text type in SQLite (which does not change here; it is only checked).
 SQLITE_TEXT_TYPES = ("TEXT", "")
 
 
 def _is_postgres() -> bool:
+    """Return True when the migration runs against PostgreSQL."""
     return op.get_bind().dialect.name == "postgresql"
 
 
 def _exec(conn, sql: str):
     """
-    اجرای SQL روی اتصال alembic (SQLAlchemy) **یا** اتصال خام psycopg.
+    Run SQL on an alembic (SQLAlchemy) connection **or** a raw psycopg connection.
 
-    چرا: تابع‌های بررسی/preflight این migration با `op.get_bind()` اجرا می‌شوند،
-    ولی دقیقاً همان منطق (شمارش ردیف‌های JSON نامعتبر) باید در تست‌ها با یک اتصال
-    خام و یک جدول موقت آزموده شود — بدون اینکه migration برای تست «دوباره نوشته»
-    یا کپی شود. SQLAlchemy `text()` روی اتصال خام psycopg خطا می‌دهد
-    («expected bytes, TextClause found»؛ سنجیده‌شده)، پس نوع اتصال تشخیص داده
-    می‌شود.
+    Why: the check/preflight functions of this migration run with ``op.get_bind()``, but the same
+    logic (counting invalid JSON rows) must be tested in the test suite with a raw connection and a
+    temporary table, without the migration being "rewritten" or copied for the tests. SQLAlchemy
+    ``text()`` raises an error on a raw psycopg connection ("expected bytes, TextClause found";
+    measured), so the connection type is detected.
     """
     if hasattr(conn, "dialect"):
         return conn.execute(sa.text(sql))
@@ -103,7 +105,7 @@ def _exec(conn, sql: str):
 
 
 def _column_type(conn, table: str, column: str):
-    """نوع ستون از ``information_schema`` در ** اسکیمای جاری ** (search_path)."""
+    """Column type from ``information_schema`` in the **current schema** (search_path)."""
     row = _exec(conn, "SELECT data_type FROM information_schema.columns "
                        "WHERE table_schema = current_schema() "
                        f"AND table_name = '{table}' AND column_name = '{column}'").fetchone()
@@ -111,7 +113,7 @@ def _column_type(conn, table: str, column: str):
 
 
 def _sqlite_column_decl(conn, table: str, column: str):
-    """تعریف ستون از ``sqlite_master`` (برای اطمینان از «متنی بودن» در SQLite)."""
+    """Column definition from ``sqlite_master`` (to make sure it is text in SQLite)."""
     row = _exec(conn, f"SELECT sql FROM sqlite_master WHERE type='table' "
                       f"AND name = '{table}'").fetchone()
     if row is None or not row[0]:
@@ -125,13 +127,13 @@ def _sqlite_column_decl(conn, table: str, column: str):
 
 
 def _invalid_where(table: str, column: str) -> str:
-    """شرط «ردیف نامعتبر» — برای شمارش و برای فهرست idها (یکی، تا واگرا نشوند)."""
+    """Condition for an "invalid row" — used for counting and for the list of ids (one definition, so they cannot diverge)."""
     return (f'"{column}" IS NOT NULL AND btrim("{column}") <> \'\' '
             f'AND NOT pg_temp.pg_json_is_valid("{column}")')
 
 
 def _empty_where(table: str, column: str) -> str:
-    """شرط «ردیف تهی»: رشتهٔ خالی/فاصله، که با migration به NULL تبدیل می‌شود."""
+    """Condition for an "empty row": empty string or whitespace, which the migration converts to NULL."""
     return f'"{column}" IS NOT NULL AND btrim("{column}") = \'\''
 
 
@@ -149,16 +151,16 @@ $$ LANGUAGE plpgsql
 
 def _preflight(conn, table: str, column: str) -> None:
     """
-    شمارش ردیف‌های نامعتبر/تهی؛ نامعتبر ⇒ توقف (تصمیم مالک در E.6.4: بی‌صدا NULL نه).
+    Count invalid/empty rows; invalid ⇒ stop (the owner's decision in E.6.4: NULL silently is not allowed).
 
-    چرا تابع pg_temp با exception handler: در PG ۱۶ نه ``IS JSON`` هست نه try-cast،
-    و ``details::jsonb`` داخل ``WHERE`` خودش خطا می‌دهد ⇒ تنها راهِ «پیدا کردن
-    ردیف‌های خراب بدون شکستن کوئری». تابع در ``pg_temp`` است و در پایان همین
-    جلسه/اسکیمای موقت از بین می‌رود (شیء دائمی ساخته نمی‌شود).
+    Why a pg_temp function with an exception handler: PG 16 has neither ``IS JSON`` nor a try-cast,
+    and ``details::jsonb`` inside a ``WHERE`` raises an error by itself ⇒ this is the only way to
+    "find the broken rows without breaking the query". The function lives in ``pg_temp`` and disappears
+    at the end of this session/temporary schema (no permanent object is created).
 
-    چرا دو کوئری به‌جای ``array_agg(id)[:20]``: SQLAlchemy داخل ``text()`` علامت
-    ``:20`` را bind-parameter می‌خواند (سنجیده‌شده: «A value is required for bind
-    parameter '20'») — پس فهرست idها جدا با ``LIMIT`` گرفته می‌شود.
+    Why two queries instead of ``array_agg(id)[:20]``: inside ``text()`` SQLAlchemy reads the ``:20``
+    as a bind parameter (measured: "A value is required for bind parameter '20'"), so the list of ids
+    is fetched separately with ``LIMIT``.
     """
     _exec(conn, _PG_TEMP_VALIDATOR)
     try:
@@ -191,6 +193,7 @@ def _preflight(conn, table: str, column: str) -> None:
 
 
 def upgrade() -> None:
+    """Validate existing rows, then convert logs.details to jsonb on PostgreSQL; verify TEXT on SQLite."""
     conn = op.get_bind()
 
     if not _is_postgres():
@@ -247,6 +250,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Convert logs.details back to text on PostgreSQL; no-op on SQLite."""
     conn = op.get_bind()
 
     if not _is_postgres():

@@ -1,4 +1,4 @@
-# طرح جامع مشاوره و معماری فاز F — مهاجرت داده از SQLite به PostgreSQL و آمادگی Cutover
+# Comprehensive advisory and architecture plan for phase F — data migration from SQLite to PostgreSQL and cutover readiness
 
 **نسخه:** ۱.۰ (فاز مشاوره و طراحی — بدون تغییر کد، بدون اجرا، بدون کامیت)  
 **تاریخ تحلیل:** ۲۰۲۶-۱۰-۰۷  
@@ -12,7 +12,7 @@
 
 ---
 
-## ۱. فلسفه و چارچوب فاز F («مشاوره و طراحی، نه اجرا»)
+## 1. Philosophy and framework of phase F ("advice and design, not execution")
 
 فاز F نقطه عطف پروژه است که پل ارتباطی میان آماده‌سازی ساختار (فاز E) و سوئیچ نهایی پروداکشن (فاز L) به شمار می‌رود. طبق دستور صریح مالک، این نوبت **منحصراً تحلیلی و مشاوره‌ای** است:
 ۱. **هیچ کدی در لایه‌های عملیاتی نوشته یا ویرایش نمی‌شود** (`core/db/`، `core/collectors/`، `core/snmp/protocol.py`، `yield_engine`، `web/`، و `config/` دست‌نخورده می‌مانند).
@@ -22,7 +22,7 @@
 
 ---
 
-## ۲. پاسخ تشریحی و فنی به سؤالات ۸ گانه مالک
+## 2. Detailed technical answers to the owner's eight questions
 
 ### سؤال ۱ — ترتیب بهینه زیرفازهای فاز F
 
@@ -173,7 +173,7 @@
 
 ---
 
-## ۳. طرح تفصیلی زیرفازهای پیشنهادی فاز F
+## 3. Detailed plan of the proposed phase F sub-phases
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
@@ -209,7 +209,7 @@
 
 ---
 
-## ۴. ماتریس ارزیابی ریسک و راهکارهای پیشگیری (Risk Assessment Matrix)
+## 4. Risk assessment matrix and prevention measures (Risk Assessment Matrix)
 
 | # | عنوان ریسک | احتمال | شدت اثر | پیامد در صورت وقوع | راهکار پیشگیری و مهار در فاز F |
 |---|---|---|---|---|---|
@@ -221,7 +221,7 @@
 
 ---
 
-## ۴.۱. سیاست قطعی مدیریت timestampهای بدون Z (Naive ISO Timestamps Policy)
+## 4.1. Final policy for timestamps without Z (Naive ISO Timestamps Policy)
 
 در جریان بازبینی گام‌های F.1 و F.2 با بارگذاری داده‌های واقعی پروداکشن مالک (`logs.json` شامل ۲۰۰ رکورد)، کشف شد که تمامی رکوردهای لاگ در دیتابیس عملیاتی فاقد پسوند `Z` هستند (`2026-08-25T11:08:28.182165`)؛ در حالی که در محیط سندباکس به دلیل اجرای قبلی فاز E.3، تمام رکوردها دارای `Z` بودند.
 
@@ -238,7 +238,7 @@
 
 ---
 
-## ۴.۲. یادآوری دائمی درباره فیکسچرهای واقعی (Permanent Reminder)
+## 4.2. Permanent reminder about real fixtures (Permanent Reminder)
 
 > ⚠ **قانون دائمی برای فازهای بعدی:**
 > داده‌ی واقعی پروداکشن در مسیر `tests/fixtures/migration_sample/` قرار دارد.
@@ -246,7 +246,7 @@
 
 ---
 
-## ۴.۳. کشف ناهمخوانی schema logs و راه‌حل (مایگریشن 0005)
+## 4.3. Schema mismatch in `logs` and its fix (migration 0005)
 
 در جریان بازبینی گام F.4، با مقایسه اسکیمای دیتابیس واقعی پروداکشن (`uploads/logs.json`) با محیط سندباکس و PostgreSQL، مشخص شد:
 - جدول `logs` در پروداکشن دارای **۱۸ ستون** است (شامل ۵ ستون اضافه: `sheets`, `raw_counters`, `raw_delta`, `event_type`, `duplex_mode`).
@@ -261,7 +261,7 @@
 
 ---
 
-## ۵. معیارهای پذیرش فاز F (Acceptance Criteria)
+## 5. Acceptance criteria for phase F (Acceptance Criteria)
 
 برای اعلام پایان موفقیت‌آمیز فاز F و ورود به فازهای بعدی، برآورده شدن معیارهای زیر الزامی است:
 ۱. **ثبات کامل سوئیت تست:** اجرای `pytest` روی هر دو حالت `DB_BACKEND=sqlite` و `DB_BACKEND=postgresql` باید با ۰ شکست و بدون نقض قواعد آزمون‌های ایزوله به پایان برسد (حفظ وضعیت سبز ۷۸۵ تست فعلی).
@@ -273,7 +273,7 @@
 
 ---
 
-## ۶. پرسش‌های باز جهت تصمیم‌گیری و تأیید نهایی مالک
+## 6. Open questions for the owner's decision and final approval
 
 پیش از ورود به نگارش کدهای زیرفاز F.1، تأیید موارد زیر توسط مالک مورد نیاز است:
 ۱. **تأیید استراتژی هیبرید انتقال:** آیا رویکرد پیشنهادی (استفاده از `COPY` برای لاگ‌های حجیم و `Batch Insert` برای جداول تنظیمی) مورد تأیید است؟
@@ -283,7 +283,7 @@
 
 ---
 
-## ۷. خلاصه مدیریتی ۱۰ خطی (Executive Summary)
+## 7. Ten-line management summary (Executive Summary)
 
 ```
 ۱. فاز F صرفاً طراحی و نقشه راه است: هیچ کدی تغییر نکرده و وضعیت مخزن روی ۷۸۵ تست سبز ثابت است.

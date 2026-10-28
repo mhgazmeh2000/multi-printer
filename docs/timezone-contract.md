@@ -1,4 +1,4 @@
-# قرارداد زمان (Timezone Contract) — آماده‌سازی فاز E
+# Time zone contract (Timezone Contract) — preparation for phase E
 
 **وضعیت:** اصل سند (کار D.2) مستندات محض بود؛ **فاز E.3 این قرارداد را اجرا کرد** —
 پیاده‌سازی، مهاجرت داده و شاهدها در **بخش ۹** همین سند ثبت شده است.
@@ -11,7 +11,7 @@
 
 ---
 
-## ۱. وضعیت فعلی (آنچه امروز در کد است)
+## 1. Current state (what the code does today)
 
 | فایل | خط | الگوی فعلی | معنی واقعی مقدار |
 |---|---|---|---|
@@ -41,7 +41,7 @@ offset است: `2026-10-03T14:22:01.123456`.
 
 ---
 
-## ۲. قرارداد فاز E
+## 2. Phase E contract
 
 | موضوع | قاعده‌ی فاز E |
 |---|---|
@@ -61,7 +61,7 @@ offset است: `2026-10-03T14:22:01.123456`.
 
 ---
 
-## ۳. باگِ زمانی `cartridge_change_engine.py` — اصلاح‌شده در D.6
+## 3. Time bug in `cartridge_change_engine.py` — fixed in D.6
 
 > **اصلاح این بخش (کامیت D.6):** نسخه‌ی اول این سند، خطوط ۲۷۲ و ۳۰۶ را «دو شاخه‌ی
 > برنددار/غیربرند» توصیف کرده بود. بررسی اجرایی نشان داد آن توصیف نادرست است؛
@@ -146,7 +146,7 @@ timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds") + "Z"
 
 ---
 
-## ۴. چیزهایی که naive local امروز جواب می‌دهد و در فاز E باید مراقبشان بود
+## 4. What naive local time gets right today and what must be watched in phase E
 
 ۱. **مقایسه‌ی رشته‌ای:** `cutoff = (datetime.now() - timedelta(...)).isoformat()` و سپس
    `WHERE timestamp >= ?` روی ستون TEXT. این فقط تا وقتی کار می‌کند که همه‌ی نویسنده‌ها
@@ -164,7 +164,7 @@ timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds") + "Z"
 
 ---
 
-## ۵. چرا UTC (پاسخ کوتاه برای آینده)
+## 5. Why UTC (short answer for the future)
 
 - **PostgreSQL `TIMESTAMPTZ`** مقدار را به UTC نرمال می‌کند؛ نوشتن naive local در آن،
   بی‌صدا ۳.۵ ساعت جابه‌جایی ایجاد می‌کند.
@@ -177,7 +177,7 @@ timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds") + "Z"
 
 ---
 
-## ۶. کارهای فاز E که از این سند بیرون می‌آید (فهرست، بدون اجرا)
+## 6. Phase E work that comes out of this document (list, not executed)
 
 ۱. حذف `naive local` از نویسنده‌ها: `core/database.py` (`658,1073,1128,1176`)،
    `core/yield_engine.py:61-62`، `core/collectors/sensor.py:245` و `last_poll`ها.
@@ -201,7 +201,7 @@ timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds") + "Z"
 
 ---
 
-## ۷. تأیید TZ سرور (گام E.0.1)
+## 7. Verifying the server time zone (step E.0.1)
 
 بخش ۲ این سند فرض می‌کند رشته‌های naive local با `Asia/Tehran` تفسیر می‌شوند.
 تا وقتی این فرض روی خودِ سرور ویندوزی سنجیده نشود، «فرض» است نه «واقعیت» — و
@@ -282,7 +282,7 @@ tzdata نبود، شواهد تازه‌ی کافی نبود)، `1` = خطای �
 
 ---
 
-## ۸. تحلیل داده‌های تاریخی و رفع تناقض `Z` (گام E.0.2)
+## 8. Analysis of historical data and resolution of the `Z` inconsistency (step E.0.2)
 
 ### ۸.۱ تناقض چه بود
 
@@ -357,7 +357,7 @@ naive؛ `sensor_readings` خالی. ⇒ **در این DB هیچ ردیف `Z` و�
 
 ---
 
-## ۹. اجرای فاز E.3 — قرارداد پیاده‌شده (۲۰۲۶-۱۰-۰۴)
+## 9. Execution of phase E.3 — implemented contract (2026-10-04)
 
 این بخش «چه چیزی واقعاً اجرا شد» است؛ بخش‌های ۱ تا ۸ تصمیم‌های پیش از اجرا بودند.
 
@@ -440,7 +440,7 @@ cartridge_discovery}.py`, `core/poller.py`, `core/cartridge_change_engine.py`،
 |---|---|
 | `web/routes/security.py:135` — `log` تعریف‌نشده در مسیر خطا | باگ قبلی (نه مربوط به زمان)؛ TD-004 |
 | بازنویسی manifest ابزار مهاجرت در اجرای بعدی | TD-005؛ فعلاً با هش + بکاپ + دستور بازتولید پوشش داده شد |
-| `sensor_alert.datetime.now().hour` (ساعات سکوت) | تصمیم «ساعت کاری» است نه timestamp ذخیره‌شده؛ در فاز I.6 با استفاده از منطقه‌ی زمانی `Asia/Tehran` حل و بسته شد (TD-006). |
+| `sensor_alert.datetime.now().hour` (ساعات سکوت) | تصمیم «ساعت کاری» است نه timestamp ذخیره‌شده؛ TD-006 |
 | TD-001 (کد مردهٔ `_save_counters_to_db`) و TD-002 (`next` در ۴۰۱) | طبق `docs/phase-e-plan.md` در E.4/بازبینی auth |
 
 *این سند فقط مستندات است؛ هیچ تغییری در کد، schema یا داده ایجاد نمی‌کند.*

@@ -1,16 +1,26 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tools/diagnose_printer.py
+# @brief:        Diagnostic tool that reports toner and cartridge problems for one printer model.
+# @details:      Responsibilities: Probe the printer and render a Markdown report.
+#                Main API: g(), probe(), render_md(), main()
+#                Side effects: network I/O, file I/O
+# @dependencies: internal: core.collectors.base, core.collectors.cartridge_id, core.snmp.protocol
+# @notes:        Can be run directly as a script.
+# =============================================================================
+
 """
-ابزار تشخیص پرینتر — برای گزارش مشکل تونر/کارتریج یک مدل خاص.
+Printer Diagnostic Tool — to report toner/cartridge problems for a specific model.
 
-این اسکریپت همه‌ی داده‌های خام مربوط به مصرفی‌ها را از دستگاه می‌خواند و یک
-گزارش Markdown می‌سازد که با ارسال آن، نگاشت دقیق آن مدل به پروژه اضافه می‌شود.
+This script reads all raw data related to consumption from the device and a
+Creates a Markdown report that, when submitted, adds a detailed mapping of that model to the project.
 
-اجرا (از ریشه‌ی پروژه):
+Execution (from the root of the project):
     python tools/diagnose_printer.py 172.16.25.10
     python tools/diagnose_printer.py 172.16.25.10 --community private --timeout 3
 
-خروجی: فایل diagnose_<ip>.md در پوشه‌ی جاری.
+Output: diagnose_<ip>.md file in the current folder.
 """
 import argparse
 import datetime
@@ -18,7 +28,7 @@ import os
 import re
 import sys
 
-# امکان اجرا از هر پوشه‌ای: ریشه پروژه را به مسیر اضافه کن
+# Ability to run from any folder: add the root of the project to the path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from core.snmp.protocol import snmp_get_with_fallback  # noqa: E402
@@ -28,10 +38,12 @@ PRT_SUPPLIES = f"{MIB}.43.11.1.1"
 
 
 def g(ip, community, oid, timeout, version=None):
+    """Read one SNMP OID from a printer with the fallback logic."""
+
     return snmp_get_with_fallback(ip, oid, community, version=version, timeout=timeout)
 
 
-# مسیرهای صفحه‌ی وب هر برند برای دامپ محتوای تونر/کارتریج (fallback با .get).
+# Paths to each brand's web page for toner/cartridge content dump (fallback with.get).
 PAGE_PATHS = {
     "hp": ["/hp/device/InternalPages/Index?id=SuppliesStatus",
            "/hp/info/suppliesStatus.html",
@@ -44,7 +56,7 @@ PAGE_PATHS = {
 
 
 def probe(ip, community, timeout, snmp_version=None):
-    """جمع‌آوری خام همه‌ی فیلدهای مهم."""
+    """Raw collection of all important fields."""
     data = {"ip": ip, "time": datetime.datetime.now().isoformat(timespec="seconds")}
 
     data["sysDescr"] = g(ip, community, f"{MIB}.1.1.0", timeout, snmp_version)
@@ -54,7 +66,7 @@ def probe(ip, community, timeout, snmp_version=None):
     data["serial_prtMIB"] = g(ip, community, f"{MIB}.43.5.1.1.17.1", timeout, snmp_version)
     data["life_count"] = g(ip, community, f"{MIB}.43.10.2.1.4.1.1", timeout, snmp_version)
 
-    # جدول مصرفی‌ها — ۱۰ ردیف اول، همه‌ی ستون‌های کلیدی
+    # Consumables table — first 10 rows, all key columns
     # .3=class .4=colorantIndex .5=type .6=description .7=unit .8=max .9=level
     rows = []
     for idx in range(1, 11):
@@ -77,7 +89,7 @@ def probe(ip, community, timeout, snmp_version=None):
         rows.append(row)
     data["supplies"] = rows
 
-    # رنگ‌ها (prtMarkerColorantValue)
+    # colors (prtMarkerColorantValue)
     colors = []
     for idx in range(1, 7):
         v = g(ip, community, f"{MIB}.43.12.1.1.4.1.{idx}", timeout, snmp_version)
@@ -85,7 +97,7 @@ def probe(ip, community, timeout, snmp_version=None):
             colors.append((idx, v))
     data["colorants"] = colors
 
-    # OIDهای خصوصی HP (JetDirect/NPCL) و Canon (NETEYE 1602)
+    # Private OIDs of HP (JetDirect/NPCL) and Canon (NETEYE 1602)
     hp_oids = [
         "1.3.6.1.4.1.11.2.3.9.4.2.1.4.1.2.4.1.2.1.5.5.1.1",
         "1.3.6.1.4.1.11.2.3.9.4.2.1.4.1.2.1.5.5.1.1",
@@ -102,19 +114,19 @@ def probe(ip, community, timeout, snmp_version=None):
     data["hp_private"] = {o: g(ip, community, o, timeout, snmp_version) for o in hp_oids}
     data["canon_private"] = {o: g(ip, community, o, timeout, snmp_version) for o in canon_oids}
 
-    # OIDهای اختصاصی Brother — خانواده‌ی NC-8xxx/MFC-85xx تونر را در جدول
-    # استاندارد با level=-3 (مقداری هست) پنهان می‌کند. این کاندیداها از MIBهای
-    # عمومی Brother (brInfo/brToner) برداشته شده‌اند؛ هرکدام پاسخ بدهد نگاشت
-    # دقیقش را در کالکتور می‌گذاریم.
+    # Brother-specific OIDs - NC-8xxx/MFC-85xx toner family in the table
+    # The standard hides with level=-3 (there is some value). These candidates from MIBs
+    # General Brother (brInfo/brToner) have been removed; Everyone should answer and write
+    # We will put it in the collector.
     brother_oids = [
-        "1.3.6.1.4.1.2435.2.3.9.4.2.1.5.5.8.0",     # toner remaining (بعضی مدل‌ها)
+        "1.3.6.1.4.1.2435.2.3.9.4.2.1.5.5.8.0",     # toner remaining (some models)
         "1.3.6.1.4.1.2435.2.3.9.4.2.1.5.5.10.0",    # drum/counter candidate
         "1.3.6.1.4.1.2435.2.3.9.4.2.1.5.4.5.10.0",  # brInfo status candidate
         "1.3.6.1.4.1.2435.2.3.9.4.2.1.5.4.5.11.0",
         "1.3.6.1.4.1.2435.2.3.9.4.2.1.5.4.5.12.0",
         "1.3.6.1.4.1.2435.2.3.9.4.2.1.5.4.5.13.0",
         "1.3.6.1.4.1.2435.2.3.9.4.2.1.5.4.5.14.0",
-        "1.3.6.1.4.1.2435.2.4.3.99.3.1.6.1.2.1",     # model (بسیاری NC-boardها)
+        "1.3.6.1.4.1.2435.2.4.3.99.3.1.6.1.2.1",     # model (many NC-boards)
         "1.3.6.1.4.1.2435.2.4.3.99.3.1.6.1.2.3",     # serial
     ]
     desc_l = str(data.get("sysDescr") or "").lower()
@@ -123,14 +135,14 @@ def probe(ip, community, timeout, snmp_version=None):
     else:
         data["brother_private"] = {}
 
-    # PJL روی پورت 9100 — پاسخ @PJL INFO STATUS گاهی وضعیت مصرفی‌ها را متنی
-    # می‌دهد. اگر پورت بسته باشد بی‌صدا رد می‌شویم.
+    # PJL on port 9100 — reply @PJL INFO STATUS Sometimes the status of users is textual
+    # gives If the port is closed, we are rejected silently.
     data["pjl_status"] = _probe_pjl(ip, timeout=min(timeout, 2.5))
 
-    # صفحه‌ی وب دستگاه — دسترسی HTTP و HTTPS + دامپ محتوای مرتبط با تونر/کارتریج
-    # (برای فیکس‌های مبتنی‌بر اسکریپ: HP با SuppliesStatus/DevMgmt، Brother با
-    # صفحات EWS، Canon با Remote UI). خروجی «toner_contexts» قطعه‌های HTML اطراف
-    # کلیدواژه‌هاست تا پترن regex دقیق برای هر مدل نوشته شود.
+    # Device web page — HTTP and HTTPS access + toner/cartridge related content dump
+    # (For script-based fixes: HP with SuppliesStatus/DevMgmt, Brother with
+    # EWS pages, Canon with Remote UI). Output "toner_contexts" surrounding HTML fragments
+    # keywords to write the exact regex pattern for each model.
     from core.collectors.base import fetch_first_web_page
 
     web = {}
@@ -164,8 +176,8 @@ def probe(ip, community, timeout, snmp_version=None):
             "chars": len(body),
             "snippet": " ".join(body.split())[:400],
         }
-        # دامپ کامل صفحات کوچک (XMLها و صفحات Brother/HP کلاسیک) — برای نهایی‌کردن
-        # دقیق پترن‌های اسکریپ، کانتکست‌های ناقص کافی نیستند.
+        # Full dump of small pages (XMLs and classic Brother/HP pages) — to finalize
+        # Strictly script patterns, incomplete contexts are not enough.
         if len(body) <= 12000:
             entry["full"] = body
         contexts = []
@@ -190,7 +202,7 @@ def probe(ip, community, timeout, snmp_version=None):
 
 
 def _probe_pjl(ip: str, timeout: float = 2.5) -> str:
-    """ارسال فرمان PJL به پورت 9100 و خواندن پاسخ (در صورت باز بودن)."""
+    """Send the PJL command to port 9100 and read the response (if open)."""
     import socket
     try:
         with socket.create_connection((ip, 9100), timeout=timeout) as s:
@@ -212,6 +224,8 @@ def _probe_pjl(ip: str, timeout: float = 2.5) -> str:
 
 
 def render_md(d):
+    """Render the printer diagnostic result as Markdown."""
+
     L = []
     L.append(f"# گزارش تشخیص پرینتر {d['ip']}")
     L.append(f"- زمان: {d['time']}")
@@ -275,12 +289,12 @@ def render_md(d):
 
 
 def _scan_toshiba_paper_map(ip, community, timeout, snmp_version):
-    """اسکن شاخه‌های جدول شمارنده‌ی خصوصی Toshiba برای کشف نگاشت دقیق سایز.
+    """Scan the branches of Toshiba's private counter table to discover exact size mappings.
 
-    نگاشت شناخته‌شده (اثبات روی 2050C/3015AC):
-      207=کل بزرگ، 208=کل کوچک، 209=پرینت(بزرگ)، 210=پرینت(کوچک)، 227=نامشخص
-    اگر شاخه‌های دیگری (مثلاً A3 لحظه‌ای یا copy-per-size) روی دستگاه پاسخ بدهند،
-    با اجرای این پروب بلافاصله پس از یک چاپ A3 مشخص می‌شوند.
+    Known mapping (proof on 2050C/3015AC):
+      207=large whole, 208=small whole, 209=print(large), 210=print(small), 227=unclear
+    If other branches (e.g. instant A3 or copy-per-size) respond on the machine,
+    By running this probe, they are determined immediately after an A3 print.
     """
     base = "1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1"
     known = {2: "print_total", 3: "printer", 4: "copy", 7: "fax", 8: "scan_net",
@@ -312,11 +326,11 @@ def _scan_toshiba_paper_map(ip, community, timeout, snmp_version):
 
 
 def _scan_cartridge_identity(ip, community, timeout, snmp_version, brand_hint=None):
-    """کاوش شواهد «شناسه‌ی یکتای کارتریج» (Chip ID / سریال / صفحات‌باکارتریج).
+    """Exploring evidence of "unique cartridge ID" (Chip ID / serial / cartridge pages).
 
-    از همان منطق واقعی runtime استفاده می‌کند (core/collectors/cartridge_id.py):
-    اولویت اول OIDهای تأییدشده در config/cartridge_id_map.json و سپس پنل وب.
-    در نبود شواهد، راهنمای فعال‌سازی چاپ می‌شود.
+    It uses the same logic as the actual runtime (core/collectors/cartridge_id.py):
+    The first priority is the verified OIDs in config/cartridge_id_map.json and then the web panel.
+    In the absence of evidence, the activation guide is printed.
     """
     from core.collectors.cartridge_id import (
         get_cartridge_identity_data, load_id_config, _snmp_oids_for)
@@ -353,6 +367,8 @@ def _scan_cartridge_identity(ip, community, timeout, snmp_version, brand_hint=No
 
 
 def main():
+    """Command-line entry point that prints the supply diagnostics for one printer."""
+
     ap = argparse.ArgumentParser(description="Printer supply diagnostic dumper")
     ap.add_argument("ip")
     ap.add_argument("--community", default="public")

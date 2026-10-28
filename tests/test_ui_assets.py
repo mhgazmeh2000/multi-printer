@@ -1,11 +1,21 @@
 # -*- coding: utf-8 -*-
-"""
-گاردهای ایستای سازگاری UI — جلوگیری از تکرار باگ ReferenceError در پنل‌ها.
+# =============================================================================
+# @file:         tests/test_ui_assets.py
+# @brief:        Static guards that keep the web UI scripts free of known ReferenceError bugs.
+# @details:      Responsibilities: Check that UI assets reference only defined functions.
+#                Main API: UiAssetConsistencyTests
+#                Side effects: file I/O
+# @dependencies: stdlib only
+# @notes:        Can be run directly as a script.
+# =============================================================================
 
-باگ واقعی (کنسول مرورگر): پنل تنظیمات سیستم در users.html تابع showToast را
-صدا می‌زد ولی فقط window.toast تعریف شده بود → saveSystemSettings/testSystemEmail
-به‌طور کامل می‌شکستند. این تست تضمین می‌کند هر قالبی که نامی را صدا می‌زند،
-همان نام را هم تعریف کرده باشد (یا فایل JS ارائه‌دهنده را لود کند).
+"""
+Static UI compatibility guards — prevent the ReferenceError bug from recurring in panels.
+
+Actual bug (browser console): system settings panel in users.html showToast function
+It called, but only window.toast was defined → saveSystemSettings/testSystemEmail
+They broke completely. This test ensures that any format that calls a name,
+define the same name (or load the provider's JS file).
 """
 import glob
 import os
@@ -17,13 +27,15 @@ STATIC_CSS = os.path.join(os.path.dirname(__file__), "..", "web", "static", "css
 
 
 def _read(path):
+    """Helper: read."""
     with open(path, encoding="utf-8") as f:
         return f.read()
 
 
 class UiAssetConsistencyTests(unittest.TestCase):
+    """Tests for ui asset consistency."""
     def test_showtoast_defined_wherever_called(self):
-        """هر قالبی که showToast صدا می‌زند باید خودش تعریفش کند یا legacy-mode.js را لود کند."""
+        """Any mode that calls showToast must define itself or load legacy-mode.js."""
         offenders = []
         for path in glob.glob(os.path.join(TEMPLATES_DIR, "*.html")):
             content = _read(path)
@@ -36,7 +48,7 @@ class UiAssetConsistencyTests(unittest.TestCase):
                          f"قالب‌هایی که showToast را بدون تعریف صدا می‌زنند: {offenders}")
 
     def test_toast_element_and_styles_present(self):
-        """المان #toast در قالب‌های استفاده‌کننده و استایلش در style.css موجود باشد."""
+        """The #toast element should be available in user templates and its style in style.css."""
         css = _read(STATIC_CSS)
         self.assertIn("#toast{", css)
         self.assertIn("#toast.show", css)
@@ -47,7 +59,7 @@ class UiAssetConsistencyTests(unittest.TestCase):
                               f"{name} توابع toast دارد ولی المان #toast ندارد")
 
     def test_showtoast_type_mapping_covers_error(self):
-        """نگاشت showToast باید «error» را به کلاس e بفرستد (فراخوان‌های واقعی پنل)."""
+        """The showToast mapping should send "error" to the e class (the actual panel calls)."""
         content = _read(os.path.join(TEMPLATES_DIR, "users.html"))
         m = re.search(r"function showToast\(message, type\) \{(.*?)\n\}", content, re.S)
         self.assertIsNotNone(m, "showToast آداپتور در users.html پیدا نشد")
@@ -56,6 +68,7 @@ class UiAssetConsistencyTests(unittest.TestCase):
         self.assertRegex(body, r"error:\s*'e'")
 
     def test_cartridge_identity_display_uses_backend_value_only(self):
+        """Verifies cartridge identity display uses backend value only."""
         content = _read(os.path.join(os.path.dirname(__file__), "..", "web", "static", "js", "dashboard.js"))
         self.assertIn("p.cartridge_identity_type", content)
         self.assertIn("const identityValue = hasValidIdentity ? String(cartChipId) : 'N/A';", content)

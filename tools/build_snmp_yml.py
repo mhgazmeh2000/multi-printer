@@ -1,30 +1,43 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tools/build_snmp_yml.py
+# @brief:        Builds and checks monitoring/snmp.yml from monitoring/generator.yml.
+# @details:      Responsibilities: Map the spec to the runtime config, write the file and check it
+#                for staleness.
+#                Main API: spec_rows(), check_inference_table(), emit_metric(), render(),
+#                measure(), main()
+#                Side effects: file I/O
+# @dependencies: external: yaml
+# @notes:        monitoring/snmp.yml is generated from generator.yml; do not edit snmp.yml by
+#                hand. Can be run directly as a script.
+# =============================================================================
+
 """
-tools/build_snmp_yml.py — ساخت/بررسی `monitoring/snmp.yml` از `monitoring/generator.yml`
+tools/build_snmp_yml.py — build/check `monitoring/snmp.yml` from `monitoring/generator.yml`
 
-چرا این ابزار هست: `snmp.yml` configِ *runtime* است (snmp_exporter، نه generatorِ رسمی)
-و generator رسمی به MIB vendor (Canon/Brother/Toshiba) نیاز دارد که در دسترس نیست؛ پس
-این فایل از spec پروژه مشتق می‌شود. ابزار عمداً **هیچ OIDی نمی‌سازد**: هر متریک یک
-ردیفِ `generator.yml` است و هر `help:` همان `source:` را حمل می‌کند.
+Why this tool exists: `snmp.yml` is the *runtime* config (snmp_exporter, not the official generator).
+And the official generator requires the MIB vendor (Canon/Brother/Toshiba), which is not available; so
+This file is derived from the project spec. The tool intentionally **does not generate any OIDs**: each metric one
+row is `generator.yml` and each `help:` carries the same `source:`.
 
-    python tools/build_snmp_yml.py            :: بازتولیدِ monitoring/snmp.yml
-    python tools/build_snmp_yml.py --check     :: فقط بررسی (rc=1 اگر فایل کهنه است) + diff
-    python tools/build_snmp_yml.py --report   :: شمارش‌ها روی stdout (ردیف/متریک/get/walk/typeها)
+    python tools/build_snmp_yml.py:: reproduce monitoring/snmp.yml
+    python tools/build_snmp_yml.py --check:: check only (rc=1 if file is old) + diff
+    python tools/build_snmp_yml.py --report:: counts on stdout (row/metric/get/walk/types)
 
-قاعده‌ها (سند: docs/snmp-exporter-setup.md §۴):
-  ۱) schema = config/config.go نسخهٔ 0.26.0 و loader استِ `yaml.UnmarshalStrict` ⇒
-     هیچ کلیدِ specی که runtime نمی‌شناسد نوشته نمی‌شود:
-       • `ignore_values` → کامنتِ همان متریک (فیلترِ sentinel در exporter_adapter، گام G.۵)
-       • `source`        → متنِ `help`
-       • `lookups`/`row_index`/`label_oid` → حذف (بیرونِ `indexes` معنا ندارند)
-  ۲) `auths` به نام‌های runtime نگاشت می‌شود: auth_passphrase→password،
-     priv_passphrase→priv_password، AES128→AES (ConfigureSNMP این نام‌ها را match می‌کند).
-     نامِ متغیرهای محیطی عوض نمی‌شود.
-  ۳) `type`های اعلام‌شده در spec عیناً می‌نشینند؛ ردیف‌های بی‌type با INFER (زیر) و با
-     شاهدِ خط‌به‌خط استنتاج می‌شوند و یک کامنتِ ردیابی روی‌شان می‌نشیند.
-  ۴) خروجی **deterministic** است: همان ورودی ⇒ همان بایت‌ها (بدون timestamp).
-     برای همین `--check` می‌تواند گیتِ CI باشد و اجرای دوباره هیچ diffی نمی‌سازد
+Rules (document: docs/snmp-exporter-setup.md §4):
+  1) schema = config/config.go version 0.26.0 and loader is `yaml.UnmarshalStrict` ⇒
+     Any spec keys that the runtime does not recognize will not be written:
+       • `ignore_values` → comment of the same metric (sentinel filter in exporter_adapter, step G.5)
+       • `source` → `help` text
+       • `lookups`/`row_index`/`label_oid` → delete (they have no meaning outside `indexes`)
+  2) `auths' is mapped to runtime names: auth_passphrase→password,
+     priv_passphrase→priv_password, AES128→AES (ConfigureSNMP matches these names).
+     The name of the environment variables is not changed.
+  3) ``types'' declared in the spec are exactly the same; Rows without type with INFER (below) and with
+     They witness line by line inferences and a tracking comment sits on them.
+  4) Output is **deterministic**: same as input ⇒ same bytes (without timestamp).
+     That's why `--check' can be a CI gate and running it again won't create any diff
      (idempotent).
 """
 from __future__ import annotations
@@ -47,34 +60,34 @@ DEFAULT_OUT = ROOT / "monitoring" / "snmp.yml"
 # module. Families: counter = cumulative page/job/gen counts (code diffs them),
 # gauge = levels/percents/capacities/status codes/sizes/uptime,
 # DisplayString = identity text and table roots.
-TOSHIBA_DIFF_EVIDENCE = "base.py:325 typed `int`, diffed by _safe_delta (toshiba.py:419-425)"
+TOSHIBA_DIFF_EVIDENCE = "base.py:344 typed `int`, diffed by _safe_delta (toshiba.py:434-440)"
 INFER: dict = {
-    ("printer_std", "bw_std"): ("counter", "canon.py:203 si(g(…43.10.2.1.4.1.3)) → black_white pages (canon.py:306)"),
-    ("printer_canon", "alt_lbp_total"): ("counter", "canon.py:267 si(gc(…1.11.1.1.1.3.3)) → total pages"),
-    ("printer_canon", "alt_total"): ("counter", "canon.py:216 si(gc(…1.11.2.2.1.3.1))"),
-    ("printer_canon", "alt_copy"): ("counter", "canon.py:217 si(…1.11.2.2.1.3.6)"),
-    ("printer_canon", "alt_print"): ("counter", "canon.py:218 si(…1.11.2.2.1.3.9)"),
-    ("printer_canon", "alt_scan"): ("counter", "canon.py:219 si(…1.11.2.2.1.3.12)"),
-    ("printer_hp", "general_oids"): ("gauge", "enhanced_collector.py:229-235 int(val) + 0..100 guard"),
-    ("printer_hp", "general_oids_2"): ("gauge", "enhanced_collector.py:231 same int()/0..100 loop"),
-    ("printer_hp", "hp_npcl_pct_oid"): ("gauge", "enhanced_collector.py:39 _HP_NPCL_PCT_OID → percent path"),
-    ("printer_canon", "canon_alternate_oids"): ("gauge", "enhanced_collector.py:244-250 int(val) + 0..100 guard"),
-    ("printer_canon", "canon_alternate_oids_2"): ("gauge", "enhanced_collector.py:244-250 same loop"),
-    ("printer_brother", "brother_black"): ("gauge", "brother.py:169-172 si(...) + 0..100 → toner level"),
-    ("printer_brother", "brother_drum_oid"): ("gauge", "enhanced_collector.py:66 BROTHER_DRUM_OID → drum life percent"),
-    ("printer_brother", "val_val"): ("counter", "cartridge_id.py:305-310 int(str(val)) — Toner Replace Count, +1 per swap"),
-    ("printer_toshiba", "print_list"): ("counter", "toshiba.py:429 _raw_int → toshiba.py:415-417 si(v)"),
+    ("printer_std", "bw_std"): ("counter", "canon.py:216 si(g(…43.10.2.1.4.1.3)) → black_white pages (canon.py:316)"),
+    ("printer_canon", "alt_lbp_total"): ("counter", "canon.py:278 si(gc(…1.11.1.1.1.3.3)) → total pages"),
+    ("printer_canon", "alt_total"): ("counter", "canon.py:229 si(gc(…1.11.2.2.1.3.1))"),
+    ("printer_canon", "alt_copy"): ("counter", "canon.py:230 si(…1.11.2.2.1.3.6)"),
+    ("printer_canon", "alt_print"): ("counter", "canon.py:231 si(…1.11.2.2.1.3.9)"),
+    ("printer_canon", "alt_scan"): ("counter", "canon.py:232 si(…1.11.2.2.1.3.12)"),
+    ("printer_hp", "general_oids"): ("gauge", "enhanced_collector.py:243-249 int(val) + 0..100 guard"),
+    ("printer_hp", "general_oids_2"): ("gauge", "enhanced_collector.py:245 same int()/0..100 loop"),
+    ("printer_hp", "hp_npcl_pct_oid"): ("gauge", "enhanced_collector.py:53 _HP_NPCL_PCT_OID → percent path"),
+    ("printer_canon", "canon_alternate_oids"): ("gauge", "enhanced_collector.py:258-264 int(val) + 0..100 guard"),
+    ("printer_canon", "canon_alternate_oids_2"): ("gauge", "enhanced_collector.py:258-264 same loop"),
+    ("printer_brother", "brother_black"): ("gauge", "brother.py:183-186 si(...) + 0..100 → toner level"),
+    ("printer_brother", "brother_drum_oid"): ("gauge", "enhanced_collector.py:80 BROTHER_DRUM_OID → drum life percent"),
+    ("printer_brother", "val_val"): ("counter", "cartridge_id.py:316-321 int(str(val)) — Toner Replace Count, +1 per swap"),
+    ("printer_toshiba", "print_list"): ("counter", "toshiba.py:444 _raw_int → toshiba.py:430-432 si(v)"),
     ("printer_toshiba", "scan_net_fc"): ("counter", "family of tsh_scan_fc (counter); read through _raw_int"),
     ("printer_toshiba", "scan_net_bw"): ("counter", "family of tsh_scan_bw (counter); read through _raw_int"),
-    ("printer_toshiba", "uptime"): ("gauge", "base.py:375,396 prev_uptime carried forward — sys_uptime precedent"),
+    ("printer_toshiba", "uptime"): ("gauge", "base.py:394,415 prev_uptime carried forward — sys_uptime precedent"),
 }
 # Toshiba paper-size counters: 5 branches × (fc, bw, total) — exact spec names
 TOSHIBA_PAPER = {
-    "a3": ("oid_map.py:33-35", ("oids_a3_fc", "oids_a3_bw", "a3_total")),
-    "a4": ("oid_map.py:30-32", ("oids_a4_fc", "oids_a4_bw", "a4_total")),
-    "a4r": ("oid_map.py:36-38", ("a4r_fc", "a4r_bw", "a4r_total")),
-    "a5": ("oid_map.py:39-41", ("oids_a5_fc", "oids_a5_bw", "a5_total")),
-    "b4": ("oid_map.py:42-44", ("oids_b4_fc", "oids_b4_bw", "b4_total")),
+    "a3": ("oid_map.py:43-45", ("oids_a3_fc", "oids_a3_bw", "a3_total")),
+    "a4": ("oid_map.py:40-42", ("oids_a4_fc", "oids_a4_bw", "a4_total")),
+    "a4r": ("oid_map.py:46-48", ("a4r_fc", "a4r_bw", "a4r_total")),
+    "a5": ("oid_map.py:49-51", ("oids_a5_fc", "oids_a5_bw", "a5_total")),
+    "b4": ("oid_map.py:52-54", ("oids_b4_fc", "oids_b4_bw", "b4_total")),
 }
 for _stem, (_lines, _names) in TOSHIBA_PAPER.items():
     for _suf, _name in zip(("fc", "bw", "total"), _names):
@@ -92,11 +105,11 @@ for _n in ("3", "6"):
     INFER[("printer_toshiba", f"tray{_n}_size")] = ("gauge", "family of tsh_t1_size, typed gauge in the spec")
 # walk / probe roots: the bare column OID is never a value on a device
 for _mod, _nm, _ev in (
-    ("printer_std", "standard", "43.11.1.1.6 = prtMarkerSuppliesDescription column root — cartridge_discovery.py:62"),
-    ("printer_hp", "candidate_subtrees_hp", "cartridge_discovery.py:65 — walk candidate, not a value"),
-    ("printer_hp", "candidate_subtrees_hp_2", "cartridge_discovery.py:66 — walk candidate, not a value"),
-    ("printer_brother", "candidate_subtrees_brother", "cartridge_discovery.py:69 — walk candidate, not a value"),
-    ("printer_brother", "candidate_subtrees_brother_2", "cartridge_discovery.py:70 — walk candidate, not a value"),
+    ("printer_std", "standard", "43.11.1.1.6 = prtMarkerSuppliesDescription column root — cartridge_discovery.py:76"),
+    ("printer_hp", "candidate_subtrees_hp", "cartridge_discovery.py:79 — walk candidate, not a value"),
+    ("printer_hp", "candidate_subtrees_hp_2", "cartridge_discovery.py:80 — walk candidate, not a value"),
+    ("printer_brother", "candidate_subtrees_brother", "cartridge_discovery.py:83 — walk candidate, not a value"),
+    ("printer_brother", "candidate_subtrees_brother_2", "cartridge_discovery.py:84 — walk candidate, not a value"),
 ):
     INFER[(_mod, _nm)] = ("DisplayString", _ev + "; no sample is emitted for the bare column OID")
 
@@ -106,13 +119,13 @@ AUTH_VALUE_MAP = {("priv_protocol", "AES128"): "AES"}
 NAME_OK = re.compile(r"^[a-zA-Z_:][a-zA-Z0-9_:]*$")
 PROBE_RE = re.compile(r"^ *# +([0-9]+(?:\.[0-9]+){6,}) +←", re.M)
 
-# expected by tests/test_build_snmp_yml.py — اگر کسی این‌ها را عوض کند، آن تست می‌گوید
+# expected by tests/test_build_snmp_yml.py — if someone changes these, that test says
 EXPECTED_COUNTS = {"modules": 6, "metrics": 136, "get_rows": 98, "walk_tables": 7,
                    "ignore_values": 31, "inferred_types": 60, "declared_types": 76}
 
 
 def spec_rows(gen: dict):
-    """(module, row, group_or_None) — ردیف‌های متریکِ spec، به همان ترتیبِ فایل."""
+    """(module, row, group_or_None) — metric rows of the spec, in the same order as the file."""
     for mod, md in gen["modules"].items():
         for r in md.get("get") or []:
             if isinstance(r, dict):
@@ -123,7 +136,7 @@ def spec_rows(gen: dict):
 
 
 def check_inference_table(rows) -> None:
-    """INFER باید دقیقاً روی ردیف‌های بی‌type باشد: نه کم، نه زیاد."""
+    """INFER must be exactly on untyped rows: not too few, not too many."""
     untyped = {(mod, r["name"]) for mod, r, _ in rows if r.get("type") is None}
     missing = sorted(untyped - set(INFER))
     if missing:
@@ -134,7 +147,7 @@ def check_inference_table(rows) -> None:
 
 
 def emit_metric(row: dict, module: str, inferred: dict) -> list:
-    """یک بلوکِ متریک + کامنت‌هایی که schemaِ runtime جا برایشان ندارد."""
+    """A metric block + comments that the runtime schema has no room for."""
     name, oid, typ = row["name"], row["oid"], row.get("type")
     note = ""
     if typ is None:
@@ -155,7 +168,7 @@ def emit_metric(row: dict, module: str, inferred: dict) -> list:
 
 
 def render(spec_text: str) -> str:
-    """ساختِ متنِ کاملِ snmp.yml از متنِ generator.yml (بدون نوشتن روی دیسک)."""
+    """Generating the full text of snmp.yml from the text of generator.yml (without writing to disk)."""
     gen = yaml.safe_load(spec_text)
     probes = PROBE_RE.findall(spec_text)
     rows = list(spec_rows(gen))
@@ -170,51 +183,50 @@ def render(spec_text: str) -> str:
 
     o = [
         "#",
-        "# monitoring/snmp.yml — پیکربندیِ runtime برای snmp_exporter (فاز G · گام G.3)",
+        "# monitoring/snmp.yml — runtime configuration for snmp_exporter (phase G · step G.3)",
         "#",
-        "# مشتق‌شده از `monitoring/generator.yml` (spec) — تک‌منبعِ حقیقت. هیچ OIDی اینجا",
-        "# اختراع نشده: هر metric یک ردیفِ spec دارد و هر `help:` به فایل:خطِ کد می‌رسد.",
-        "# گیتِ پوشش: python tools/check_oid_coverage.py · گیتِ ساختارِ همین فایل:",
+        "# Derived from `monitoring/generator.yml` (spec) — the single source of truth. No OID is invented here:",
+        "# every metric has a spec row, and every `help:` points to a file:line of code.",
+        "# Coverage gate: python tools/check_oid_coverage.py · structure gate of this file:",
         "# python -m pytest tests/test_snmp_yml.py",
-        "# بازتولید/بررسی: python tools/build_snmp_yml.py [--check]",
+        "# Regenerate/check: python tools/build_snmp_yml.py [--check]",
         "#",
-        "# چرا دستی؟ generator رسمی به MIB vendor (Canon/Brother/Toshiba) نیاز دارد که در",
-        "# دسترس نیست. شرح و جدولِ نگاشت: docs/snmp-exporter-setup.md §۴",
+        "# Why manual? The official generator needs the vendor MIBs (Canon/Brother/Toshiba), which are",
+        "# not available. Description and mapping table: docs/snmp-exporter-setup.md §4",
         "#",
         "# schema = config/config.go of snmp_exporter v0.26.0 and the loader is strict",
-        "# (yaml.UnmarshalStrict) ⇒ هر کلیدِ ناشناخته اینجا، خطای load روی دستگاه مقصد است.",
-        "# پس دو کلیدِ spec اینجا کلید نیستند:",
-        "#   • ignore_values → کامنتِ همان متریک؛ فیلترِ sentinel در",
-        "#     core/collectors/exporter_adapter.py (گام G.5) می‌کند، همان‌جا که امروز",
-        "#     si() و گارد 0..100 در کدِ collector هست",
-        "#   • source        → متنِ help:",
+        "# (yaml.UnmarshalStrict) ⇒ any unknown key here is a load error on the target device.",
+        "# So the two spec keys are not keys here:",
+        "#   • ignore_values → a comment on the same metric; the sentinel filter is in",
+        "#     core/collectors/exporter_adapter.py (step G.5), where today",
+        "#     si() and the 0..100 guard are in the collector code",
+        "#   • source        → the help: text",
         "#",
-        "# load با باینریِ رسمی در sandbox انجام **نشده** (تصمیم مالک: تست واقعی روی سرور",
-        "# خودش در پایان پروژه) — monitoring/snmp-manifest.json → load_test_sandbox:",
-        "# not_attempted. فایل مستقل از OS است: همان بایت‌ها روی Windows و لینوکس load",
-        "# می‌شوند.",
+        "# Load with the official binary in the sandbox was **not** done (owner decision: a real test on the server",
+        "# itself at the end of the project) — monitoring/snmp-manifest.json → load_test_sandbox:",
+        "# not_attempted. The file is OS-independent: the same bytes are loaded on Windows and Linux",
+        "# alike.",
         "#",
-        f"# {len(rows)} متریک = {n_get} ردیفِ get + {n_walk_rows} ردیفِ جداولِ "
-        f"{n_tables} تاییِ walk.",
-        f"# {len(probes)} کاوشِ probe-only در spec کامنت‌اند و اینجا هم کامنت می‌مانند.",
+        f"# {len(rows)} metrics = {n_get} get rows + {n_walk_rows} rows of {n_tables} walk tables.",
+        f"# {len(probes)} probe-only probes are comments in the spec and stay comments here too.",
         "",
         "version: 1",
         "",
         "auths:",
-        "  # نام‌ها با قرارداد فاز G یکی‌اند: printer['exporter_auth'] == f\"public_{snmp_version}\"",
+        "  # names follow the phase G convention: printer['exporter_auth'] == f\"public_{snmp_version}\"",
     ]
     for aname, adef in gen["auths"].items():
         o.append(f"  {aname}:")
         if adef.get("version") == 3:
-            o.append("    # placeholder؛ مقدار واقعی از env خوانده می‌شود و هرگز commit نمی‌شود")
-            o.append("    # runtime این کلیدها را می‌خواهد: password/priv_password (نه auth/priv_passphrase)")
-            o.append("    # و --config.expand-env لازم است تا ${...}ها مقدار بگیرند")
+            o.append("    # placeholder; the real value is read from env and is never committed")
+            o.append("    # the runtime wants these keys: password/priv_password (not auth/priv_passphrase)")
+            o.append("    # and --config.expand-env is needed so that ${...} values get filled in")
         for k, v in adef.items():
             rk = AUTH_KEY_MAP.get(k, k)
             vv = AUTH_VALUE_MAP.get((rk, v), v)
             o.append(f"    {rk}: \"{vv}\"" if isinstance(vv, str) and vv.startswith("${") else f"    {rk}: {vv}")
         if adef.get("version") == 3:
-            o.append("    # نکته: مقدارِ runtime «AES» است، نه AES128ِ spec")
+            o.append("    # note: the runtime value is \"AES\", not the AES128 of the spec")
 
     o += ["", "modules:"]
     stats = {"modules": 0, "metrics": 0, "get_rows": 0, "walk_tables": 0,
@@ -235,17 +247,17 @@ def render(spec_text: str) -> str:
             sum(1 for g in groups for r in g.get("metrics") or [] if r.get("type") is not None)
         o += [
             "  # " + "─" * 72,
-            f"  # {mod} — {n_leaf} متریک · {len(gets)} get · {len(groups)} جدول walk",
+            f"  # {mod} — {n_leaf} metrics · {len(gets)} get · {len(groups)} walk tables",
             "  # " + "─" * 72,
             f"  {mod}:",
         ]
         if groups:
-            o.append("    # یک GETNEXT-sweep روی این درخت‌ها، چند ردیف را یک‌جا می‌آورد")
+            o.append("    # a GETNEXT sweep over these trees brings several rows at once")
             o.append("    walk:")
             for g in groups:
-                o.append(f"    - {g['subtree']}          # {g['name']} — {len(g.get('metrics') or [])} سطرِ ماتریس زیر این درخت")
+                o.append(f"    - {g['subtree']}          # {g['name']} — {len(g.get('metrics') or [])} matrix rows under this tree")
         if gets:
-            o.append("    # scalarها: یک GET بسته، بدون walk")
+            o.append("    # scalars: one closed GET, no walk")
             o.append("    get:")
             for r in gets:
                 o.append(f"    - {r['oid']}          # {r['name']}")
@@ -262,7 +274,7 @@ def render(spec_text: str) -> str:
 
 
 def measure(text: str) -> dict:
-    """شمارش‌ها از متنِ تولیدشده — همان چیزی که manifest و تست‌ها انتظار دارند."""
+    """Counts from generated text — what the manifest and tests expect."""
     doc = yaml.safe_load(text)
     metrics = [m for md in (doc.get("modules") or {}).values() for m in md.get("metrics") or []]
     return {
@@ -279,6 +291,8 @@ def measure(text: str) -> dict:
 
 
 def main(argv=None) -> int:
+    """Command-line entry point: build or check monitoring/snmp.yml."""
+
     ap = argparse.ArgumentParser(description="build/verify monitoring/snmp.yml from monitoring/generator.yml")
     ap.add_argument("--generator", default=str(DEFAULT_SPEC), help="مسیر spec (پیش‌فرض: monitoring/generator.yml)")
     ap.add_argument("--out", default=str(DEFAULT_OUT), help="مسیر خروجی (پیش‌فرض: monitoring/snmp.yml)")

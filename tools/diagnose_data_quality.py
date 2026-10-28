@@ -1,24 +1,35 @@
 #!/usr/bin/env python3
+# =============================================================================
+# @file:         tools/diagnose_data_quality.py
+# @brief:        Independent health and data-quality diagnostic for the SQLite database (phase F).
+# @details:      Responsibilities: Scan tables and report data-quality issues without modifying
+#                the data.
+#                Main API: load_printer_count(), connect_sqlite_ro(), get_sqlite_tables(),
+#                scan_table_data_quality(), diagnose_database(), print_terminal_report(), main()
+#                Side effects: database access, file I/O
+# @dependencies: stdlib only
+# @notes:        Can be run directly as a script.
+# =============================================================================
+
 """
-ابزار تشخیصی مستقل سلامت و کیفیت داده‌های پایگاه‌داده SQLite (PrintGuard Phase F).
+SQLite database health and data quality independent diagnostic tool (PrintGuard Phase F).
 
-این اسکریپت پایگاه‌داده SQLite را پیش از مایگریشن یا پس از ریکاوری (مانند sqlite3 .recover)
-اسکن می‌کند و موارد زیر را ارزیابی و در قالب JSON گزارش می‌دهد:
-  ۱. تطابق نوع داده: یافتن مقادیر متنی/خراب در ستون‌های عددی (INTEGER).
-  ۲. تعداد سطرهای حداقلی: بررسی تعداد رکوردهای cartridge_state (حداقل ۴ به ازای هر پرینتر رنگی)
-     و printer_counters.
-  ۳. ذخیره خروجی تشخیصی در فایل logs.db.diagnosis.json.
+This script recovers SQLite database before migration or after recovery (like sqlite3.recover)
+It scans and evaluates and reports the following in JSON format:
+  1. Data type matching: find text/bad values ​​in numeric (INTEGER) columns.
+  2. Minimum number of lines: checking the number of cartridge_state records (at least 4 for each color printer)
+     and printer_counters.
+  3. Save diagnostic output in logs.db.diagnosis.json file.
 
-خروجی مطابق قرارداد فاز F در فایلی با ساختار استاندارد ذخیره می‌شود.
+The output is stored in a file with a standard structure according to the phase F contract.
 """
 
 import argparse
 import json
 import logging
-import os
-from pathlib import Path
 import sqlite3
 import sys
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 logging.basicConfig(
@@ -31,8 +42,8 @@ log = logging.getLogger("diagnose_data_quality")
 
 def load_printer_count(printers_path: Optional[str]) -> Tuple[int, int]:
     """
-    خواندن تعداد کل پرینترها و پرینترهای رنگی از فایل پیکربندی.
-    بازگشت: (total_printers, color_printers)
+    Reading the total number of printers and color printers from the configuration file.
+    return: (total_printers, color_printers)
     """
     path = Path(printers_path) if printers_path else Path("printers.json")
     if not path.is_file():
@@ -53,7 +64,7 @@ def load_printer_count(printers_path: Optional[str]) -> Tuple[int, int]:
 
 
 def connect_sqlite_ro(source_path: str) -> sqlite3.Connection:
-    """اتصال قطعی فقط-خواندنی به پایگاه‌داده SQLite."""
+    """Secure read-only connection to SQLite database."""
     p = Path(source_path).resolve()
     if not p.is_file():
         raise FileNotFoundError(f"فایل دیتابیس در مسیر '{source_path}' یافت نشد.")
@@ -64,7 +75,7 @@ def connect_sqlite_ro(source_path: str) -> sqlite3.Connection:
 
 
 def get_sqlite_tables(conn: sqlite3.Connection) -> List[str]:
-    """فهرست جدول‌های موجود در SQLite بدون جداول سیستمی."""
+    """List of tables in SQLite without system tables."""
     cur = conn.cursor()
     cur.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
@@ -78,11 +89,11 @@ def scan_table_data_quality(
     expected_min_rows: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
-    اسکن عمیق یک جدول از نظر نوع داده و تعداد سطرها.
+    Deep scan of a table for data type and number of rows.
     """
     cur = conn.cursor()
 
-    # شمارش سطرهای فعلی
+    # Current row count
     cur.execute(f'SELECT COUNT(*) FROM "{table}"')
     actual_rows = int(cur.fetchone()[0])
 
@@ -93,7 +104,7 @@ def scan_table_data_quality(
     if expected_min_rows is not None:
         table_report["expected_min_rows"] = expected_min_rows
 
-    # بررسی کسری سطرها در صورت تعریف حد انتظار
+    # Checking the fraction of rows if the expectation limit is defined
     if expected_min_rows is not None and actual_rows < expected_min_rows:
         table_report["issues"].append(
             {
@@ -110,7 +121,7 @@ def scan_table_data_quality(
     if actual_rows == 0:
         return table_report
 
-    # دریافت متادیتای ستون‌ها
+    # Get the metadata of the columns
     try:
         cur.execute(f'PRAGMA table_xinfo("{table}")')
         xinfo = cur.fetchall()
@@ -129,7 +140,7 @@ def scan_table_data_quality(
         if any(t in c_type for t in ("INT", "INTEGER", "BIGINT", "SMALLINT", "TINYINT")):
             int_cols.append(c_name)
 
-    # اسکن مقادیر نامعتبر در ستون‌های عددی
+    # Scan for invalid values in numeric columns
     for col in int_cols:
         query = f'''
             SELECT "{pk_col}", "{col}", typeof("{col}")
@@ -145,7 +156,7 @@ def scan_table_data_quality(
 
         for r in raw_invalid:
             val = r[1]
-            # بررسی اینکه آیا به صورت عدد صحیح قابل تفسیر است یا نه
+            # Checking whether it can be interpreted as an integer or not
             is_valid_numeric = False
             try:
                 int(val)
@@ -173,7 +184,7 @@ def diagnose_database(
     printers_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    اجرای عیب‌یابی جامع روی پایگاه‌داده SQLite و تولید ساختار استاندارد گزارش.
+    Perform comprehensive troubleshooting on SQLite database and generate standard report structure.
     """
     conn = connect_sqlite_ro(db_path)
     tables = get_sqlite_tables(conn)
@@ -185,7 +196,7 @@ def diagnose_database(
     for table in tables:
         expected_min: Optional[int] = None
         if table == "cartridge_state" and total_printers > 0:
-            # هر پرینتر رنگی معمولاً ۴ کارتریج و تک‌رنگ ۱ کارتریج دارد
+            # Each color printer usually has 4 cartridges and monochrome 1 cartridge
             expected_min = (color_printers * 4) + (total_printers - color_printers)
         elif table == "printer_counters" and total_printers > 0:
             expected_min = total_printers
@@ -210,7 +221,7 @@ def diagnose_database(
 
 
 def print_terminal_report(report: Dict[str, Any]) -> None:
-    """چاپ جدول خلاصه‌ی تشخیصی در کنسول."""
+    """Print the diagnostic summary table in the console."""
     print("=" * 80)
     print(" گزارش عیب‌یابی و ارزیابی کیفیت داده‌ها (Data Quality Diagnosis)")
     print("=" * 80)
@@ -221,7 +232,7 @@ def print_terminal_report(report: Dict[str, Any]) -> None:
         actual = info.get("actual_rows", 0)
         exp = str(info.get("expected_min_rows", "—"))
         issues_cnt = len(info.get("issues", []))
-        status_str = f"✔ سالم" if issues_cnt == 0 else f"✖ {issues_cnt} مورد"
+        status_str = "✔ سالم" if issues_cnt == 0 else f"✖ {issues_cnt} مورد"
         print(f"{tbl:<28} | {actual:<10} | {exp:<12} | {status_str}")
 
     print("=" * 80)
@@ -234,6 +245,8 @@ def print_terminal_report(report: Dict[str, Any]) -> None:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    """Command-line entry point of the data-quality diagnostic."""
+
     parser = argparse.ArgumentParser(
         description="ابزار مستقل ارزیابی کیفیت و سلامت داده‌های دیتابیس SQLite"
     )
@@ -269,7 +282,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         log.error("خطا در عیب‌یابی دیتابیس: %s", exc)
         return 2
 
-    # ذخیره در فایل JSON
+    # Save in JSON file
     try:
         Path(out_path).write_text(
             json.dumps(report, ensure_ascii=False, indent=2),

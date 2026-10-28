@@ -1,13 +1,25 @@
+# =============================================================================
+# @file:         core/security_audit.py
+# @brief:        Records security events such as failed logins and suspicious activity.
+# @details:      Responsibilities: Write security events to the database and count recent failed
+#                logins.
+#                Main API: Severity, SecurityEvent, init_security_audit(), log_security_event(),
+#                count_recent_failed_logins(), get_recent_events(), cleanup_old_events()
+#                Side effects: database access
+# @dependencies: internal: core.db, core.db.schema, core.time_utils
+# @notes:        None.
+# =============================================================================
+
 """
 Security Audit Module
-ثبت رویدادهای امنیتی مانند ورود ناموفق، حملات brute-force، و فعالیت‌های مشکوک.
+Log security events such as failed logins, brute-force attacks, and suspicious activity.
 """
 
 import logging
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Optional, List, Dict, Any
-from contextlib import contextmanager
+from typing import List, Dict, Any
 
 from core.db import db_connection as core_db_connection
 from core.db.schema import (
@@ -19,18 +31,22 @@ from core.time_utils import to_filter_bound, to_utc_z, utc_now_iso
 
 log = logging.getLogger("PrinterMonitor")
 
-# ─── ثابت‌ها ─────────────────────────────────────────────────────
-MAX_FAILED_ATTEMPTS_PER_USER = 5      # حداکثر تلاش ناموفق برای هر کاربر
-MAX_FAILED_ATTEMPTS_PER_IP = 10       # حداکثر تلاش ناموفق برای هر IP
-FAILED_ATTEMPT_WINDOW_MINUTES = 15    # بازه زمانی بررسی (دقیقه)
+# - Constants - Constants
+MAX_FAILED_ATTEMPTS_PER_USER = 5      # Maximum failed attempts per user
+MAX_FAILED_ATTEMPTS_PER_IP = 10       # Maximum failed attempts per IP
+FAILED_ATTEMPT_WINDOW_MINUTES = 15    # Check interval (minutes)
 
-# ─── Enumها ─────────────────────────────────────────────────────
+# Enums Enums
 class Severity(str, Enum):
+    """Severity levels of security events."""
+
     INFO = "info"
     WARNING = "warning"
     CRITICAL = "critical"
 
 class SecurityEvent(str, Enum):
+    """One security event (type, severity and details) as recorded by the audit log."""
+
     SUCCESSFUL_LOGIN = "successful_login"
     FAILED_LOGIN = "failed_login"
     ACCOUNT_LOCKED = "account_locked"
@@ -48,23 +64,23 @@ class SecurityEvent(str, Enum):
     USER_ACCESS_CHANGED = "user_access_changed"
     USER_DELETED = "user_deleted"
 
-# ─── اتصال دیتابیس ─────────────────────────────────────────────
-# توجه (فاز D): پیاده‌سازی به core.db منتقل شده است؛ این تابع فقط پوسته‌ی
-# سازگاری است تا نام و فراخوانی‌های موجود (`_db_conn(...)`) دست‌نخورده بماند.
+# Database connection
+# Note (Phase D): Implementation moved to core.db; This function is only a shell
+# It is compatible so that existing names and calls (`_db_conn(...)`) remain intact.
 @contextmanager
 def _db_conn(timeout: float = 10.0, commit: bool = False):
-    """Context manager برای اتصال امن به دیتابیس security audit (پوسته‌ی core.db)."""
+    """Context manager for secure connection to security audit database (core.db shell)."""
     with core_db_connection(timeout=timeout, commit=commit) as conn:
         yield conn
 
-# ─── راه‌اندازی جدول ─────────────────────────────────────────────
+# Setting up the table
 def init_security_audit():
-    """ایجاد جدول security_events اگر وجود نداشته باشد (روی PG: فقط تأیید).
+    """Create security_events table if it doesn't exist (on PG: verification only).
 
-    روی PostgreSQL (فاز E.4.5) هیچ DDLی اجرا نمی‌شود — اسکیما از Alembic می‌آید —
-    و در نبود جدول، خطای روشن می‌دهیم. این خطا **بیرون** از ``try`` زیر است تا
-    مثل گذشته در log سرکوب نشود (شکست بی‌صدا همان چیزی است که ردیف ۸ سند را
-    ماه‌ها پنهان کرده بود).
+    On PostgreSQL (phase E.4.5) no DDL is executed — schema comes from Alembic —
+    And in the absence of the table, we give a clear error. This error is **out** of the ``try'' below
+    Do not suppress in the log as before (silent failure is the same as line 8 of the document
+    had hidden for months).
     """
     if is_postgres():
         with _db_conn() as conn:
@@ -98,7 +114,7 @@ def init_security_audit():
     except Exception as e:
         log.exception("Failed to init security_audit table: %s", e)
 
-# ─── ثبت رویداد امنیتی ─────────────────────────────────────────
+# Security event registration
 def log_security_event(
     event_type: SecurityEvent,
     severity: Severity = Severity.INFO,
@@ -111,18 +127,18 @@ def log_security_event(
     details: str = None,
 ):
     """
-    ثبت یک رویداد امنیتی در دیتابیس.
+    Register a security event in the database.
     
-    پارامترها:
-        event_type: نوع رویداد (از SecurityEvent)
-        severity: سطح اهمیت (از Severity)
-        user_identifier: نام کاربری یا ایمیل
-        user_id: شناسه کاربر
-        ip_address: آدرس IP
-        user_agent: User-Agent مرورگر
-        endpoint: endpoint مورد نظر
-        success: آیا عملیات موفق بود
-        details: توضیحات اضافی
+    Parameters:
+        event_type: event type (from SecurityEvent)
+        severity: level of importance (from Severity)
+        user_identifier: username or email
+        user_id: User ID
+        ip_address: IP address
+        user_agent: Browser User-Agent
+        endpoint: desired endpoint
+        success: Was the operation successful?
+        details: Additional details
     """
     try:
         now = utc_now_iso()
@@ -141,7 +157,7 @@ def log_security_event(
                 ip_address,
                 user_agent,
                 endpoint,
-                # فاز E.4.1: ستون success روی PG BOOLEAN است ⇒ bool، نه int.
+                # Phase E.4.1: Success column on PG is BOOLEAN ⇒ bool, not int.
                 bool(success),
                 details,
                 now,
@@ -149,42 +165,42 @@ def log_security_event(
     except Exception as e:
         log.error(f"Failed to log security event: {e}")
 
-# ─── شمارش تلاش‌های ناموفق اخیر ─────────────────────────────────
+# Counting recent failed attempts
 def count_recent_failed_logins(
     ip_address: str = None,
     user_identifier: str = None,
     minutes: int = FAILED_ATTEMPT_WINDOW_MINUTES,
 ) -> int:
     """
-    شمارش تعداد تلاش‌های ناموفق ورود در بازه زمانی مشخص.
+    Count the number of failed login attempts in the specified time period.
     
-    پارامترها:
-        ip_address: آدرس IP برای فیلتر
-        user_identifier: نام کاربری برای فیلتر
-        minutes: بازه زمانی (دقیقه)
+    Parameters:
+        ip_address: IP address for the filter
+        user_identifier: username for the filter
+        minutes: time interval (minutes)
     
-    بازگشت: تعداد تلاش‌های ناموفق
+    Returns: Number of failed attempts
     """
     try:
-        # فاز E.3: cutoff هم‌فرمت با داده‌ی ذخیره‌شده (UTC/Z) تا مقایسه‌ی رشته‌ای درست بماند.
+        # Phase E.3: Cutoff is the same format as the stored data (UTC/Z) so that string comparison remains correct.
         cutoff = to_utc_z(datetime.now(timezone.utc) - timedelta(minutes=minutes))
-        # فاز E.4.1: مقایسه‌ی success با پارامتر انجام می‌شود، نه literal «0»:
-        # روی PG نوع ستون BOOLEAN است و «success = 0» خطای نوع می‌دهد
-        # (`operator does not exist: boolean = integer`)، در حالی که پارامتر bool
-        # روی هر دو backend یک معنا دارد (SQLite: 0/1 · PG: false/true).
-        # معنای فیلتر عوض نشده است: مقدار NULL در هر دو backend مطابقت نمی‌کند.
+        # Phase E.4.1: Comparison of success is done with parameter, not literal "0":
+        # On PG the column type is BOOLEAN and "success = 0" gives a type error
+        # (`operator does not exist: boolean = integer`), while the parameter bool
+        # It has the same meaning on both backends (SQLite: 0/1 · PG: false/true).
+        # Filter meaning is not changed: NULL value does not match in both backends.
         conditions = ["event_type = ?", "success = ?", "timestamp >= ?"]
         params = [SecurityEvent.FAILED_LOGIN.value, False, cutoff]
-        
+
         if ip_address:
             conditions.append("ip_address = ?")
             params.append(ip_address)
         if user_identifier:
             conditions.append("user_identifier = ?")
             params.append(user_identifier)
-        
+
         where = " AND ".join(conditions)
-        
+
         with _db_conn() as conn:
             row = conn.execute(
                 f"SELECT COUNT(*) FROM security_events WHERE {where}",
@@ -195,7 +211,7 @@ def count_recent_failed_logins(
         log.error(f"Failed to count failed logins: {e}")
         return 0
 
-# ─── دریافت رویدادهای اخیر ─────────────────────────────────────
+# Receive recent events
 def get_recent_events(
     limit: int = 100,
     event_type: SecurityEvent = None,
@@ -207,27 +223,27 @@ def get_recent_events(
     end: str = None,
 ) -> List[Dict[str, Any]]:
     """
-    دریافت رویدادهای امنیتی اخیر با فیلترهای مختلف.
+    Get recent security events with different filters.
     
-    پارامترها:
-        limit: حداکثر تعداد نتایج
-        event_type: فیلتر نوع رویداد
-        severity: فیلتر سطح اهمیت
-        user_identifier: فیلتر کاربر
-        ip_address: فیلتر IP
-        start: تاریخ شروع (ISO format)
-        end: تاریخ پایان (ISO format)
+    Parameters:
+        limit: maximum number of results
+        event_type: event type filter
+        severity: importance level filter
+        user_identifier: User filter
+        ip_address: IP filter
+        start: start date (ISO format)
+        end: end date (ISO format)
     
-    بازگشت: لیست دیکشنری‌های رویداد
+    Returns: List of event dictionaries
     """
     try:
-        # فاز E.3: فیلترهای بازه مثل /api/logs/all از ورودی کاربر می‌آیند ⇒ پیش از
-        # مقایسه‌ی رشته‌ای با ستون timestamp به فرمت استاندارد Z تبدیل می‌شوند.
+        # Phase E.3: Interval filters like /api/logs/all come from user input ⇒ pre
+        # String comparison with timestamp column are converted to standard Z format.
         start = to_filter_bound(start)
         end = to_filter_bound(end)
         conditions = []
         params = []
-        
+
         if event_type:
             conditions.append("event_type = ?")
             params.append(event_type.value if isinstance(event_type, SecurityEvent) else str(event_type))
@@ -249,17 +265,17 @@ def get_recent_events(
         if end:
             conditions.append("timestamp <= ?")
             params.append(end)
-        
+
         where = " WHERE " + " AND ".join(conditions) if conditions else ""
-        
+
         with _db_conn() as conn:
             rows = conn.execute(f'''
-                SELECT id, timestamp, event_type, severity, user_identifier, 
+                SELECT id, timestamp, event_type, severity, user_identifier,
                        user_id, ip_address, user_agent, endpoint, success, details
                 FROM security_events {where}
                 ORDER BY timestamp DESC LIMIT ?
             ''', params + [limit]).fetchall()
-            
+
             return [
                 {
                     "id": row[0],
@@ -280,15 +296,15 @@ def get_recent_events(
         log.error(f"Failed to get recent events: {e}")
         return []
 
-# ─── پاکسازی رویدادهای قدیمی ─────────────────────────────────────
+# Clearing old events
 def cleanup_old_events(days: int = 90) -> int:
     """
-    حذف رویدادهای امنیتی قدیمی‌تر از تعداد روز مشخص.
+    Delete security events older than specified number of days.
     
-    پارامترها:
-        days: تعداد روز (پیش‌فرض: ۹۰ روز)
+    Parameters:
+        days: number of days (default: 90 days)
     
-    بازگشت: تعداد رکوردهای حذف شده
+    Returns: The number of deleted records
     """
     try:
         cutoff = to_utc_z(datetime.now(timezone.utc) - timedelta(days=days))

@@ -26,6 +26,7 @@ from core.dashboard.manager import (
 )
 from core.database import init_db
 from core.db import get_connection
+from core.db.exceptions import UniqueViolation
 from core.security_audit import init_security_audit
 from web import create_app
 from web.auth import User
@@ -108,6 +109,18 @@ class DashboardManagerUnitTests(unittest.TestCase):
         # Check that panel is gone
         row = self.conn.execute("SELECT id FROM panels WHERE uid = ?", (panel["uid"],)).fetchone()
         self.assertIsNone(row)
+
+    def test_child_rows_reject_nonexistent_dashboard_ids(self):
+        with self.assertRaises(UniqueViolation):
+            self.conn.execute(
+                "INSERT INTO panels (dashboard_id, uid, type, title) VALUES (?, ?, ?, ?)",
+                (999999, "orphan-panel", "stat", "Orphan"),
+            )
+        with self.assertRaises(UniqueViolation):
+            self.conn.execute(
+                "INSERT INTO dashboard_permissions (dashboard_id, role) VALUES (?, ?)",
+                (999999, "viewer"),
+            )
 
     def test_panel_crud_operations(self):
         dash = create_dashboard(self.conn, title="داشبورد تست پنل")

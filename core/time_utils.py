@@ -1,52 +1,64 @@
 # -*- coding: utf-8 -*-
-"""
-Helper مرکزی زمان — **تنها منبع تولید فرمت استاندارد UTC** در پروژه (فاز E.3).
+# =============================================================================
+# @file:         core/time_utils.py
+# @brief:        Central time helper: the only place that produces the standard UTC 'Z' timestamp
+#                format.
+# @details:      Responsibilities: Create, parse and convert UTC timestamps and local-time strings.
+#                Main API: utc_now_iso(), to_utc_z(), parse_utc(), to_local_str(), local_tz(),
+#                reset_display_tz_cache(), as_utc_datetime(), to_filter_bound() (+2 more)
+#                Side effects: none at import time
+# @dependencies: stdlib only
+# @notes:        Stored timestamps must come from here: UTC, Z suffix, microsecond precision.
+# =============================================================================
 
-فرمت استاندارد (تصمیم قطعی فاز E.3)
+"""
+Central Time Helper — **the only source of UTC standard format production** in the project (Phase E.3).
+
+Standard format (definitive decision of phase E.3)
 -----------------------------------
     2026-10-03T12:00:00.123456Z
-    └──────── 26 کاراکتر + Z ────────┘  ⇒ طول ثابت ۲۷
+    └──────── 26 characters + Z ────────┘ ⇒ fixed length 27
 
-قواعد:
-  • همیشه UTC (نه ساعت محلی سرور)؛
-  • همیشه پسوند ``Z`` (نه ``+00:00``)؛
-  • همیشه ۶ رقم میکروثانیه (پس حتی وقتی میکروثانیه صفر است، ``.000000`` می‌آید)؛
-  • طول ثابت ⇒ **مقایسه‌ی رشته‌ای در SQL و پایتون امن است** (هم‌چیدمانی
-    واژه‌به‌واژه‌ای با ترتیب زمانی یکی می‌شود). این همان چیزی است که ستون‌های
-    ``TEXT`` امروز و ``TIMESTAMPTZ`` در فاز E به آن تکیه می‌کنند.
+Rules:
+  • Always UTC (not the server's local time);
+  • Always suffix ``Z'' (not ``+00:00'');
+  • always 6 microsecond digits (so even when microsecond is zero, ``.000000'' comes);
+  • Fixed length ⇒ **String comparison is safe in SQL and Python** (collation
+    word for word is the same with chronological order). This is what the columns are
+    Today's ``TEXT'' and ``TIMESTAMPTZ'' in phase E rely on it.
 
-چرا ``Z`` و نه ``+00:00``؟ ``datetime.isoformat()`` روی datetime آگاه به UTC
-``+00:00`` تولید می‌کند و ``strftime("%...Z")`` (که پیش از این در
-``cartridge_change_engine`` استفاده می‌شد) پسوند ``Z`` می‌دهد. یکسان‌سازی روی ``Z``
-دو مزیت دارد: طول ثابت ۲۷ (فرمت ``+00:00`` هم ۲۷ است ولی با ``+`` که در مقایسه‌ی
-رشته‌ای ترتیب را به هم می‌زند اگر با فرمت‌های دیگر مخلوط شود) و خوانایی قرارداد.
+Why ``Z'' and not ``+00:00''? ``datetime.isoformat()'' on UTC-aware datetime
+produces ``+00:00'' and ``strftime("%...Z")'' (previously in
+``cartridge_change_engine'' was used) gives a ``Z'' suffix. Equalize on ``Z''
+It has two advantages: fixed length of 27 (the ``+00:00'' format is also 27, but with ``+'' which is compared to
+A string messes up the order if mixed with other formats) and the readability of the convention.
 
-قرارداد مصرف
+Consumption contract
 ------------
-  • **نویسنده‌ها** فقط از :func:`utc_now_iso` استفاده کنند (هرگز ``datetime.now()``
-    خام، هرگز ``utcnow()``).
-  • **مقایسه با دیتابیس** (cutoff/debounce/prune) با ``to_utc_z(…)`` روی datetime
-    آگاه ساخته شود تا هم‌فرمت با داده‌ی ذخیره‌شده باشد.
-  • **خواندن رشته‌های دیتابیس** با :func:`parse_utc` (سخت‌گیر: naive را رد می‌کند).
-  • **فیلتر بازه از ورودی کاربر** با :func:`to_filter_bound` (naive/تاریخ‌فقط ⇒ محلی).
-  • **مرتب‌سازی ردیف‌ها در پایتون** با :func:`to_sort_key` (نه مقایسه‌ی رشته‌ای).
-  • **گروه‌بندی روزانه** با :func:`to_local_day` (روزِ محلی، نه روزِ UTC).
-  • **نمایش در UI** با :func:`to_local_str` (تبدیل به ``Asia/Tehran``).
+  • **Authors** only use:func:`utc_now_iso` (never ``datetime.now()``
+    raw, never ``utcnow()'').
+  • **compare with database** (cutoff/debounce/prune) with ``to_utc_z(...)'' on datetime
+    Be aware that the format is the same as the saved data.
+  • **read database strings** with:func:`parse_utc` (rejects strict: naive).
+  • **range filter from user input** with:func:`to_filter_bound` (naive/date only ⇒ local).
+  • **Sorting rows in Python** with:func:`to_sort_key` (not string comparison).
+  • **day grouping** with:func:`to_local_day` (local day, not UTC day).
+  • **Display in UI** with:func:`to_local_str` (convert to ``Asia/Tehran``).
 
-معنی رشته‌های تاریخی (پیش از E.3) و مهاجرت آن‌ها
+The meaning of historical disciplines (before E.3) and their migration
 -------------------------------------------------
-قاعده‌ی تفسیر در ``docs/timezone-contract.md`` §۸.۳ قفل شده است و ابزار
-``tools/migrate_timestamps_to_utc.py`` همان را پیاده می‌کند: naive ⇒ ساعت محلی
-``Asia/Tehran`` ؛ ``Z`` پیش از نشانه‌ی cutover ⇒ برچسب جعلی (ساعت محلی) ؛
-``Z`` پس از cutover ⇒ UTC واقعی.
+The interpretation rule is locked in ``docs/timezone-contract.md'' §8.3 and the tool
+``tools/migrate_timestamps_to_utc.py'' implements the same: naive ⇒ local time
+``Asia/Tehran''; ``Z'' before cutover sign ⇒ fake label (local time);
+``Z'' after cutover ⇒ Actual UTC.
 
-وابستگی ``tzdata``
+``tzdata'' dependency
 -------------------
-``ZoneInfo`` روی ویندوز دیتابیس منطقهٔ زمانی سیستمی ندارد و به پکیج ``tzdata``
-وابسته است (بند ۲ سند ``docs/timezone-contract.md``). این وابستگی در
-``requirements.txt`` فاز E.3 اضافه شده تا ``Asia/Tehran`` روی ویندوزسرور هم
-کار کند. عمداً هیچ offset ثابت (``+03:30``) جای‌گزین نمی‌شود: داده‌های تاریخی
-دوره‌ی DST (۲۰۲۱/۲۰۲۲) را بی‌صدا جابه‌جا می‌کرد.
+``ZoneInfo'' on Windows does not have a system time zone database, and the ``tzdata'' package
+It is dependent (paragraph 2 of the ``docs/timezone-contract.md'' document). This dependency in
+Added ``requirements.txt'' phase E.3 to ``Asia/Tehran'' on Windows server as well
+to work Intentionally no fixed offset (``+03:30'') is placed: historical data
+It would move the DST period (2021/2022) silently.
 """
 
 from __future__ import annotations
@@ -58,45 +70,45 @@ from zoneinfo import ZoneInfo
 
 log = logging.getLogger(__name__)
 
-# مرجعِ اصلیِ کلاس datetime — یک بار در زمان import قفل می‌شود.
-# چرا لازم است؟ تست‌ها (مثل `tests/golden_harness.py`) کلاس ``datetime`` را در
-# ماژول‌های دامنه با یک زیرکلاسِ «ساعت‌قفل» وصله می‌کنند؛ اگر :func:`to_utc_z`
-# برای isinstance از نامِ وصله‌پذیر ماژول استفاده کند، نمونه‌های واقعیِ datetime
-# رد می‌شوند («to_utc_z فقط datetime می‌پذیرد، نه datetime»). این alias همان
-# کلاس اصلی را نگه می‌دارد تا validate درست بماند.
+# The main reference of the datetime class — is locked once on import.
+# Why is it necessary? Tests (eg `tests/golden_harness.py') include the ``datetime'' class
+# Domain modules are patched with a subclass of "lockclock"; if:func:`to_utc_z`
+# For isinstance use the patchable name of the module, actual datetime instances
+# are rejected ("to_utc_z only accepts datetime, not datetime"). This alias is the same
+# Keeps the main class so that validate remains true.
 _DATETIME_BASE = datetime
 
-#: منطقه‌ی زمانی نمایش (UI فارسی/RTL). پیش‌فرض همان قرارداد پروژه است.
+#: display time zone (Persian UI/RTL). The default is the same as the project contract.
 DEFAULT_DISPLAY_TZ = "Asia/Tehran"
 
-#: طول ثابت رشته‌ی استاندارد: `2026-10-03T12:00:00.123456Z`
+#: fixed length of the standard string: `2026-10-03T12:00:00.123456Z`
 ISO_Z_LENGTH = 27
 
-#: قالب رشته‌ای استاندارد (۶ رقم میکروثانیه + Z).
+#: standard string format (6 digits of microseconds + Z).
 ISO_Z_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
 
 
 def utc_now_iso() -> str:
     """
-    زمان حال به فرمت استاندارد پروژه: ``2026-10-03T12:00:00.123456Z``.
+    Current time in standard project format: ``2026-10-03T12:00:00.123456Z''.
 
-    **تنها تولیدکننده‌ی «الآن» در کد برنامه.** هر نویسنده‌ای که مستقیم
-    ``datetime.now()`` یا ``datetime.utcnow()`` بنویسد، قرارداد را می‌شکند.
+    **The only producer of "now" in the program code.** Any author who directly
+    writing ``datetime.now()'' or ``datetime.utcnow()'' breaks the contract.
     """
     return datetime.now(timezone.utc).strftime(ISO_Z_FORMAT)
 
 
 def to_utc_z(dt: datetime) -> str:
     """
-    هر ``datetime`` **آگاه** را به فرمت استاندارد تبدیل می‌کند (با تبدیل به UTC).
+    Converts any **aware** ``datetime'' to standard format (by converting to UTC).
 
     Args:
-        dt: datetime با ``tzinfo`` (هر منطقه‌ای؛ تبدیل خودکار انجام می‌شود).
+        dt: datetime with ``tzinfo'' (any locale; conversion is done automatically).
 
     Raises:
-        ValueError: اگر ``dt`` naive باشد. عمداً خطای صریح است و نه فرضِ
-            «ساعت محلی»: فرض بی‌صدا همان باگ ۳:۳۰ دقیقه‌ای D.6 را در داده تکرار
-            می‌کند. برای رشته‌های naive تاریخی، ابزار مهاجرت را اجرا کنید.
+        ValueError: if ``dt'' is naive. It is a deliberate error and not an assumption
+            "Local time": silent assumption of the same 3:30 minute bug D.6 in the replay data
+            does For historical naive strings, run the migration tool.
     """
     if not isinstance(dt, _DATETIME_BASE):
         raise ValueError(f"to_utc_z فقط datetime می‌پذیرد، نه {type(dt).__name__}")
@@ -110,19 +122,19 @@ def to_utc_z(dt: datetime) -> str:
 
 def parse_utc(ts: str) -> datetime:
     """
-    رشته‌ی استاندارد (یا هر ISO با offset) را به ``datetime`` آگاه برمی‌گرداند.
+    Returns standard string (or any ISO with offset) to ``datetime'' aware.
 
-    نمونه‌های پذیرفته‌شده:
+    Accepted examples:
         ``2026-10-03T12:00:00.123456Z`` · ``2026-10-03T12:00:00+00:00`` ·
         ``2026-10-03T15:30:00+03:30``
 
     Args:
-        ts: رشته‌ی زمان.
+        ts: time string.
 
     Raises:
-        ValueError: رشته‌ی خالی، غیرقابل تجزیه، یا **naive** (بدون offset). سخت‌گیری
-            عمدی است: در مسیرهای خواندن، naive یعنی داده‌ای که مهاجرت نشده و
-            تفسیر حدسی‌اش خطرناک‌تر از خطای صریح است.
+        ValueError: empty, nonparsable, or **naive** string (no offset). Strictness
+            Intentional: In read paths, naive means data that has not been migrated
+            Its conjectural interpretation is more dangerous than a clear error.
     """
     s = (ts or "").strip()
     if not s:
@@ -143,38 +155,38 @@ def parse_utc(ts: str) -> datetime:
 
 def to_local_str(ts: str, tz_name: str = DEFAULT_DISPLAY_TZ) -> str:
     """
-    برای نمایش در UI: رشته‌ی استاندارد را به ساعت محلی تبدیل می‌کند.
+    For display in UI: Converts standard string to local time.
 
     Args:
-        ts: رشته‌ی زمان (استاندارد یا هر ISO با offset).
-        tz_name: نام منطقه‌ی زمانی نمایش (پیش‌فرض ``Asia/Tehran``).
+        ts: time string (standard or any ISO with offset).
+        tz_name: Display time zone name (default ``Asia/Tehran'').
 
     Returns:
-        ``YYYY-MM-DD HH:MM:SS`` به ساعت محلی (بدون offset — برای نمایش).
+        ``YYYY-MM-DD HH:MM:SS'' to local time (no offset — for display).
     """
     return parse_utc(ts).astimezone(ZoneInfo(tz_name)).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def local_tz(tz_name: str = DEFAULT_DISPLAY_TZ) -> ZoneInfo:
-    """منطقه‌ی زمانی نمایش (برای مصرف‌کننده‌هایی که خودشان تبدیل می‌کنند)."""
+    """Display time zone (for consumers who convert themselves)."""
     return ZoneInfo(tz_name)
 
 
 def reset_display_tz_cache() -> None:
     """
-    پاک‌کردن کش منطقه‌ی زمانی — فقط برای تست‌هایی که ``TZ`` را عوض می‌کنند.
+    Clear timezone cache — only for tests that change ``TZ''.
 
-    ``ZoneInfo`` نتایج را در سطح پروسه کش می‌کند؛ این تابع پس از تغییر ``TZ``
-    (اگر جایی لازم شد) فراخوانی می‌شود. روی منطق برنامه اثری ندارد.
+    ``ZoneInfo'' caches results at the process level; This function after changing ``TZ''
+    (if necessary) is called. It has no effect on the logic of the program.
     """
     ZoneInfo.clear_cache()
 
 
 def as_utc_datetime(value: Optional[str]) -> Optional[datetime]:
     """
-    کمکی خواندنی: رشته ⇒ datetime آگاه؛ ``None``/خالی ⇒ ``None``.
+    readable auxiliary: string ⇒ datetime aware; ``None''/Empty ⇒ ``None''.
 
-    برای فیلدهای اختیاری (مثل ``last_login_at``) که ممکن است NULL باشند.
+    For optional fields (like ``last_login_at'') that may be NULL.
     """
     if value is None or not str(value).strip():
         return None
@@ -183,24 +195,24 @@ def as_utc_datetime(value: Optional[str]) -> Optional[datetime]:
 
 def to_filter_bound(value: Optional[str], tz_name: str = DEFAULT_DISPLAY_TZ) -> Optional[str]:
     """
-    مرزِ فیلتر بازه‌ی زمانی (ورودی کاربر از query string) ⇒ فرمت استاندارد ``Z``.
+    Time range filter boundary (user input from query string) ⇒ standard ``Z'' format.
 
-    چرا این تابع لازم است؟ فیلترهای بازه (``/api/logs/all?start=…``) به‌صورت
-    **مقایسه‌ی رشته‌ای** روی ستون ``timestamp`` اجرا می‌شوند؛ پس ورودی کاربر هم
-    باید هم‌فرمت داده‌ی ذخیره‌شده باشد. سه حالت ورودی، هر سه پذیرفته می‌شود:
+    Why is this function necessary? interval filters (``/api/logs/all?start=…``) as
+    **string comparison** are performed on the ``timestamp'' column; So user input too
+    It must be the same format as the saved data. Three input modes, all three are accepted:
 
-      • ``2026-10-03T09:30:00.000000Z`` یا ``…+03:30`` (آگاه) ⇒ تبدیل به UTC/Z؛
-      • ``2026-10-03T09:30:00`` (naive) و ``2026-10-03`` (فقط تاریخ) ⇒ **ساعت
-        محلی** ``Asia/Tehran`` فرض می‌شود (همان قاعده‌ی قرارداد زمانی §۸.۳ برای
-        داده‌های تاریخی naive) و بعد به UTC/Z تبدیل می‌شود؛
-      • هر چیز دیگر ⇒ **بدون تغییر** برگردانده می‌شود + هشدار در لاگ.
+      • ``2026-10-03T09:30:00.000000Z'' or ``…+03:30'' (aware) ⇒ convert to UTC/Z;
+      • ``2026-10-03T09:30:00'' (naive) and ``2026-10-03'' (date only) ⇒ **hour
+        The locale** is assumed to be ``Asia/Tehran'' (same as time contract rule §8.3 for
+        naive historical data) and then converted to UTC/Z;
+      • Everything else ⇒ **Unchanged** is returned + warning in log.
 
-    چرا برای ورودی کاربر «فرض محلی» می‌کنیم و نه خطای سخت مثل :func:`parse_utc`؟
-    چون این‌جا مرزِ ورودی انسانی است (فیلتر دستی/مرورگر) و سرور روی ویندوزسرور با
-    ساعت محلی تهران کار می‌کند؛ سخت‌گیریِ :func:`parse_utc` برای *داده‌ی دیتابیس*
-    است، نه پارامتر درخواست. مقدار نامعتبر هم عمداً استثنا نمی‌دهد: رفتار
-    تاریخی endpoint (پاس‌دادن رشته‌ی خام به مقایسه) حفظ می‌شود تا این گام هیچ
-    تغییر رفتاری در API نداشته باشد.
+    Why do we "assume local" for user input and not a hard error like:func:`parse_utc`?
+    Because this is the border of human input (manual filter/browser) and the server is on Windows server
+    Tehran local time works; Hardening of:func:`parse_utc` for *database data*
+    is not a request parameter. An invalid value does not intentionally throw an exception: behavior
+    The history of the endpoint (passing the raw string to the comparison) is kept until this step
+    Do not change behavior in API.
     """
     if value is None or not str(value).strip():
         return value
@@ -214,35 +226,35 @@ def to_filter_bound(value: Optional[str], tz_name: str = DEFAULT_DISPLAY_TZ) -> 
     except ValueError:
         log.warning("مرز فیلتر زمانی قابل تجزیه نیست و بدون تغییر رد شد: %r", value)
         return value
-    if naive.tzinfo is not None:  # pragma: no cover - شاخه‌ی دفاعی (بالا پوشش می‌دهد)
+    if naive.tzinfo is not None:  # pragma: no cover - defense branch (top covers)
         return to_utc_z(naive)
     return to_utc_z(naive.replace(tzinfo=ZoneInfo(tz_name)))
 
 
-#: کوچک‌ترین مبنای مرتب‌سازی آگاه — برای مقدارهای خالی/نامعتبر (ابتدا می‌آیند).
+#: Smallest sort-aware basis — for empty/invalid values (first-come-first-served).
 _SORT_EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 
 
 def to_local_day(ts: str, tz_name: str = DEFAULT_DISPLAY_TZ) -> str:
     """
-    روزِ **محلی** یک timestamp ذخیره‌شده را برمی‌گرداند: ``YYYY-MM-DD``.
+    The **local** day returns a stored timestamp: ``YYYY-MM-DD''.
 
-    معادل پایتونیِ ``substr(timestamp, 1, 10)`` در SQLite که تا فاز D استفاده
-    می‌شد: آن هم روزِ محلی را می‌داد (چون داده naive محلی بود). پس از E.3 داده‌ی
-    ذخیره‌شده UTC/Z است؛ بریدن ۱۰ کاراکتر اول روزِ **UTC** می‌دهد و سبد آمار روزانه
-    را تا ۳:۳۰ جابه‌جا می‌کند ⇒ گروه‌بندی روزانه باید از این تابع بگذرد.
+    The Python equivalent of ``substr(timestamp, 1, 10)'' in SQLite, which was used until phase D
+    It would have given the local day (because the naive data was local). After E.3 data
+    stored is UTC/Z; Cutting the first 10 characters gives the day of **UTC** and the basket of daily statistics
+    moves to 3:30 ⇒ daily grouping must pass this function.
     """
     return parse_utc(ts).astimezone(ZoneInfo(tz_name)).date().isoformat()
 
 
 def to_sort_key(value: Optional[str]) -> datetime:
     """
-    کلید مرتب‌سازی زمانی برای رشته‌های ذخیره‌شده.
+    Time sort key for stored strings.
 
-    ترتیب رشته‌ای روی فرمت استاندارد (طول ثابت ۲۷) درست است، ولی به‌محض ورود یک
-    ردیف مهاجرت‌نشده (``+00:00`` یا naive) ترتیب می‌شکند؛ این تابع مقدار را
-    **تجزیه** می‌کند تا ترتیب همیشه زمانی باشد. مقدار خالی یا نامعتبر ⇒
-    :data:`_SORT_EPOCH` (یعنی «قدیمی‌ترین») تا مرتب‌سازی هرگز استثنا ندهد.
+    String order on standard format (fixed length 27) is correct, but as soon as you enter a
+    The unmigrated row (``+00:00'' or naive) breaks the order; This value function
+    **parses** so that the order is always chronological. Empty or invalid value ⇒
+    :data:`_SORT_EPOCH` (ie ``oldest'') so that the sort never throws an exception.
     """
     try:
         return parse_utc(value)

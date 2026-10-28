@@ -1,17 +1,31 @@
+# =============================================================================
+# @file:         core/snmp/protocol.py
+# @brief:        Pure-Python SNMP v1 and v2c implementation without external dependencies.
+# @details:      Responsibilities: Encode and decode BER/OID values, build GET requests and
+#                perform SNMP GETs with fallback.
+#                Main API: encode_oid(), encode_length(), decode_oid_bytes(), build_snmp_get_v1(),
+#                build_snmp_get_v2c(), build_snmp_getnext_v1(), build_snmp_getnext_v2c(),
+#                parse_snmp_response_debug() (+7 more)
+#                Side effects: network I/O, starts threads
+# @dependencies: stdlib only
+# @notes:        No third-party SNMP library: packets are built by hand, so keep the encoders in
+#                sync with the tests.
+# =============================================================================
+
 """
-پیاده‌سازی دستی SNMPv1 و v2c بدون وابستگی خارجی:
+Manual implementation of SNMPv1 and v2c without external dependencies:
 - encode_oid / encode_length
 - build_snmp_get_v1, build_snmp_get_v2c
 - parse_snmp_response
-- کش نسخه SNMP برای هر IP (تشخیص خودکار SNMPv1/v2c)
-- snmp_get (نسخه‌ای)
-- snmp_get_with_fallback (با کش و تست هوشمند)
+- SNMP version cache for each IP (SNMPv1/v2c auto-detection)
+- snmp_get (prescriptive)
+- snmp_get_with_fallback (with cache and smart test)
 - snmp_get_bulk
 """
 
+import logging
 import socket
 import threading
-import logging
 import time
 
 log = logging.getLogger("PrinterMonitor")
@@ -24,11 +38,11 @@ SNMP_ERROR_NAMES = {
     15: "undoFailed", 16: "authorizationError", 17: "notWritable", 18: "inconsistentName"
 }
 
-# ─── کش نسخه SNMP برای هر IP/community ────────────────────────────
-# هر ورودی به شکل زیر ذخیره می‌شود:
+# SNMP version cache for each IP/community
+# Each entry is saved as follows:
 #   {"version": 1|2|None, "expires_at": monotonic_ts|None}
-# برای نسخه‌های ناموفق (offline / timeout) negative-cache با TTL کوتاه نگه می‌داریم
-# تا در هر pull دوباره probe نشود.
+# We keep negative-cache with short TTL for failed versions (offline / timeout).
+# so that it is not probed again in every pull.
 _SNMP_VERSION_CACHE = {}
 _version_cache_lock = threading.Lock()
 _NEGATIVE_CACHE_TTL = 30.0
@@ -36,16 +50,18 @@ _POSITIVE_CACHE_TTL = 3600.0
 
 
 def _version_cache_key(ip: str, community: str) -> str:
+    """Build the cache key for a printer and community pair."""
     return f"{ip}|{community}"
 
 
 
 def _get_cached_version(ip: str, community: str):
+    """Return the cached SNMP version for a printer and community, or None."""
     key = _version_cache_key(ip, community)
     with _version_cache_lock:
         entry = _SNMP_VERSION_CACHE.get(key)
         if entry is None and ip in _SNMP_VERSION_CACHE:
-            # backward compatibility با کش‌های قدیمی فقط بر پایه IP
+            # backward compatibility with old caches only based on IP
             legacy = _SNMP_VERSION_CACHE.get(ip)
             if legacy in (1, 2, None):
                 entry = {"version": legacy, "expires_at": None if legacy in (1, 2) else time.monotonic() + _NEGATIVE_CACHE_TTL}
@@ -62,6 +78,7 @@ def _get_cached_version(ip: str, community: str):
 
 
 def _set_cached_version(ip: str, community: str, version: int | None, ttl: float | None):
+    """Store the SNMP version for a printer and community with a time-to-live."""
     key = _version_cache_key(ip, community)
     with _version_cache_lock:
         _SNMP_VERSION_CACHE[key] = {
@@ -71,22 +88,14 @@ def _set_cached_version(ip: str, community: str, version: int | None, ttl: float
 
 
 
-def _clear_cached_version(ip: str, community: str):
-    key = _version_cache_key(ip, community)
-    with _version_cache_lock:
-        _SNMP_VERSION_CACHE.pop(key, None)
-        _SNMP_VERSION_CACHE.pop(ip, None)
-
-
-
 def _detect_snmp_version(ip: str, community: str, port: int = 161, probe_timeout: float = 1.5) -> int | None:
     """
-    تشخیص نسخه SNMP با چند OID متداول و vendor-specific.
+    SNMP version detection with several common and vendor-specific OIDs.
 
-    بعضی دستگاه‌ها به sysUpTime یا sysDescr استاندارد پاسخ نمی‌دهند ولی به
-    sysName، Printer-MIB model یا OIDهای اختصاصی vendor پاسخ معتبر می‌دهند.
-    بنابراین برای backward compatibility و پشتیبانی از مدل‌های ناسازگار،
-    چند OID را به‌ترتیب امتحان می‌کنیم.
+    Some devices do not respond to the standard sysUpTime or sysDescr, but to
+    sysName, Printer-MIB model, or vendor-specific OIDs provide a valid response.
+    Therefore, for backward compatibility and supporting incompatible models,
+    We try several OIDs in sequence.
     """
     found, cached_version = _get_cached_version(ip, community)
     if found:
@@ -102,39 +111,41 @@ def _detect_snmp_version(ip: str, community: str, port: int = 161, probe_timeout
         "1.3.6.1.4.1.47206.110.1.2.0",              # ECS100G temp1
     ]
 
-    # ✅ فیکس offline کاذب: دو گذر می‌کنیم. گذر اول با timeout عادی؛ اگر هیچ
-    # پاسخی نیامد، گذر دوم با timeout بزرگ‌تر روی OIDهای کلیدی — برخی مدل‌های
-    # قدیمی Toshiba (مثل e-STUDIO 2505/257/3540 و بردهای اترنت قدیمی) به‌خصوص
-    # بعد از idle، به اولین درخواست‌‌ها کند (۲-۴ ثانیه) پاسخ می‌دهند و گذر اول
-    # را از دست می‌دهند؛ همان تک‌خط تایم‌اوت قبلاً باعث offline کاذب می‌شد.
+    # ✅ Fake offline fix: We pass twice. first pass with normal timeout; if none
+    # No response, second pass with larger timeout on key OIDs — some models
+    # Old Toshiba (like e-STUDIO 2505/257/3540 and old Ethernet boards) especially
+    # After idle, they respond to the first requests slowly (2-4 seconds) and the first pass
+    # lose The same single line timeout used to cause false offline.
     slow_probe_timeout = max(3.5, float(probe_timeout) * 2.3)
     for attempt_timeout, oid_subset in (
         (probe_timeout, probe_oids),
         (slow_probe_timeout, probe_oids[:3] + [probe_oids[4]]),
     ):
         for oid in oid_subset:
-            # 🔥 تغییر قبلی: اول v1 تست می‌شود (چون در شبکه‌های واقعی رایج‌تر است)
+            # 🔥 Previous change: v1 is tested first (because it is more common in real networks)
             res_v1 = snmp_get(ip, oid, community, port, attempt_timeout, version=1)
             if res_v1 is not None:
                 _set_cached_version(ip, community, 1, _POSITIVE_CACHE_TTL)
                 log.debug(f"SNMP cache: {ip} -> v1 using {oid} (timeout={attempt_timeout}s)")
                 return 1
 
-            # سپس v2c
+            # Then v2c
             res_v2 = snmp_get(ip, oid, community, port, attempt_timeout, version=2)
             if res_v2 is not None:
                 _set_cached_version(ip, community, 2, _POSITIVE_CACHE_TTL)
                 log.info(f"SNMP cache: {ip} -> v2c using {oid} (v1 failed, timeout={attempt_timeout}s)")
                 return 2
 
-    # هیچ‌یک پاسخ ندادند؛ احتمالاً دستگاه آفلاین یا SNMP مسدود است.
+    # None of them answered; Probably the device is offline or SNMP blocked.
     log.debug(f"SNMP cache: {ip} unreachable (all probe OIDs failed in 2 passes, cached for {_NEGATIVE_CACHE_TTL:.0f}s)")
     _set_cached_version(ip, community, None, _NEGATIVE_CACHE_TTL)
     return None
 
 
-# ─── توابع کدگذاری/کدگشایی SNMP (بدون تغییر) ──────────────────────────
+# ─── SNMP encoding/decoding functions (unchanged)
 def encode_oid(oid_str: str) -> bytes:
+    """Encode a dotted OID string into BER bytes."""
+
     parts = [int(x) for x in oid_str.strip(".").split(".")]
     encoded = [40 * parts[0] + parts[1]]
     for part in parts[2:]:
@@ -152,6 +163,8 @@ def encode_oid(oid_str: str) -> bytes:
 
 
 def encode_length(n: int) -> bytes:
+    """Encode a BER length field."""
+
     if n < 128:
         return bytes([n])
     elif n < 256:
@@ -161,7 +174,7 @@ def encode_length(n: int) -> bytes:
 
 
 def decode_oid_bytes(data: bytes) -> str:
-    """解码 بایت‌های OID به رشته‌ی نقطه‌ای (برای walk و getnext)."""
+    """Decode OID bytes to dot string (for walk and getnext)."""
     if not data:
         return ""
     try:
@@ -179,7 +192,7 @@ def decode_oid_bytes(data: bytes) -> str:
 
 
 def _build_snmp_pdu(community: str, oid: str, request_id: int, version: int, pdu_tag: int) -> bytes:
-    """ساخت PDU عمومی (GET با tag 0xa0 / GETNEXT با tag 0xa1)."""
+    """Making public PDU (GET with tag 0xa0 / GETNEXT with tag 0xa1)."""
     ob = encode_oid(oid)
     oid_tlv = b'\x06' + encode_length(len(ob)) + ob
     vb = b'\x30' + encode_length(len(oid_tlv) + 2) + oid_tlv + b'\x05\x00'
@@ -196,27 +209,36 @@ def _build_snmp_pdu(community: str, oid: str, request_id: int, version: int, pdu
 
 
 def build_snmp_get_v1(community: str, oid: str, request_id: int = 1) -> bytes:
+    """Build an SNMP v1 GET request packet."""
+
     return _build_snmp_pdu(community, oid, request_id, 1, 0xa0)
 
 
 def build_snmp_get_v2c(community: str, oid: str, request_id: int = 1) -> bytes:
+    """Build an SNMP v2c GET request packet."""
+
     return _build_snmp_pdu(community, oid, request_id, 2, 0xa0)
 
 
 def build_snmp_getnext_v1(community: str, oid: str, request_id: int = 1) -> bytes:
+    """Build an SNMP v1 GETNEXT request packet."""
+
     return _build_snmp_pdu(community, oid, request_id, 1, 0xa1)
 
 
 def build_snmp_getnext_v2c(community: str, oid: str, request_id: int = 1) -> bytes:
+    """Build an SNMP v2c GETNEXT request packet."""
+
     return _build_snmp_pdu(community, oid, request_id, 2, 0xa1)
 
 
 def parse_snmp_response_debug(data: bytes, expected_request_id=None):
-    """نسخه‌ی تشخیصی parser که نوع پاسخ SNMP را با جزئیات برمی‌گرداند."""
+    """A diagnostic version of the parser that returns the SNMP response type with details."""
     try:
         pos = 0
 
         def rl(d, p):
+            """Read a BER length field and return (length, next position)."""
             if d[p] & 0x80 == 0:
                 return d[p], p + 1
             n = d[p] & 0x7F
@@ -319,7 +341,7 @@ def parse_snmp_response_debug(data: bytes, expected_request_id=None):
             "raw_oid_hex": oid_bytes.hex(),
         }
 
-        # OID پاسخ (برای walk/getnext) — قبل از خواندن value استخراج می‌شود
+        # Response OID (for walk/getnext) — extracted before value is read
         result["response_oid"] = decode_oid_bytes(oid_bytes)
 
         if vt == 0x02:
@@ -353,14 +375,9 @@ def parse_snmp_response_debug(data: bytes, expected_request_id=None):
         return {"status": "parse_error", "reason": str(e)}
 
 
-def parse_snmp_response(data: bytes, expected_request_id=None):
-    parsed = parse_snmp_response_debug(data, expected_request_id=expected_request_id)
-    return parsed.get("value") if parsed.get("status") == "ok" else None
-
-
 def snmp_getnext(ip: str, oid: str, community: str = "public",
                  port: int = 161, timeout: float = 3.0, request_id: int = 1, version: int = 2):
-    """درخواست GETNEXT؛ خروجی (oid_بعدی، مقدار) یا None."""
+    """GETNEXT request; output (oid_next, value) or None."""
     s = None
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -387,10 +404,10 @@ def snmp_getnext(ip: str, oid: str, community: str = "public",
 def snmp_walk(ip: str, prefix: str, community: str = "public",
               port: int = 161, timeout: float = 2.0, max_vars: int = 48,
               version: int | None = None):
-    """walk محدود یک زیرشاخه با GETNEXT؛ خروجی [(oid, value), ...].
+    """walk limited a subbranch with GETNEXT; Output [(oid, value),...].
 
-    محدودیت max_vars تضمین می‌کند شاخه‌های بزرگ vendor باعث حلقه‌ی بی‌پایان
-    یا سربار شبکه نشوند. نسخه‌ی SNMP در صورت نبود از کش/تشخیص خودکار می‌آید.
+    The max_vars limit ensures that large vendor branches cause an infinite loop
+    or network overhead. SNMP version comes from cache/autodetect if not present.
     """
     prefix = prefix.strip(".")
     if not prefix:
@@ -407,7 +424,7 @@ def snmp_walk(ip: str, prefix: str, community: str = "public",
         if not nxt:
             break
         nxt_oid, value = nxt
-        # خروج از زیرشاخه
+        # Exit from the branch
         if nxt_oid != prefix and not nxt_oid.startswith(prefix + "."):
             break
         results.append((nxt_oid, value))
@@ -417,6 +434,8 @@ def snmp_walk(ip: str, prefix: str, community: str = "public",
 
 def snmp_get(ip: str, oid: str, community: str = "public",
              port: int = 161, timeout: float = 3.0, request_id: int = 1, version: int = 2):
+    """Send one SNMP GET request and return the decoded value, or None on failure."""
+
     s = None
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -428,10 +447,10 @@ def snmp_get(ip: str, oid: str, community: str = "public",
         s.sendto(pkt, (ip, port))
         resp, _ = s.recvfrom(65535)
         parsed = parse_snmp_response_debug(resp, expected_request_id=request_id)
-        # ✅ فیکس سازگاری: برخی پرینت‌سرورها/فیریمورهای قدیمی (مدل‌های قدیمی
-        # Toshiba، JetDirect قدیمی و برخی cloneها) request-id اشتباه برمی‌گردانند.
-        # چون سوکت UDP مخصوص همین درخواست است (پورت ephemeral)، پاسخِ دریافتی
-        # عملاً مربوط به همین درخواست است — اگر فقط RID ناسازگار بود، مقدار را قبول کن.
+        # ✅ Compatibility fix: some print servers/old firmwares (old models
+        # (Toshiba, old JetDirect and some clones) return wrong request-id.
+        # Because the UDP socket is specific to this request (ephemeral port), the received response
+        # It's practically the same request — accept the value if only the RID was inconsistent.
         if parsed.get("status") == "request_id_mismatch":
             log.debug(
                 "snmp_get %s %s v%s: accepting response with mismatched request id (%s→%s)",
@@ -452,7 +471,7 @@ def snmp_get(ip: str, oid: str, community: str = "public",
 
 def snmp_debug_get(ip: str, oid: str, community: str = "public",
                    port: int = 161, timeout: float = 3.0, request_id: int = 1, version: int = 2):
-    """درخواست تشخیصی SNMP که جزئیات نوع پاسخ را برمی‌گرداند."""
+    """SNMP diagnostic request that returns response type details."""
     s = None
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -498,25 +517,25 @@ def snmp_get_with_fallback(ip: str, oid: str, community: str = "public",
                            port: int = 161, timeout: float = 3.0, request_id: int = 1,
                            version: int | None = None):
     """
-    دریافت SNMP با تشخیص خودکار و کش نسخه.
-    ابتدا نسخه مناسب (1 یا 2) را بر اساس تست قبلی یا تست جدید تعیین می‌کند.
+    Receive SNMP with automatic detection and version cache.
+    First, it determines the appropriate version (1 or 2) based on the previous test or the new test.
     """
     if version in (1, 2):
         return snmp_get(ip, oid, community, port, timeout, request_id, version=version)
 
-    # کش را چک می‌کنیم؛ اگر موجود نبود، تشخیص دهیم (با timeout کوتاه)
+    # We check the cache; If it is not available, identify it (with a short timeout)
     version = _detect_snmp_version(ip, community, port, probe_timeout=1.5)
-    # اگر نسخه شناسایی نشد (None) → دستگاه به نظر آفلاین است
+    # If the version is not detected (None) → the device seems to be offline
     if version is None:
         return None
 
-    # درخواست با نسخه ترجیحی
+    # Request with preferred version
     result = snmp_get(ip, oid, community, port, timeout, request_id, version=version)
     if result is not None:
         return result
 
-    # اگر نسخه ترجیحی جواب نداد (مثلاً دستگاه ریبوت شده و v1/v2 تغییر کرده)،
-    # نسخه دیگر را امتحان کن
+    # If the preferred version does not work (for example, the device is rebooted and v1/v2 is changed),
+    # Try another version
     other_version = 2 if version == 1 else 1
     result_other = snmp_get(ip, oid, community, port, timeout, request_id, version=other_version)
     if result_other is not None:
@@ -524,11 +543,11 @@ def snmp_get_with_fallback(ip: str, oid: str, community: str = "public",
         log.info(f"SNMP cache updated: {ip} -> v{other_version} (v{version} failed)")
         return result_other
 
-    # ✅ فیکس مهم: شکست خواندن «این OID به‌خصوص» نباید کش نسخه را پاک یا negative
-    # کند! قبلاً یک OID کند/محافظت‌شده (که پاسخش بی‌صدا drop می‌شد — رفتار رایج
-    # firmwareهای قدیمی Toshiba) باعث می‌شد کل دستگاه برای چرخه‌های بعدی آفلاین
-    # اعلام شود، در حالی که OIDهای دیگر پاسخ می‌دادند. کش نسخه فقط توسط
-    # _detect_snmp_version (probe کامل) مدیریت می‌شود.
+    # ✅ Important fix: failure to read "this particular OID" should not clear or negative version cache
+    # Slow! Previously a slow/protected OID (whose response was silently dropped — common behavior
+    # Older Toshiba firmwares) would make the entire device offline for subsequent cycles
+    # be announced, while other OIDs were responding. Version cache only by
+    # _detect_snmp_version (full probe) is managed.
     log.debug(
         "snmp_get_with_fallback: OID %s on %s unreadable via v%s and v%s; version cache kept (v%s)",
         oid, ip, version, other_version, version,
@@ -538,11 +557,11 @@ def snmp_get_with_fallback(ip: str, oid: str, community: str = "public",
 
 def snmp_get_first(ip: str, oids: list[str], community: str = "public",
                    port: int = 161, timeout: float = 3.0, version: int | None = None):
-    """اولین OID پاسخ‌گو را از یک لیست برمی‌گرداند.
+    """Returns the first OID of the responder from a list.
 
-    خروجی:
+    Output:
       (value, oid)
-    اگر هیچ OID پاسخ ندهد:
+    If no OID responds:
       (None, None)
     """
     for idx, oid in enumerate(oids, 1):
@@ -561,7 +580,7 @@ def snmp_get_first(ip: str, oids: list[str], community: str = "public",
 
 
 def snmp_get_bulk(ip: str, oids: dict, community: str = "public") -> dict:
-    """چند OID را یکی‌یکی می‌خواند (sequential GET) با fallback خودکار"""
+    """Reads several OIDs one by one (sequential GET) with automatic fallback"""
     result = {}
     for i, (key, oid) in enumerate(oids.items()):
         result[key] = snmp_get_with_fallback(ip, oid, community, request_id=i + 1)

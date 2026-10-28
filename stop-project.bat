@@ -1,4 +1,12 @@
 @echo off
+REM ============================================================
+REM @file:         stop-project.bat
+REM @brief:        Windows helper that stops running PrintGuard processes.
+REM @details:      Responsibilities: Find the port in use and terminate the python.exe and python3.exe processes that run the project.
+REM @dependencies: Windows taskkill, netstat
+REM @notes:        Terminates processes by name; close other Python programs first.
+REM ============================================================
+
 setlocal
 set "ROOT=%~dp0"
 set "ROOT=%ROOT:~0,-1%"

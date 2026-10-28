@@ -65,10 +65,9 @@ class PostgreSQLDataSource(BaseDataSource):
         conn_str = self._get_connection_string()
         try:
             with psycopg.connect(conn_str) as conn:
-                with conn.cursor() as cur:
-                    cur.execute("SELECT version();")
-                    row = cur.fetchone()
-                    version = row[0] if row else "PostgreSQL"
+                cur = conn.execute("SELECT version();")
+                row = cur.fetchone()
+                version = row[0] if row else "PostgreSQL"
             return {"status": "ok", "message": f"اتصال با موفقیت برقرار شد ({version.split()[0]} {version.split()[1]})."}
         except Exception as e:
             raise DataSourceError(f"خطا در برقراری اتصال به PostgreSQL: {e}")
@@ -93,10 +92,9 @@ class PostgreSQLDataSource(BaseDataSource):
         conn_str = self._get_connection_string()
         try:
             with psycopg.connect(conn_str) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(raw_sql)
-                    col_names = [desc[0] for desc in cur.description] if cur.description else []
-                    raw_rows = cur.fetchall()
+                cur = conn.execute(raw_sql)
+                col_names = [desc[0] for desc in cur.description] if cur.description else []
+                raw_rows = cur.fetchall()
 
             columns = [{"field": c, "title": c, "type": "text"} for c in col_names]
             rows = []
@@ -115,14 +113,13 @@ class PostgreSQLDataSource(BaseDataSource):
         conn_str = self._get_connection_string()
         try:
             with psycopg.connect(conn_str) as conn:
-                with conn.cursor() as cur:
-                    cur.execute("""
+                cur = conn.execute("""
                         SELECT table_name
                         FROM information_schema.tables
                         WHERE table_schema = 'public'
                         ORDER BY table_name;
                     """)
-                    tables = [r[0] for r in cur.fetchall()]
+                tables = [r[0] for r in cur.fetchall()]
             return {"tables": tables}
         except Exception as e:
             raise DataSourceError(f"خطا در دریافت شمای پایگاه‌داده: {e}")

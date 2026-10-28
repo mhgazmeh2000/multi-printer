@@ -1,4 +1,12 @@
-/* ─── تم دارک (پیش‌فرض) ─── */
+/*
+ * @file:         web/static/css/style.css
+ * @brief:        Stylesheet for the PrintGuard web UI: dark (default) and light themes, panels, modals and toasts.
+ * @details:      Responsibilities: Define theme variables, layout, component styles and per-theme overrides.
+ * @dependencies: browser APIs only; loaded by base.html
+ * @notes:        Light and dark themes are switched by a class on the root element; the topbar colours are pinned on purpose.
+ */
+
+/* ─── Dark theme (default) ─── */
 :root {
   --bg:     #08090d;
   --bg2:    #151720;
@@ -19,7 +27,7 @@
   --mono:   'JetBrains Mono', 'Vazirmatn Code', Consolas, 'Courier New', monospace;
   --sans:   'Noto Sans Arabic', 'Vazirmatn', 'Segoe UI', Tahoma, sans-serif;
 
-  /* ─ متغیرهای خاص تم (جابجا می‌شوند) ─ */
+  /* ─ Theme specific variables (moved) ─ */
   --bg-d:         #08090d;
   --topbar-bg:    rgb(0, 88, 122);
   --card-shadow:  rgba(0,0,0,.4);
@@ -35,21 +43,21 @@
   --scrollbar-thumb-active: #697596;
 }
 
-/* ─── تم لایت (اصلاح شده برای زیبایی و تنوع بصری) ─── */
+/* ─── Theme Light (modified for beauty and visual variety) ─── */
 html.light {
-  --bg:       #f0f4f8;  /* پس‌زمینه متمایل به آبی ملایم */
-  --bg2:      #ffffff;  
-  --bg3:      #d1dce5;  
-  --bg4:      #f8fafc;  
-  --border:   #cbd5e1;  
-  --bdr2:     #00d4ff;  
-  --text:     #0f172a;  
-  --text2:    #334155;  
-  --text3:    #64748b;  
-  --cyan:     #0086a7;  
+  --bg:       #f0f4f8;  /* Light blue background */
+  --bg2:      #ffffff;
+  --bg3:      #d1dce5;
+  --bg4:      #f8fafc;
+  --border:   #cbd5e1;
+  --bdr2:     #00d4ff;
+  --text:     #0f172a;
+  --text2:    #334155;
+  --text3:    #64748b;
+  --cyan:     #0086a7;
   --bg-d:     #eef2f7;
-  --topbar-bg: rgb(0, 88, 122); /* تاپ‌بار همیشه تیره بماند */
-  --card-shadow:  0 10px 25px rgba(0, 88, 122, 0.08); 
+  --topbar-bg: rgb(0, 88, 122); /* The top bar should always be dark */
+  --card-shadow:  0 10px 25px rgba(0, 88, 122, 0.08);
   --overlay-bg:   rgba(15, 23, 42, 0.6);
   --scanline:     rgba(0,0,0,.01);
   --grid-line:    rgba(0, 212, 255, 0.04);
@@ -61,10 +69,10 @@ html.light {
   --scrollbar-thumb-hover: #8f9eb3;
   --scrollbar-thumb-active: #7f90a7;
   --red:    #dc2626;
-  --dark-teal: rgb(0, 88, 122); /* رنگ درخواستی */
+  --dark-teal: rgb(0, 88, 122); /* Requested color */
 }
 
-/* ─── اصلاح بنر سنسور در تم لایت ─── */
+/* ─── Modification of sensor banner in theme light ─── */
 html.light .overview-card.sensor-banner {
   background: linear-gradient(135deg, var(--dark-teal), #004d61) !important;
   border: 1px solid rgba(0, 212, 255, 0.3) !important;
@@ -74,7 +82,7 @@ html.light .overview-card.sensor-banner {
 html.light .overview-card.sensor-banner .oc-name,
 html.light .overview-card.sensor-banner .sensor-tile-label,
 html.light .overview-card.sensor-banner .oc-model {
-  color: #e2e8f0 !important; /* متن روشن روی پس‌زمینه تیره */
+  color: #e2e8f0 !important; /* Light text on a dark background */
 }
 html.light .overview-card.sensor-banner .sensor-tile {
   background: rgba(255, 255, 255, 0.08) !important;
@@ -84,7 +92,7 @@ html.light .overview-card.sensor-banner .oc-ip {
   color: #00d4ff !important;
 }
 
-/* ─── تنوع بخشیدن به باکس‌ها (استفاده از Dark Teal) ─── */
+/* ─── diversifying the boxes (using Dark Teal) ─── */
 html.light .stats-card-header {
   background: var(--dark-teal) !important;
   border-bottom: 2px solid #00d4ff !important;
@@ -124,7 +132,7 @@ html.light .topbar-dropdown-user .user-role {
   color: rgba(255, 255, 255, 0.8) !important;
 }
 
-/* ─── استفاده از رنگ سایان شاخص ─── */
+/* ─── Use of cyan indicator color ─── */
 html.light .section-title {
   color: var(--dark-teal);
   border-right: 4px solid #00d4ff;
@@ -137,7 +145,7 @@ html.light .oc-pill.pill-on {
   border-color: rgba(0, 230, 118, 0.3);
 }
 
-/* ─── دکمه‌های مودال ─── */
+/* ─── Modal buttons ─── */
 html.light .btn-cyan {
   background: #00d4ff !important;
   color: #fff !important;
@@ -149,16 +157,16 @@ html.light .btn-cyan:hover {
   transform: translateY(-1px);
 }
 
-/* اصلاح رنگ تاپ‌بار برای هماهنگی با هر دو تم
-   نکته: این قاعده نباید محتوای منوی بازشو (topbar-dropdown) را سفید کند،
-   چون پس‌زمینه‌ی منو روشن است و متن سفید ناخوانا می‌شود. */
+/* Modified top bar color to match both themes
+   Note: This rule should not make the content of the pop-up menu (topbar-dropdown) white.
+   Because the background of the menu is bright and the white text becomes unreadable. */
 .topbar-meta,
 .topbar-meta span,
 .topbar-actions > div:not(.topbar-more) span,
 .topbar-actions > span {
   color: #ffffff !important;
 }
-html.light .auth-hero, 
+html.light .auth-hero,
 html.light .auth-card,
 html.light .users-card {
   background: rgba(255, 255, 255, 0.9);
@@ -196,7 +204,7 @@ html.light .topbar-dropdown-divider {
   background: #f1f3f5;
 }
 
-/* دکمه‌های داخل تاپ‌بار همیشه باید استایل روشن داشته باشند چون تاپ‌بار تیره است */
+/* The buttons inside the top bar should always have a light style because the top bar is dark */
 .topbar .btn-cyan {
   background: rgba(255, 255, 255, 0.1) !important;
   border-color: rgba(255, 255, 255, 0.3) !important;
@@ -207,7 +215,7 @@ html.light .topbar-dropdown-divider {
   border-color: #fff !important;
 }
 
-/* ─── اسکرول‌بار کلاسیک و سازگار با تم ─── */
+/* ─── Classic and theme compatible scrollbar ─── */
 :where(
   .main,
   .sidebar,
@@ -312,7 +320,7 @@ body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(
 .topbar-meta{display:flex;gap:16px;font-family:var(--mono);font-size:11px;color:var(--text3);margin-right:auto}
 .meta-chip{display:flex;align-items:center;gap:5px}
 .meta-val{font-weight:700;font-size:13px}
-.meta-val.g{color:var(--green)} .meta-val.r{color:var(--red)} .meta-val.c{color:var(--cyan)}
+.meta-val.g{color: var(--green) !important;} .meta-val.r{color: var(--red) !important;} .meta-val.c{color:var(--cyan)}
 .topbar-actions{display:flex;gap:8px;align-items:center}
 .dot-live{width:7px;height:7px;border-radius:50%;background:var(--text3);transition:all .3s}
 .dot-live.on{background:var(--green);box-shadow:0 0 8px var(--green);animation:blink 2s infinite}
@@ -351,7 +359,7 @@ html.light .btn-secondary:hover{background:rgba(100,100,120,.15);border-color:rg
   height: 100%;
   background: linear-gradient(90deg, var(--cyan), var(--blue));
   box-shadow: 0 0 8px var(--cyan);
-  transition: width 1s linear;  /* از 1s به 0.5s یا بدون تغییر */
+  transition: width 1s linear;  /* From 1s to 0.5s or unchanged */
 }
 
 /* ── APP LAYOUT: sidebar + main ─────────────────── */
@@ -360,7 +368,7 @@ html.light .btn-secondary:hover{background:rgba(100,100,120,.15);border-color:rg
 /* ── SIDEBAR ─────────────────────────────────────── */
 .sidebar{width:220px;min-width:220px;background:var(--bg2);border-left:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;flex-shrink:0;padding:8px 0;transition: width .25s ease;}
 
-/* نمای کلی */
+/* Overview */
 .sb-overview{display:flex;align-items:center;gap:8px;padding:9px 14px;margin:0 8px 2px;border-radius:8px;cursor:pointer;transition:all .2s;border:1px solid transparent}
 .sb-overview:hover{background:var(--bg3);color:var(--text2)}
 .sb-overview.active{background:rgba(0,212,255,.08);border-color:rgba(0,212,255,.2);color:var(--cyan)}
@@ -370,7 +378,7 @@ html.light .btn-secondary:hover{background:rgba(100,100,120,.15);border-color:rg
 
 .sb-divider{height:1px;background:var(--border);margin:6px 10px}
 
-/* گروه دفاتر */
+/* Group of offices */
 .sb-group{margin:0 0 2px}
 .sb-group-hdr{display:flex;align-items:center;gap:7px;padding:8px 14px;cursor:pointer;transition:all .2s;user-select:none;position:relative}
 .sb-group-hdr:hover{background:var(--bg3)}
@@ -385,11 +393,11 @@ html.light .btn-secondary:hover{background:rgba(100,100,120,.15);border-color:rg
 .sb-meta-off{font-family:var(--mono);font-size:9px;color:var(--red);font-weight:700}
 .sb-meta-sep{font-size:9px;color:var(--text3)}
 
-/* بدنه کشویی گروه */
+/* Body sliding group */
 .sb-group-body{overflow:hidden;max-height:0;transition:max-height .3s ease}
 .sb-group.open .sb-group-body{max-height:800px}
 
-/* آیتم پرینتر */
+/* Printer item */
 .sb-item{display:flex;align-items:center;gap:7px;padding:7px 14px 7px 28px;cursor:pointer;transition:all .15s;border-right:2px solid transparent;font-family:var(--sans);font-size:12px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sb-item:hover{background:var(--bg3);color:var(--text2);border-right-color:var(--bdr2)}
 .sb-item.active{background:rgba(0,212,255,.07);color:var(--cyan);border-right-color:var(--cyan);font-weight:600}
@@ -402,7 +410,7 @@ html.light .btn-secondary:hover{background:rgba(100,100,120,.15);border-color:rg
 .sb-item-name{flex:1;overflow:hidden;text-overflow:ellipsis}
 .sb-alert-icon{font-size:10px;flex-shrink:0;color:var(--orange)}
 
-/* رنگ‌بندی هر دفتر (نوار رنگی کنار هدر) */
+/* The coloring of each office (color bar next to the header) */
 .sb-group-hdr::before{content:'';position:absolute;right:0;top:20%;height:60%;width:3px;border-radius:2px;opacity:0;transition:opacity .2s}
 .sb-group.open .sb-group-hdr::before{opacity:1}
 .sb-group[data-color="cyan"]   .sb-group-hdr::before{background:var(--cyan)}
@@ -508,7 +516,7 @@ html.light .btn-secondary:hover{background:rgba(100,100,120,.15);border-color:rg
   background:var(--bg2);
   border:1px solid var(--border);
   border-radius:10px;
-  padding:10px 12px;        /* کاهش padding */
+  padding:10px 12px;        /* Reduce padding */
   cursor:pointer;
   transition:all .25s;
   position:relative;
@@ -520,12 +528,12 @@ html.light .btn-secondary:hover{background:rgba(100,100,120,.15);border-color:rg
 .overview-card.oc-offline{border-top:2px solid var(--red);opacity:.75}
 .overview-card.oc-warn{border-top:2px solid var(--yellow)}
 
-/* هدر کارت */
+/* Card header */
 .oc-header{
   display:flex;
   justify-content:space-between;
   align-items:flex-start;
-  margin-bottom:6px;        /* کاهش margin */
+  margin-bottom:6px;        /* Reduce margin */
 }
 .oc-ip{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--cyan)}
 .oc-name{
@@ -548,18 +556,18 @@ html.light .btn-secondary:hover{background:rgba(100,100,120,.15);border-color:rg
 .pill-off{background:rgba(255,61,61,.1);border:1px solid rgb(221 80 82);color:var(--red)}
 .pill-dot{width:5px;height:5px;border-radius:50%}
 
-/* ردیف‌های آماری جدید */
+/* New statistical rows */
 .oc-stat-row{
   display:flex;
   justify-content:space-between;
   align-items:center;
-  margin: 7px 0;           /* کاهش margin */
-  padding:4px 0;            /* کاهش padding */
+  margin: 7px 0;           /* Reduce margin */
+  padding:4px 0;            /* Reduce padding */
   /* border-bottom:1px solid rgba(255,255,255,0.04); */
 }
 .oc-stat-row:last-child{border-bottom:none}
 
-/* سمت راست: شمارنده */
+/* Right: counter */
 .oc-counter{
   display:flex;
   flex-direction:column;
@@ -568,19 +576,19 @@ html.light .btn-secondary:hover{background:rgba(100,100,120,.15);border-color:rg
 }
 .oc-counter-val{
   font-family:var(--mono);
-  font-size:16px;            /* کاهش فونت */
+  font-size:16px;            /* Reduce the font */
   font-weight:700;
   line-height:1.2;
 }
 .oc-counter-label{
   font-family:var(--mono);
-  font-size:8px;             /* کاهش فونت */
+  font-size:8px;             /* Reduce the font */
   color:var(--text3);
   text-transform:uppercase;
   letter-spacing:0.5px;
 }
 
-/* سمت چپ: ناحیه نوارهای تونر */
+/* Left: Toner ribbons area */
 .oc-toner-area{
   flex:1;
   display:flex;
@@ -594,14 +602,14 @@ html.light .btn-secondary:hover{background:rgba(100,100,120,.15);border-color:rg
   flex-direction: column;
 }
 .oc-toner-item{
-  width:165px;                /* باریک‌تر */
-  height:7px;                /* کوتاه‌تر */
+  width:165px;                /* narrower */
+  height:7px;                /* shorter */
   background:var(--bg);
   border-radius:4px;
   overflow:hidden;
 }
 .oc-toner-item.black{
-  width:70px;                /* پهن‌تر ولی کمتر */
+  width:70px;                /* Wider but less */
 }
 .oc-toner-bar{
   height:100%;
@@ -614,7 +622,7 @@ html.light .btn-secondary:hover{background:rgba(100,100,120,.15);border-color:rg
   opacity:0;
 }
 
-/* هشدار داخل کارت */
+/* Warning inside the card */
 .oc-alert{
   margin-top:6px;
   padding-top:4px;
@@ -701,14 +709,14 @@ html.light .btn-secondary:hover{background:rgba(100,100,120,.15);border-color:rg
   color: var(--cyan);
   border: 1px solid rgba(0,212,255,0.2);
 }
-.stats-body { 
-  padding: 18px; 
-  display: grid; 
-  grid-template-columns: 1fr 1fr; 
-  gap: 14px; 
+.stats-body {
+  padding: 18px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
 }
-.stat-row { 
-  display: flex; 
+.stat-row {
+  display: flex;
   flex-direction: column;
   gap: 10px;
   background: var(--bg4);
@@ -731,8 +739,8 @@ html.light .btn-secondary:hover{background:rgba(100,100,120,.15);border-color:rg
   font-weight: 600;
   color: var(--text);
 }
-.stat-dot { 
-  font-size: 16px; 
+.stat-dot {
+  font-size: 16px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -761,10 +769,10 @@ html.light .btn-secondary:hover{background:rgba(100,100,120,.15);border-color:rg
   font-weight: 700;
   color: var(--text);
 }
-.stat-percent { 
-  font-size: 12px; 
-  color: var(--text3); 
-  font-weight: 500; 
+.stat-percent {
+  font-size: 12px;
+  color: var(--text3);
+  font-weight: 500;
 }
 .stat-summary-grid {
   grid-column: 1 / -1;
@@ -1113,7 +1121,7 @@ html.light .sb-group.active-group .sb-group-name {
   color: var(--text3);
 }
 
-/* ─── دراپ‌داون‌های عمومی (برای خروجی‌ها و غیره) ─── */
+/* ─── General dropdowns (for outputs etc.) ─── */
 .dropdown {
   position: relative;
   display: inline-block;
@@ -1121,7 +1129,7 @@ html.light .sb-group.active-group .sb-group-name {
 .dropdown-menu {
   display: none;
   position: absolute;
-  bottom: 100%; /* باز شدن به سمت بالا برای تولبار پایین */
+  bottom: 100%; /* Opening upwards for the bottom toolbar */
   right: 0;
   margin-bottom: 8px;
   min-width: 180px;
@@ -1167,11 +1175,11 @@ html.light .dropdown-item:hover {
 }
 
 .log-toolbar .dropdown-menu {
-  bottom: 100%; /* پیش‌فرض باز شدن به سمت بالا */
+  bottom: 100%; /* Default opening upwards */
   top: auto;
 }
 
-/* ─── استایل دکمه‌های آیکون‌دار در تاپ‌بار ─── */
+/* ─── style of icon buttons in the top bar ─── */
 .topbar-more {
   position: relative;
 }
@@ -2011,7 +2019,7 @@ html.light .topbar-dropdown-item:hover {
   }
 }
 
-/* ─── باگ #10: Sidebar در موبایل ─── */
+/* ─── Bug #10: Sidebar on mobile ─── */
 @media (max-width: 768px) {
   .app-layout {
     flex-direction: column;
@@ -2066,7 +2074,7 @@ html.light .topbar-dropdown-item:hover {
     font-size: 10px;
     padding: 4px 8px;
   }
-  /* باگ #12: دکمه‌های toolbar در موبایل wrap می‌شوند */
+  /* Bug #12: Toolbar buttons are wrapped on mobile */
   .log-toolbar {
     flex-wrap: wrap;
   }
@@ -2076,7 +2084,7 @@ html.light .topbar-dropdown-item:hover {
   }
 }
 
-/* ─── باگ #5: بهبود مودال‌ها در تم لایت ─── */
+/* ─── Bug #5: Improved modals in Theme Light ─── */
 html.light .modal,
 html.light .ev-modal,
 html.light .users-modal {
@@ -2097,7 +2105,7 @@ html.light .ev-modal-overlay {
   backdrop-filter: blur(4px);
 }
 
-/* ─── باگ #13: Loading Spinner ─── */
+/* ─── Bug #13: Loading Spinner ─── */
 .loading-spinner {
   display: flex;
   align-items: center;
@@ -2118,7 +2126,7 @@ html.light .ev-modal-overlay {
   to { transform: rotate(360deg); }
 }
 
-/* ─── باگ #15: انیمیشن fade-in برای کارت‌ها ─── */
+/* ─── Bug #15: fade-in animation for cards ─── */
 .overview-card {
   animation: cardFadeIn 0.4s ease forwards;
   opacity: 0;
@@ -2133,7 +2141,7 @@ html.light .ev-modal-overlay {
     transform: translateY(0);
   }
 }
-/* تأخیر stagger برای هر کارت */
+/* Stagger delay for each card */
 .overview-card:nth-child(1) { animation-delay: 0.0s; }
 .overview-card:nth-child(2) { animation-delay: 0.05s; }
 .overview-card:nth-child(3) { animation-delay: 0.1s; }
@@ -2144,7 +2152,7 @@ html.light .ev-modal-overlay {
 .overview-card:nth-child(8) { animation-delay: 0.35s; }
 .overview-card:nth-child(n+9) { animation-delay: 0.4s; }
 
-/* ─── باگ #14: بهبود کنتراست رنگ‌ها در تم لایت ─── */
+/* ─── Bug #14: Improve color contrast in Theme Light ─── */
 html.light .form-input {
   background: #ffffff;
   border-color: #94a3b8;
@@ -2366,7 +2374,7 @@ html.light .pg-dots {
   color: #64748b;
 }
 
-/* ─── اصلاحات دسترس‌پذیری و ریسپانسیو ─── */
+/* ─── accessibility and responsiveness fixes ─── */
 :where(a, button, [role="button"], input, select, textarea, .sb-item, .sb-overview,
        .filter-btn, .dropdown-item, .topbar-dropdown-item):focus-visible {
   outline: 2px solid var(--cyan);
@@ -2406,7 +2414,7 @@ html.light .pg-dots {
   }
 }
 
-/* هدر چسبان برای جدول‌های طولانی لاگ و کاربران */
+/* Sticky header for long logs and users tables */
 .log-table thead th,
 .users-table thead th {
   position: sticky;
@@ -2428,7 +2436,7 @@ html.light .pg-dots {
 }
 
 
-/* ═══ اصلاح منوی بازشوی تاپ‌بار (خوانایی در تم روشن) ═══ */
+/* ═══ Fix the top bar pop-up menu (readability in light theme) ═══ */
 .topbar-dropdown {
   background: var(--bg2);
   border: 1px solid color-mix(in srgb, #00d4ff 35%, var(--border));
@@ -2475,7 +2483,7 @@ html.light .topbar-dropdown .topbar-dropdown-item:hover .item-icon {
 }
 .topbar-dropdown-divider { background: color-mix(in srgb, #00d4ff 25%, var(--border)); }
 
-/* ═══ کاهش سفیدی تم روشن: تِینت سایان روی باکس‌ها و کارت‌ها ═══ */
+/* ═══ Decrease the whiteness of the bright theme: Saiyan tint on boxes and cards ═══ */
 html.light {
   --surface-tint: linear-gradient(180deg, #f4fcff 0%, #e8f6fb 100%);
   --surface-border: rgba(0, 134, 167, .22);
@@ -2525,7 +2533,7 @@ html.light .sb-item.active {
 }
 html.light .section-title { color: #00587a; }
 
-/* ─── جداسازی بصری رویدادهای تخمینی (PRINT_GAP) از چاپ واقعی ─── */
+/* ─── visual separation of estimated events (PRINT_GAP) from actual printing ─── */
 tr.est-row td{background:rgba(255,215,64,.03)}
 tr.est-row td.num{color:var(--yellow)}
 tr.est-row td:first-child{box-shadow:inset 3px 0 0 rgba(255,215,64,.55)}

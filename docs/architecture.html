@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>🗺️ نقشه معماری و جریان داده — Multi-Brand Printer Monitor</title>
+<title>🗺️ Architecture map and data flow — Multi-Brand Printer Monitor</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   html,body{height:100%}
@@ -113,7 +113,7 @@
   .edge path{fill:none;stroke:#54678c;stroke-width:1.4}
   .edge.dim{opacity:.07}
   .edge.hl path{stroke:#fbbf24;stroke-width:2.4}
-  /* برچسب یال‌ها — همیشه روی همه‌ی لایه‌ها، با زمینه‌ی تیره برای خوانایی */
+  /* Edge labels: always shown on all layers, with a dark background for legibility */
   .eglabel{pointer-events:none}
   .eglabel text{fill:#c3d3ef;font-size:10px;font-weight:600}
   .eglabel rect.elabb{fill:#0b1226;opacity:.88}
@@ -159,25 +159,25 @@
 <header>
   <div class="brand">
     <span class="logo">🗺️</span>
-    <h1>نقشه‌ی معماری Multi-Printer
-      <small>ارتباط فایل‌ها · جریان دریافت اطلاعات · خروجی draw.io</small>
+    <h1>Multi-Printer Architecture Map
+      <small>File relations · information receiving flow · draw.io export</small>
     </h1>
   </div>
   <div class="tabs" id="tabs">
-    <button data-view="arch" class="active">🏗️ معماری لایه‌ها</button>
-    <button data-view="flow">🔄 جریان داده</button>
-    <button data-view="dep">🧩 وابستگی فایل‌ها</button>
+    <button data-view="arch" class="active">🏗️ Layer architecture</button>
+    <button data-view="flow">🔄 Data flow</button>
+    <button data-view="dep">🧩 File dependencies</button>
   </div>
   <div class="hspace"></div>
   <div class="toolrow">
-    <input id="search" class="search" placeholder="🔍 جستجوی فایل یا نام…">
-    <button class="btn" id="exportXml">⬇️ خروجی XML <span style="font-weight:400">(draw.io)</span></button>
-    <button class="btn ghost" id="helpBtn">؟ راهنما</button>
+    <input id="search" class="search" placeholder="🔍 Search for a file or name…">
+    <button class="btn" id="exportXml">⬇️ XML export <span style="font-weight:400">(draw.io)</span></button>
+    <button class="btn ghost" id="helpBtn">? Help</button>
   </div>
 </header>
 
 <div id="legendBar">
-  <span class="lbl">دسته‌ها:</span>
+  <span class="lbl">Categories:</span>
   <span id="legend"></span>
 </div>
 
@@ -185,10 +185,10 @@
   <div id="canvasWrap">
     <div id="viewNote"></div>
     <div id="flowBar">
-      <button class="btn ghost" id="flowPrev">◀ قبلی</button>
-      <button class="btn" id="flowPlay">▶ پخش</button>
-      <button class="btn ghost" id="flowNext">بعدی ▶</button>
-      <div class="step" id="flowStepLbl">مرحله ۰ از ۱۳</div>
+      <button class="btn ghost" id="flowPrev">◀ Previous</button>
+      <button class="btn" id="flowPlay">▶ Play</button>
+      <button class="btn ghost" id="flowNext">Next ▶</button>
+      <div class="step" id="flowStepLbl">Step 0 of 13</div>
       <div id="flowProg"><i></i></div>
     </div>
     <svg id="svg" xmlns="http://www.w3.org/2000/svg">
@@ -203,281 +203,281 @@
       <g id="world"></g>
     </svg>
     <div id="zoomCtl">
-      <button id="zin" title="بزرگ‌نمایی">＋</button>
-      <button id="zout" title="کوچک‌نمایی">－</button>
-      <button id="zfit" title="متناسب با صفحه">⤢</button>
-      <button id="zreset" title="بازنشانی">⟲</button>
+      <button id="zin" title="Zoom in">＋</button>
+      <button id="zout" title="Zoom out">－</button>
+      <button id="zfit" title="Fit to screen">⤢</button>
+      <button id="zreset" title="Reset">⟲</button>
     </div>
   </div>
   <aside id="panel">
-    <div id="panelHead"><b id="pHead">جزئیات</b><button class="btn ghost" id="panelClose" style="padding:4px 10px">✕</button></div>
-    <div id="panelBody"><div class="pEmpty">👆 روی هر گره کلیک کنید تا<br>توضیح، مسیر فایل و ارتباطاتش را ببینید.<br><br>🔍 با جستجو، فایل‌ها را پیدا کنید.<br>🖱️ برای جابه‌جایی، صفحه را بکشید و با چرخ موس زوم کنید.</div></div>
+    <div id="panelHead"><b id="pHead">Details</b><button class="btn ghost" id="panelClose" style="padding:4px 10px">✕</button></div>
+    <div id="panelBody"><div class="pEmpty">👆 Click any node to<br>see its description, file path and connections.<br><br>🔍 Use search to find files.<br>🖱️ Drag the page to move it, and use the mouse wheel to zoom.</div></div>
   </aside>
 </main>
 
 <div id="helpModal"><div id="helpBox">
-  <h2>📖 راهنمای استفاده از نقشه‌ی معماری</h2>
-  <p>این نقشه ساختار کامل پروژه‌ی <b>Multi-Brand Printer Monitor</b> را در سه نما نشان می‌دهد. هر گره یک «فایل/ماژول» واقعی پروژه است؛ روی هر گره کلیک کنید تا توضیح فارسی، مسیر دقیق فایل، و لیست فایل‌هایی که استفاده می‌کند و فایل‌هایی که از او استفاده می‌کنند نمایش داده شود.</p>
-  <h3>🏗️ نمای معماری لایه‌ها</h3>
-  <p>مسیر حرکت داده را از بالا به پایین نشان می‌دهد: از <b>دستگاه‌های شبکه</b> → لایه‌ی <b>SNMP/HTTP</b> → <b>جمع‌آورنده‌ها (Collectors)</b> → <b>پردازش و وضعیت</b> → <b>ذخیره‌سازی</b> → <b>وب (Flask)</b> → <b>مرورگر کاربر</b>.</p>
-  <h3>🔄 نمای جریان داده</h3>
-  <p>چرخه‌ی کامل دریافت اطلاعات را در <b>۱۳ مرحله‌ی شماره‌دار</b> توضیح می‌دهد. با دکمه‌ی «▶ پخش» مراحل به‌ترتیب روشن می‌شوند و توضیح هر مرحله در پنل کناری نمایش داده می‌شود. سه «جریان فرعی» (سنسور، اسکن OID، اکشن‌های کاربر) هم پایین صفحه آمده‌اند.</p>
-  <h3>🧩 نمای وابستگی فایل‌ها</h3>
-  <p><b>۶۰ گره</b> (همه‌ی فایل‌های پروژه + فایل‌های داده‌ی runtime + گره‌های بیرونی/تست)، ستون‌بندی‌شده بر اساس پوشه. پیکان <code>A ─▶ B</code> یعنی «A از B استفاده می‌کند (import)». خط‌های <b>چین آبی</b> = فراخوانی HTTP از فرانت‌اند، خط‌های <b>نقطه‌چین بنفش</b> = خواندن/نوشتن فایل، خط‌های <b>چین خاکستری</b> = تست.</p>
-  <h3>⬇️ خروجی XML (draw.io)</h3>
+  <h2>📖 How to use the architecture map</h2>
+  <p>This map shows the complete structure of the <b>Multi-Brand Printer Monitor</b> project in three views. Each node is a real file or module of the project. Click any node to see its Persian description, exact file path, and the list of files it uses and the files that use it.</p>
+  <h3>🏗️ Layer architecture view</h3>
+  <p>It shows the path of data from top to bottom: from the <b>network devices</b> to the <b>SNMP/HTTP</b> → <b>collectors</b> → <b>processing and status</b> → <b>storage</b> → <b>web (Flask)</b> → <b>user browser</b>.</p>
+  <h3>🔄 Data flow view</h3>
+  <p>It explains the complete information-receiving cycle in <b>13 numbered steps</b> . Press "▶ Play" to light up the steps in order; each step explanation is shown in the side panel. Three "sub-flows" (sensor, OID scan, user actions) are at the bottom of the page.</p>
+  <h3>🧩 File dependency view</h3>
+  <p><b>60 nodes</b> (all project files + runtime data files + external/test nodes), arranged in columns by folder. An arrow <code>A ─▶ B</code> means "A uses B (import)". <b>Blue dashed lines</b> are HTTP calls from the front end; <b>dotted purple lines</b> are file reads/writes; <b>grey dashed lines</b> are tests.</p>
+  <h3>⬇️ XML export (draw.io)</h3>
   <ul>
-    <li>دکمه‌ی «خروجی XML» یک فایل <code>multi-printer-architecture.xml</code> می‌سازد که <b>هر سه نما</b> را در سه صفحه‌ی جدا دارد.</li>
-    <li>در سایت <code>app.diagrams.net</code> (یا برنامه‌ی دسکتاپ draw.io) از مسیر <code>File → Open</code> فایل را باز کنید؛ هر سه صفحه قابل ویرایش و خروجی‌گرفتن (PDF/PNG/SVG) هستند.</li>
+    <li>The "XML export" button creates a file <code>multi-printer-architecture.xml</code> that holds <b>all three views</b> on three separate pages.</li>
+    <li>On the <code>app.diagrams.net</code> website (or the draw.io desktop app), open the file via <code>File → Open</code> . All three pages can be edited and exported (PDF/PNG/SVG).</li>
   </ul>
-  <h3>🖱️ کنترل‌ها</h3>
+  <h3>🖱️ Controls</h3>
   <ul>
-    <li>کشیدن صفحه = جابه‌جایی · چرخ موس یا دکمه‌های ＋/－ = زوم · ⤢ = متناسب با صفحه (در نمای وابستگی حتماً زوم کنید)</li>
-    <li>هاور روی گره = هایلایت تمام اتصالاتش · کلیک روی چیپ‌های رنگی بالای صفحه = نمایش/پنهان‌کردن یک دسته</li>
-    <li>جستجو بر اساس نام فایل یا نام فارسی کار می‌کند.</li>
+    <li>Drag the page = move · mouse wheel or ＋/－ buttons = zoom · ⤢ = fit to screen (zoom in when in the dependency view)</li>
+    <li>Hover over a node = highlight all its connections · click a coloured chip at the top of the page = show/hide one group</li>
+    <li>Search works by file name or by Persian name.</li>
   </ul>
-  <div style="text-align:left;margin-top:14px"><button class="btn" id="helpClose">بستن</button></div>
+  <div style="text-align:left;margin-top:14px"><button class="btn" id="helpClose">Close</button></div>
 </div></div>
 <div id="toast"></div>
 
 <script>
 'use strict';
 /* ======================================================================
-   DATA — همه‌ی گره‌ها و یال‌ها (بدون هیچ وابستگی به DOM)
+   DATA — all nodes and edges (no dependency on the DOM)
    ====================================================================== */
 const CATS = {
-  entry:    {name:'نقطه ورود',            color:'#eab308'},
-  external: {name:'بیرونی (دستگاه/سرویس)',color:'#f97316'},
-  protocol: {name:'لایه SNMP/شبکه',        color:'#14b8a6'},
-  collect:  {name:'جمع‌آوری داده',         color:'#22c55e'},
-  core:     {name:'پردازش و وضعیت',        color:'#3b82f6'},
-  data:     {name:'لایه داده (DB/JSON)',   color:'#a855f7'},
-  web:      {name:'وب (Flask/Auth)',       color:'#f43f5e'},
-  ui:       {name:'رابط کاربری',           color:'#06b6d4'},
-  tool:     {name:'تست و ابزار',           color:'#64748b'}
+  entry:    {name:'Entry point',            color:'#eab308'},
+  external: {name:'External (device/service)',color:'#f97316'},
+  protocol: {name:'SNMP/network layer',        color:'#14b8a6'},
+  collect:  {name:'Data collection',         color:'#22c55e'},
+  core:     {name:'Processing and status',        color:'#3b82f6'},
+  data:     {name:'Data layer (DB/JSON)',   color:'#a855f7'},
+  web:      {name:'Web (Flask/Auth)',       color:'#f43f5e'},
+  ui:       {name:'User interface',           color:'#06b6d4'},
+  tool:     {name:'Test and tools',           color:'#64748b'}
 };
 const ICONS = {entry:'🚀',external:'🌍',protocol:'📡',collect:'🧰',core:'⚙️',data:'💾',web:'🌐',ui:'🖥️',tool:'🧪'};
 
-/* --- گره‌های مشترک بین نماهای «معماری» و «وابستگی» --- */
-/* arch: [x,y,w,h] | depCol: شماره ستون در نمای وابستگی */
+/* --- Nodes shared between the "architecture" and "dependency" views --- */
+/* arch: [x,y,w,h] | depCol: column number in the dependency view */
 const NODES = [
  /* --- entry --- */
- {id:'run',   cat:'entry', title:'run.py', sub:'نقطه ورود + threads', file:'run.py',
-  desc:'نقطه ورود برنامه. دیتابیس را init می‌کند، app فلسک را می‌سازد و پنج thread پس‌زمینه (poll فوری، حلقه‌ی polling هر ۶۰ ثانیه، اسکن هفتگی OID، cleanup لاگ‌های قدیمی و پاک‌سازی ترمینال) را اجرا می‌کند؛ سپس روی 0.0.0.0:5053 سرو می‌شود.',
+ {id:'run',   cat:'entry', title:'run.py', sub:'Entry point + threads', file:'run.py',
+  desc:'The program entry point. It initialises the database, builds the Flask app and runs five background threads (immediate poll, polling loop every 60 seconds, weekly OID scan, cleanup of old logs and terminal clearing); then it serves on 0.0.0.0:5053.',
   arch:[1000,620,175,64], depCol:0},
- {id:'cadmin',cat:'entry', title:'create_admin.py', sub:'ساخت ادمین از CLI', file:'create_admin.py',
-  desc:'اسکریپت خط فرمان برای ساخت کاربر ادمین یا ارتقای یک کاربر موجود به نقش admin، بدون نیاز به رابط وب.',
+ {id:'cadmin',cat:'entry', title:'create_admin.py', sub:'Admin creation from CLI', file:'create_admin.py',
+  desc:'Command-line script to create an admin user or promote an existing user to the admin role, without needing the web interface.',
   arch:null, depCol:0},
  /* --- config --- */
- {id:'cfg',   cat:'core', title:'config/settings.py', sub:'تنظیمات سراسری', file:'config/settings.py',
-  desc:'تنظیمات سراسری: مسیر فایل‌ها، POLL_INTERVAL=60 ثانیه، پورت 5053، آستانه‌های هشدار تونر، subnet دفاتر، SECRET_KEY و CORS — همه قابل بازنویسی با متغیرهای محیطی (ENV).',
+ {id:'cfg',   cat:'core', title:'config/settings.py', sub:'Global settings', file:'config/settings.py',
+  desc:'Global settings: file paths, POLL_INTERVAL=60 seconds, port 5053, toner alert thresholds, office subnets, SECRET_KEY and CORS — all can be overridden with environment variables (ENV).',
   arch:null, depCol:1},
  /* --- web --- */
- {id:'models',cat:'web', title:'models.py', sub:'مدل User + bcrypt', file:'models.py',
-  desc:'مدل کاربر (Flask-Login). هش و تایید رمز با bcrypt، و خواندن نقش (admin/manager/viewer)، دفاتر و ماژول‌های مجاز هر کاربر از دیتابیس.',
+ {id:'models',cat:'web', title:'models.py', sub:'User model + bcrypt', file:'models.py',
+  desc:'User model (Flask-Login). Password hashing and checking with bcrypt, and reading each user role (admin/manager/viewer), permitted offices and modules from the database.',
   arch:[640,900,140,78], depCol:0},
- {id:'utils', cat:'web', title:'utils.py', sub:'ایمیل · توکن · reCAPTCHA', file:'utils.py',
-  desc:'ابزارهای کمکی وب: ارسال ایمیل از طریق SMTP، ساخت و اعتبارسنجی توکن ریست رمز (itsdangerous) و تایید reCAPTCHA با سرویس گوگل.',
+ {id:'utils', cat:'web', title:'utils.py', sub:'Email · token · reCAPTCHA', file:'utils.py',
+  desc:'Web helper tools: sending email through SMTP, creating and validating the password-reset token (itsdangerous), and checking reCAPTCHA with the Google service.',
   arch:[800,900,140,78], depCol:0},
- {id:'wapp',  cat:'web', title:'web/__init__.py', sub:'create_app + blueprintها', file:'web/__init__.py',
-  desc:'کارخانه‌ی ساخت app فلسک: ثبت هر ۱۴ blueprint روت‌ها، اتصال سیستم احراز هویت، اعمال middlewareهای امنیتی و تنظیم CORS.',
+ {id:'wapp',  cat:'web', title:'web/__init__.py', sub:'create_app + blueprints', file:'web/__init__.py',
+  desc:'The Flask app factory: registers all 14 route blueprints, connects the authentication system, applies the security middleware and sets up CORS.',
   arch:[50,900,200,78], depCol:6},
- {id:'auth',  cat:'web', title:'web/auth.py', sub:'ورود/ثبت‌نام/OAuth/دسترسی', file:'web/auth.py',
-  desc:'ورود، ثبت‌نام، خروج، Google OAuth و ریست رمز. دکوریتورهای admin_required و توابع محدودسازی بر اساس دفتر و ماژول هم اینجاست.',
+ {id:'auth',  cat:'web', title:'web/auth.py', sub:'Sign-in / sign-up / OAuth / access', file:'web/auth.py',
+  desc:'Sign-in, sign-up, sign-out, Google OAuth and password reset. The admin_required decorators and the functions that restrict access by office and module are also here.',
   arch:[270,900,170,78], depCol:6},
  {id:'wsec',  cat:'web', title:'web/security.py', sub:'CSRF · Rate limit', file:'web/security.py',
-  desc:'لایه‌ی دفاعی وب: CSRF (Flask-WTF) روی همه‌ی درخواست‌های تغییردهنده، Rate limiting (Flask-Limiter) و headerهای امنیتی.',
+  desc:'Web defence layer: CSRF (Flask-WTF) on all state-changing requests, rate limiting (Flask-Limiter) and security headers.',
   arch:[460,900,160,78], depCol:6},
  /* --- routes --- */
- {id:'r_api', cat:'web', title:'routes: printers·logs·groups·system·stats', sub:'API اصلی داشبورد', file:'web/routes/{printers,logs,groups,system,stats}.py',
-  desc:'روت‌های سروِ اصلی داشبورد: لیست و جزئیات پرینترها، افزودن/حذف/ویرایش، toner reset، لاگ‌ها، رویداد دستی، گروه‌ها، وضعیت سیستم، poll دستی و آمار روزانه.',
+ {id:'r_api', cat:'web', title:'routes: printers·logs·groups·system·stats', sub:'Main dashboard API', file:'web/routes/{printers,logs,groups,system,stats}.py',
+  desc:'The main dashboard routes: printer list and details, add/remove/edit, toner reset, logs, manual event, groups, system status, manual poll and daily statistics.',
   arch:[970,890,330,44], depCol:null},
- {id:'r_adm', cat:'web', title:'routes: users·security·yield_status', sub:'مدیریت و امنیت', file:'web/routes/{users,security,yield_status}.py',
-  desc:'مدیریت کاربران (ساخت/نقش/تایید/دسترسی/حذف)، داشبورد امنیت و API رویدادهای امنیتی، و وضعیت Yield Engine.',
+ {id:'r_adm', cat:'web', title:'routes: users·security·yield_status', sub:'Management and security', file:'web/routes/{users,security,yield_status}.py',
+  desc:'User management (create/role/verify/access/delete), the security dashboard and the security events API, and the Yield Engine status.',
   arch:[970,944,330,44], depCol:null},
- {id:'r_rep', cat:'web', title:'routes: export_bp·import_db', sub:'گزارش و import', file:'web/routes/{export_bp,import_db}.py',
-  desc:'خروجی Excel (سه شیت: وضعیت، لاگ، تاریخچه reset) و CSV؛ تحلیل و import دیتابیس با backup خودکار و مدیریت رکوردهای تکراری.',
+ {id:'r_rep', cat:'web', title:'routes: export_bp·import_db', sub:'Reports and import', file:'web/routes/{export_bp,import_db}.py',
+  desc:'Excel export (three sheets: status, log, reset history) and CSV; database analysis and import with automatic backup and duplicate-record handling.',
   arch:[1320,890,330,44], depCol:null},
- {id:'r_scan',cat:'web', title:'routes: scan·validation·discover·dashboard', sub:'اسکن و صفحه اصلی', file:'web/routes/{scan,validation,discover,dashboard}.py',
-  desc:'اسکن OID و مشاهده profileها، بررسی سازگاری کانترها، کشف خودکار دستگاه‌های شبکه و رندر صفحه‌ی اصلی داشبورد.',
+ {id:'r_scan',cat:'web', title:'routes: scan·validation·discover·dashboard', sub:'Scan and main page', file:'web/routes/{scan,validation,discover,dashboard}.py',
+  desc:'OID scan and profile viewing, counter consistency checks, automatic discovery of network devices and rendering of the main dashboard page.',
   arch:[1320,944,330,44], depCol:null},
- /* نمای وابستگی: هر ۱۴ فایل روت جداگانه */
- {id:'rdash',  cat:'web', title:'dashboard.py',  sub:'', file:'web/routes/dashboard.py',  desc:'رندر صفحه‌ی اصلی داشبورد.', arch:null, depCol:7},
- {id:'rprint', cat:'web', title:'printers.py',   sub:'', file:'web/routes/printers.py',   desc:'API پرینترها: لیست/جزئیات/افزودن/حذف/ویرایش، toner reset، auto-discover و endpointهای debug.', arch:null, depCol:7},
- {id:'rlogs',  cat:'web', title:'logs.py',       sub:'', file:'web/routes/logs.py',       desc:'API لاگ‌ها: همه‌ی رویدادها، لاگ هر دستگاه، پاک‌سازی و ثبت رویداد دستی.', arch:null, depCol:7},
- {id:'rexport',cat:'web', title:'export_bp.py',  sub:'', file:'web/routes/export_bp.py',  desc:'خروجی Excel (Printer Status / Job Log / Reset History) و CSV از لاگ‌ها و reset history.', arch:null, depCol:7},
- {id:'rdisc',  cat:'web', title:'discover.py',   sub:'', file:'web/routes/discover.py',   desc:'کشف دستگاه‌ها در شبکه با SNMP و ThreadPool.', arch:null, depCol:7},
- {id:'rscan',  cat:'web', title:'scan.py',       sub:'', file:'web/routes/scan.py',       desc:'API اسکن OID و مشاهده‌ی profileهای ذخیره‌شده.', arch:null, depCol:7},
- {id:'rstats', cat:'web', title:'stats.py',      sub:'', file:'web/routes/stats.py',      desc:'آمار روزانه‌ی چاپ و سنسورها برای نمودارهای داشبورد.', arch:null, depCol:7},
- {id:'rsys',   cat:'web', title:'system.py',     sub:'', file:'web/routes/system.py',     desc:'وضعیت سیستم و اجرای poll دستی.', arch:null, depCol:7},
- {id:'rsec',   cat:'web', title:'security.py',   sub:'', file:'web/routes/security.py',   desc:'صفحه و APIهای داشبورد امنیت (رویدادها و آمار).', arch:null, depCol:7},
- {id:'rusers', cat:'web', title:'users.py',      sub:'', file:'web/routes/users.py',      desc:'مدیریت کاربران: ساخت، نقش، تایید، دسترسی دفتر/ماژول و حذف.', arch:null, depCol:7},
- {id:'rvalid', cat:'web', title:'validation.py', sub:'', file:'web/routes/validation.py', desc:'بررسی سازگاری کانترها و اعتبارسنجی profileهای OID.', arch:null, depCol:7},
- {id:'rgroups',cat:'web', title:'groups.py',     sub:'', file:'web/routes/groups.py',     desc:'API گروه‌های سفارشی: ساخت، تغییرنام، حذف.', arch:null, depCol:7},
- {id:'rimport',cat:'web', title:'import_db.py',  sub:'', file:'web/routes/import_db.py',  desc:'تحلیل و import دیتابیس با backup خودکار، فیلتر IP/تاریخ و مدیریت تکراری‌ها.', arch:null, depCol:7},
- {id:'ryield', cat:'web', title:'yield_status.py',sub:'', file:'web/routes/yield_status.py',desc:'وضعیت Yield Engine و تولید گزارش متنی.', arch:null, depCol:7},
+ /* Dependency view: each of the 14 route files separately */
+ {id:'rdash',  cat:'web', title:'dashboard.py',  sub:'', file:'web/routes/dashboard.py',  desc:'Renders the main dashboard page.', arch:null, depCol:7},
+ {id:'rprint', cat:'web', title:'printers.py',   sub:'', file:'web/routes/printers.py',   desc:'Printers API: list/details/add/remove/edit, toner reset, auto-discover and debug endpoints.', arch:null, depCol:7},
+ {id:'rlogs',  cat:'web', title:'logs.py',       sub:'', file:'web/routes/logs.py',       desc:'Logs API: all events, each device log, clearing and manual event recording.', arch:null, depCol:7},
+ {id:'rexport',cat:'web', title:'export_bp.py',  sub:'', file:'web/routes/export_bp.py',  desc:'Excel export (Printer Status / Job Log / Reset History) and CSV from logs and reset history.', arch:null, depCol:7},
+ {id:'rdisc',  cat:'web', title:'discover.py',   sub:'', file:'web/routes/discover.py',   desc:'Discovers devices on the network with SNMP and a ThreadPool.', arch:null, depCol:7},
+ {id:'rscan',  cat:'web', title:'scan.py',       sub:'', file:'web/routes/scan.py',       desc:'OID scan API and viewing of saved profiles.', arch:null, depCol:7},
+ {id:'rstats', cat:'web', title:'stats.py',      sub:'', file:'web/routes/stats.py',      desc:'Daily print and sensor statistics for the dashboard charts.', arch:null, depCol:7},
+ {id:'rsys',   cat:'web', title:'system.py',     sub:'', file:'web/routes/system.py',     desc:'System status and manual poll run.', arch:null, depCol:7},
+ {id:'rsec',   cat:'web', title:'security.py',   sub:'', file:'web/routes/security.py',   desc:'Security dashboard page and APIs (events and statistics).', arch:null, depCol:7},
+ {id:'rusers', cat:'web', title:'users.py',      sub:'', file:'web/routes/users.py',      desc:'User management: create, role, verify, office/module access and delete.', arch:null, depCol:7},
+ {id:'rvalid', cat:'web', title:'validation.py', sub:'', file:'web/routes/validation.py', desc:'Counter consistency checks and OID profile validation.', arch:null, depCol:7},
+ {id:'rgroups',cat:'web', title:'groups.py',     sub:'', file:'web/routes/groups.py',     desc:'Custom groups API: create, rename, delete.', arch:null, depCol:7},
+ {id:'rimport',cat:'web', title:'import_db.py',  sub:'', file:'web/routes/import_db.py',  desc:'Database analysis and import with automatic backup, IP/date filtering and duplicate handling.', arch:null, depCol:7},
+ {id:'ryield', cat:'web', title:'yield_status.py',sub:'', file:'web/routes/yield_status.py',desc:'Yield Engine status and text report generation.', arch:null, depCol:7},
  /* --- external --- */
- {id:'dev_printers',cat:'external',title:'پرینترها',sub:'Toshiba · HP · Canon · Brother',file:null,
-  desc:'پرینترهای شبکه (Toshiba e-STUDIO، HP LaserJet/FutureSmart، Canon i-SENSYS/MF، Brother). داده‌ها با SNMP (UDP/161) و در صورت نیاز با HTTP scraping از رابط وب خود دستگاه خوانده می‌شوند.',
+ {id:'dev_printers',cat:'external',title:'Printers',sub:'Toshiba · HP · Canon · Brother',file:null,
+  desc:'Network printers (Toshiba e-STUDIO, HP LaserJet/FutureSmart, Canon i-SENSYS/MF, Brother). Data is read via SNMP (UDP/161) and, if needed, via HTTP scraping of the device own web interface.',
   arch:[50,55,230,62], depCol:10},
- {id:'dev_sensor',cat:'external',title:'سنسور ECS100G',sub:'دما / رطوبت',file:null,
-  desc:'سنسور محیطی ECS100G که دما و رطوبت را از طریق SNMP v1 ارائه می‌کند.',
+ {id:'dev_sensor',cat:'external',title:'ECS100G sensor',sub:'temperature / humidity',file:null,
+  desc:'The ECS100G environmental sensor, which reports temperature and humidity over SNMP v1.',
   arch:[310,55,180,62], depCol:10},
- {id:'svc_google',cat:'external',title:'Google OAuth',sub:'ورود با گوگل',file:null,
-  desc:'ورود با حساب گوگل (authlib) به‌جای رمز عبور محلی.',
+ {id:'svc_google',cat:'external',title:'Google OAuth',sub:'Sign in with Google',file:null,
+  desc:'Sign-in with a Google account (authlib) instead of a local password.',
   arch:[1330,55,130,62], depCol:10},
- {id:'svc_recap',cat:'external',title:'reCAPTCHA',sub:'ضد ربات فرم‌ها',file:null,
-  desc:'گوگل reCAPTCHA برای جلوگیری از حمله‌ی ربات به فرم ورود/ثبت‌نام.',
+ {id:'svc_recap',cat:'external',title:'reCAPTCHA',sub:'Anti-bot for forms',file:null,
+  desc:'Google reCAPTCHA to prevent bot attacks on the sign-in/sign-up form.',
   arch:[1480,55,120,62], depCol:10},
- {id:'svc_smtp',cat:'external',title:'SMTP',sub:'ارسال ایمیل',file:null,
-  desc:'سرور ایمیل (SMTP) برای ارسال لینک ریست رمز عبور.',
+ {id:'svc_smtp',cat:'external',title:'SMTP',sub:'Send email',file:null,
+  desc:'Email server (SMTP) for sending the password-reset link.',
   arch:[1620,55,120,62], depCol:10},
- {id:'browser',cat:'ui',title:'🧑‍💻 مرورگر کاربر',sub:'HTTP → /api/...',file:null,
-  desc:'کاربر نهایی: داشبورد را می‌بیند و اکشن‌ها (افزودن پرینتر، ریست تونر، گروه‌بندی، خروجی اکسل...) را انجام می‌دهد. dashboard.js هر چند ثانیه APIها را فراخوانی می‌کند.',
+ {id:'browser',cat:'ui',title:'🧑‍💻 User browser',sub:'HTTP → /api/...',file:null,
+  desc:'The end user sees the dashboard and performs actions (adding a printer, toner reset, grouping, Excel export...). dashboard.js calls the APIs every few seconds.',
   arch:[1020,1080,230,60], depCol:10},
  {id:'http_scrape',cat:'protocol',title:'HTTP Scraping',sub:'TopAccess / Remote UI',file:'core/collectors/{toshiba,canon}.py → _scrape_*',
-  desc:'وقتی SNMP تونر را نمی‌دهد، رابط وب خود پرینتر (Toshiba TopAccess، Canon Remote UI) خوانده و درصد تونر استخراج می‌شود.',
+  desc:'When SNMP does not give the toner level, the device own web interface (Toshiba TopAccess, Canon Remote UI) is read and the toner percentage is extracted.',
   arch:[620,200,250,66], depCol:10},
  /* --- protocol --- */
  {id:'protocol',cat:'protocol',title:'core/snmp/protocol.py',sub:'SNMP v1/v2c · UDP/161 · fallback',file:'core/snmp/protocol.py',
-  desc:'پیاده‌سازی خام SNMP v1/v2c روی UDP/161: ساخت و پارس PDU، timeout/retry، کش کردن نسخه‌ی SNMP هر IP و fallback خودکار از v2c به v1 برای دستگاه‌های قدیمی.',
+  desc:'Raw SNMP v1/v2c implementation over UDP/161: building and parsing PDUs, timeout/retry, caching the SNMP version of each IP and automatic fallback from v2c to v1 for older devices.',
   arch:[50,200,300,66], depCol:4},
- {id:'oid_map',cat:'protocol',title:'core/snmp/oid_map.py',sub:'نگاشت OIDهای vendor',file:'core/snmp/oid_map.py',
-  desc:'نگاشت OIDهای اختصاصی vendor (به‌ویژه Toshiba) و mapهای وضعیت کاغذ/تونر که collectorها از آن استفاده می‌کنند.',
+ {id:'oid_map',cat:'protocol',title:'core/snmp/oid_map.py',sub:'Vendor OID mapping',file:'core/snmp/oid_map.py',
+  desc:'Mapping of vendor-specific OIDs (especially Toshiba) and the paper/toner status maps used by the collectors.',
   arch:[380,200,210,66], depCol:4},
  /* --- collectors --- */
- {id:'poller',cat:'collect',title:'core/poller.py',sub:'حلقه polling (هر ۶۰ ثانیه)',file:'core/poller.py',
-  desc:'قلب مانیتورینگ: هر ۶۰ ثانیه روی همه‌ی دستگاه‌ها poll می‌زند (با قفل جداگانه برای هر IP). اول enhanced_collector اجرا می‌شود و در صورت نقص، collector اختصاصی برند. آفلاین فقط پس از ۲ شکست متوالی اعلام می‌شود تا قطعی لحظه‌ای، آفلاین کاذب نسازد.',
+ {id:'poller',cat:'collect',title:'core/poller.py',sub:'Polling loop (every 60 seconds)',file:'core/poller.py',
+  desc:'Monitoring core: polls all devices every 60 seconds (each IP has its own lock). enhanced_collector runs first and, if it is incomplete, the brand-specific collector. Offline is declared only after 2 consecutive failures so that a momentary outage does not cause a false offline status.',
   arch:[50,365,200,70], depCol:2},
- {id:'enhanced',cat:'collect',title:'core/enhanced_collector.py',sub:'مسیر اصلی جمع‌آوری',file:'core/enhanced_collector.py',
-  desc:'مسیر اصلی جمع‌آوری برای همه‌ی برندها: MIB-2 + Host Resources + Printer MIB + OIDهای vendor. کانترها، supplies، سینی‌ها، مدل/سریال. واحدهای تونر (درصد، کد گسسته‌ی Canon، sentinel -2/-3) را هم مدیریت می‌کند.',
+ {id:'enhanced',cat:'collect',title:'core/enhanced_collector.py',sub:'Main collection path',file:'core/enhanced_collector.py',
+  desc:'Main collection path for all brands: MIB-2 + Host Resources + Printer MIB + vendor OIDs. Counters, supplies, trays, model/serial. It also handles toner units (percentage, Canon discrete codes, the -2/-3 sentinels).',
   arch:[280,365,250,70], depCol:2},
  {id:'toshiba',cat:'collect',title:'collectors/toshiba.py',sub:'',file:'core/collectors/toshiba.py',
-  desc:'Toshiba e-STUDIO: OIDهای اختصاصی (۲۰۷/۲۰۸/۲۰۹/۲۱۰...)، تفکیک A3/A4، رویداد twin، scrape تونر از TopAccess و سینی‌ها.',
+  desc:'Toshiba e-STUDIO: vendor-specific OIDs (207/208/209/210...), A3/A4 breakdown, twin event, toner scraping from TopAccess and trays.',
   arch:[560,340,165,40], depCol:3},
  {id:'hp',cat:'collect',title:'collectors/hp.py',sub:'',file:'core/collectors/hp.py',
-  desc:'HP: مسیر شمارنده/تونر اختصاصی (JetDirect و FutureSmart مثل M527/E52645) + fallback.',
+  desc:'HP: dedicated counter/toner path (JetDirect and FutureSmart such as M527/E52645) + fallback.',
   arch:[735,340,140,40], depCol:3},
  {id:'canon',cat:'collect',title:'collectors/canon.py',sub:'',file:'core/collectors/canon.py',
-  desc:'Canon MF/LBP: شمارنده‌ها و تونر؛ برای مدل‌هایی مثل LBP233dw که کد گسسته می‌دهند، در صورت لزوم از Remote UI هم scrape می‌شود.',
+  desc:'Canon MF/LBP: counters and toner; for models such as LBP233dw that return discrete codes, Remote UI is also scraped when needed.',
   arch:[885,340,150,40], depCol:3},
  {id:'brother',cat:'collect',title:'collectors/brother.py',sub:'',file:'core/collectors/brother.py',
-  desc:'Brother: تونر/درام و fallback برای مدل‌های سری NC.',
+  desc:'Brother: toner/drum and fallback for the NC series models.',
   arch:[1045,340,150,40], depCol:3},
  {id:'sensor',cat:'collect',title:'collectors/sensor.py',sub:'',file:'core/collectors/sensor.py',
-  desc:'ECS100G: خواندن دما/رطوبت با SNMP و ثبت sensor_readings + رویداد SENSOR_CHANGE.',
+  desc:'ECS100G: reads temperature/humidity over SNMP and records sensor_readings + the SENSOR_CHANGE event.',
   arch:[1205,340,170,40], depCol:3},
- {id:'cbase',cat:'collect',title:'core/collectors/base.py',sub:'رویداد چاپ · A3/A4 · تونر',file:'core/collectors/base.py',
-  desc:'توابع مشترک collectorها: _counters_event (تشخیص چاپ واقعی در برابر ریست/افت/اورفلو/ناهنجاری)، attribute_paper_size (تفکیک A3/A4 با چرخه‌ی تطبیق) و محاسبات تونر و pages_since_last_reset.',
+ {id:'cbase',cat:'collect',title:'core/collectors/base.py',sub:'Print event · A3/A4 · toner',file:'core/collectors/base.py',
+  desc:'Shared collector functions: _counters_event (detects a real print vs reset/drop/overflow/anomaly), attribute_paper_size (A3/A4 breakdown with the reconciliation cycle), and toner calculations and pages_since_last_reset.',
   arch:[560,400,330,64], depCol:3},
  {id:'cbenh',cat:'collect',title:'base_enhanced.py',sub:'',file:'core/collectors/base_enhanced.py',
-  desc:'پل سازگاری: collect_enhanced را از enhanced_collector دوباره export می‌کند تا مسیر import پایدار بماند.',
+  desc:'Compatibility bridge: re-exports collect_enhanced from enhanced_collector so that the import path stays stable.',
   arch:null, depCol:3},
- {id:'scanner',cat:'collect',title:'core/oid/scanner.py',sub:'اسکن startup + هفتگی',file:'core/oid/scanner.py',
-  desc:'در startup و به‌صورت هفتگی، OIDهای شناخته‌شده را روی هر IP می‌خواند و profile می‌سازد؛ برای سازگاری مدل‌ها و دیباگ.',
+ {id:'scanner',cat:'collect',title:'core/oid/scanner.py',sub:'Startup + weekly scan',file:'core/oid/scanner.py',
+  desc:'At startup and weekly, reads the known OIDs on each IP and builds a profile; used for model compatibility and debugging.',
   arch:[910,400,210,64], depCol:5},
- {id:'oidcat',cat:'collect',title:'oid/catalog.py + validator.py',sub:'کاتالوگ و اعتبارسنجی OID',file:'core/oid/{catalog,validator}.py',
-  desc:'کاتالوگ OIDهای شناخته‌شده و اعتبارسنجی مقادیرشان؛ خطاها در oid_validation_errors.txt ثبت می‌شوند.',
+ {id:'oidcat',cat:'collect',title:'oid/catalog.py + validator.py',sub:'OID catalogue and validation',file:'core/oid/{catalog,validator}.py',
+  desc:'Catalogue of known OIDs and validation of their values; errors are recorded in oid_validation_errors.txt.',
   arch:[1130,400,220,64], depCol:null},
- {id:'classifier',cat:'collect',title:'core/device_classifier.py',sub:'طبقه‌بندی دستگاه',file:'core/device_classifier.py',
-  desc:'طبقه‌بندی نوع دستگاه بر اساس OIDهای اسکن‌شده تا مسیر جمع‌آوری درست (پرینتر/سنسور، برند) انتخاب شود.',
+ {id:'classifier',cat:'collect',title:'core/device_classifier.py',sub:'Device classification',file:'core/device_classifier.py',
+  desc:'Classifies the device type from the scanned OIDs so that the right collection path (printer/sensor, brand) is chosen.',
   arch:[1360,400,190,64], depCol:2},
- {id:'catalog',cat:'collect',title:'catalog.py',sub:'',file:'core/oid/catalog.py',desc:'کاتالوگ OIDهای شناخته‌شده و توضیحاتشان.',arch:null,depCol:5},
- {id:'validator',cat:'collect',title:'validator.py',sub:'',file:'core/oid/validator.py',desc:'اعتبارسنجی مقادیر OID و ثبت خطاها.',arch:null,depCol:5},
+ {id:'catalog',cat:'collect',title:'catalog.py',sub:'',file:'core/oid/catalog.py',desc:'Catalogue of known OIDs and their descriptions.',arch:null,depCol:5},
+ {id:'validator',cat:'collect',title:'validator.py',sub:'',file:'core/oid/validator.py',desc:'Validates OID values and records errors.',arch:null,depCol:5},
  /* --- core state --- */
- {id:'store',cat:'core',title:'core/store.py',sub:'state زنده + PrevStore',file:'core/store.py',
-  desc:'حافظه‌ی زنده‌ی برنامه: لیست PRINTERS (از printers.json)، آخرین داده‌ی هر دستگاه (printer_data) و PrevStore برای مقایسه‌ی snapshot قبلی/فعلی که تشخیص چاپ و ریست بر اساس آن است.',
+ {id:'store',cat:'core',title:'core/store.py',sub:'live state + PrevStore',file:'core/store.py',
+  desc:'Live memory of the program: the PRINTERS list (from printers.json), the latest data of each device (printer_data), and PrevStore for comparing the previous and current snapshot, on which print and reset detection is based.',
   arch:[50,620,220,64], depCol:2},
- {id:'yield',cat:'core',title:'core/yield_engine.py',sub:'یادگیری yield + کاتالوگ',file:'core/yield_engine.py',
-  desc:'Yield Engine: یادگیری خودکار yield_per_page از روی resetها و تاریخچه، روش anchor-based برای پرینترهای کم‌مصرف، اشتراک yield بین کارتریج‌های مشابه، و fallback به کاتالوگ ظرفیت.',
+ {id:'yield',cat:'core',title:'core/yield_engine.py',sub:'yield learning + catalogue',file:'core/yield_engine.py',
+  desc:'Yield Engine: automatic learning of yield_per_page from resets and history, anchor-based method for low-usage printers, sharing yield between similar cartridges, and fallback to the capacity catalogue.',
   arch:[290,620,230,64], depCol:2},
- {id:'groups',cat:'core',title:'core/groups.py',sub:'گروه‌های سفارشی',file:'core/groups.py',
-  desc:'CRUD گروه‌های سفارشی پرینتر با id پایدار؛ ذخیره در groups.json. گروه حتی بدون پرینتر هم باقی می‌ماند.',
+ {id:'groups',cat:'core',title:'core/groups.py',sub:'custom groups',file:'core/groups.py',
+  desc:'CRUD for custom printer groups with a stable id, saved in groups.json. A group remains even with no printers in it.',
   arch:[540,620,170,64], depCol:2},
- {id:'audit',cat:'core',title:'core/security_audit.py',sub:'لاگ امنیتی',file:'core/security_audit.py',
-  desc:'ثبت و بازیابی رویدادهای امنیتی (ورود موفق/ناموفق، خروج، فعالیت مشکوک) داخل logs.db و تغذیه‌ی داشبورد امنیت.',
+ {id:'audit',cat:'core',title:'core/security_audit.py',sub:'security log',file:'core/security_audit.py',
+  desc:'Records and retrieves security events (successful/failed sign-in, sign-out, suspicious activity) inside logs.db and feeds the security dashboard.',
   arch:[730,620,200,64], depCol:2},
  /* --- data --- */
- {id:'db',cat:'data',title:'core/database.py',sub:'لایه SQLite',file:'core/database.py',
-  desc:'لایه‌ی دیتابیس: جداول لاگ رویدادها، کاربران، کانترها، toner history، reset history و sensor_readings؛ تابع add_event که همه‌ی collectorها با آن رویداد ثبت می‌کنند، و prune خودکار لاگ‌های قدیمی.',
+ {id:'db',cat:'data',title:'core/database.py',sub:'SQLite layer',file:'core/database.py',
+  desc:'Database layer: tables for event logs, users, counters, toner history, reset history and sensor_readings; the add_event function, through which all collectors record events; and automatic pruning of old logs.',
   arch:null, depCol:2},
- {id:'dbfile',cat:'data',title:'logs.db (SQLite)',sub:'لاگ‌ها · کاربران · کانترها',file:'logs.db (runtime)',
-  desc:'فایل دیتابیس SQLite در runtime: رویدادها/لاگ‌ها، کاربران، کانترهای هر پرینتر، تاریخچه‌ی تونر و reset و خوانش‌های سنسور.',
+ {id:'dbfile',cat:'data',title:'logs.db (SQLite)',sub:'logs · users · counters',file:'logs.db (runtime)',
+  desc:'SQLite database file at runtime: events/logs, users, each printer counters, toner and reset history, and sensor readings.',
   arch:[50,760,240,60], depCol:9},
- {id:'prjson',cat:'data',title:'printers.json',sub:'لیست و تنظیمات پرینترها',file:'printers.json (runtime)',
-  desc:'لیست پرینترها و تنظیمات هرکدام (نام، community، گروه...) که store.py می‌خواند و به‌روز می‌کند.',
+ {id:'prjson',cat:'data',title:'printers.json',sub:'printer list and settings',file:'printers.json (runtime)',
+  desc:'The list of printers and the settings of each one (name, community, group...), which store.py reads and updates.',
   arch:[320,760,150,60], depCol:9},
- {id:'grjson',cat:'data',title:'groups.json',sub:'گروه‌های سفارشی',file:'groups.json (runtime)',
-  desc:'فایل گروه‌های سفارشی کاربر (با id پایدار، آیکون و رنگ).',
+ {id:'grjson',cat:'data',title:'groups.json',sub:'custom groups',file:'groups.json (runtime)',
+  desc:'The user custom groups file (with stable id, icon and colour).',
   arch:[490,760,140,60], depCol:9},
- {id:'oidjson',cat:'data',title:'oid_profiles.json',sub:'نتیجه اسکن OIDها',file:'oid_profiles.json (runtime)',
-  desc:'پروفایل OIDهای هر IP؛ خروجی scanner.py برای اعتبارسنجی و سازگاری مدل‌ها.',
+ {id:'oidjson',cat:'data',title:'oid_profiles.json',sub:'OID scan results',file:'oid_profiles.json (runtime)',
+  desc:'The OID profile of each IP; the output of scanner.py, used for validation and model compatibility.',
   arch:[650,760,170,60], depCol:9},
- {id:'ycat',cat:'data',title:'cartridge_yield_catalog.json',sub:'ظرفیت اسمی کارتریج‌ها',file:'cartridge_yield_catalog.json',
-  desc:'کاتالوگ ظرفیت ۳۰+ کارتریج با چهار حالت oem/compatible/refill/local (پیش‌فرض: local) تا به‌جای fallback خام ۲۰۰۰ صفحه، ظرفیت واقع‌بینانه استفاده شود.',
+ {id:'ycat',cat:'data',title:'cartridge_yield_catalog.json',sub:'nominal cartridge capacities',file:'cartridge_yield_catalog.json',
+  desc:'Catalogue of capacities of 30+ cartridges with four modes oem/compatible/refill/local (default: local), so that a realistic capacity is used instead of the raw 2,000-page fallback.',
   arch:[840,760,230,60], depCol:9},
  /* --- ui --- */
- {id:'tpl',cat:'ui',title:'web/templates/*.html',sub:'۹ قالب Jinja2',file:'web/templates/',
-  desc:'قالب‌های Jinja2: base، داشبورد، ورود/ثبت‌نام/ریست رمز، کاربران و امنیت؛ توسط روت‌ها رندر می‌شوند.',
+ {id:'tpl',cat:'ui',title:'web/templates/*.html',sub:'9 Jinja2 templates',file:'web/templates/',
+  desc:'Jinja2 templates: base, dashboard, sign-in/sign-up/password reset, users and security; rendered by the routes.',
   arch:[50,1080,300,60], depCol:8},
- {id:'dashjs',cat:'ui',title:'web/static/js/dashboard.js',sub:'منطق اصلی UI',file:'web/static/js/dashboard.js',
-  desc:'منطق اصلی فرانت‌اند: فراخوانی دوره‌ای /api/printers، رندر کارت‌ها/نمودار/گروه‌ها، مودال‌ها، toner reset، Drag&Drop کارت‌ها و toastها.',
+ {id:'dashjs',cat:'ui',title:'web/static/js/dashboard.js',sub:'main UI logic',file:'web/static/js/dashboard.js',
+  desc:'Main front-end logic: periodic calls to /api/printers, rendering of cards, charts and groups, modals, toner reset, Drag&Drop of cards and toasts.',
   arch:[380,1080,350,60], depCol:8},
- {id:'css',cat:'ui',title:'web/static/css/style.css',sub:'استایل + تم دارک/لایت',file:'web/static/css/style.css',
-  desc:'استایل کامل پروژه، تم دارک/لایت و چیدمان RTL.',
+ {id:'css',cat:'ui',title:'web/static/css/style.css',sub:'style + dark/light theme',file:'web/static/css/style.css',
+  desc:'Complete project style, dark/light theme and RTL layout.',
   arch:[760,1080,190,60], depCol:8},
- {id:'libs',cat:'ui',title:'Sortable + Chart.js + legacy',sub:'کتابخانه‌ها',file:'web/static/js/{Sortable.min,chart.umd.min,legacy-mode}.js',
-  desc:'کتابخانه‌های بومی‌شده: Sortable برای Drag&Drop کارت‌ها، Chart.js برای نمودارها و legacy-mode.js.',
+ {id:'libs',cat:'ui',title:'Sortable + Chart.js + legacy',sub:'libraries',file:'web/static/js/{Sortable.min,chart.umd.min,legacy-mode}.js',
+  desc:'Bundled libraries: Sortable for Drag&Drop of cards, Chart.js for charts and legacy-mode.js.',
   arch:null, depCol:8},
  /* --- tool --- */
- {id:'tests',cat:'tool',title:'tests/ (۵۹ تست)',sub:'pytest — ۷ مجموعه',file:'tests/',
-  desc:'۵۹ تست خودکار pytest: منطق رویداد چاپ، تفکیک A3/A4، شبیه‌سازی End-to-End روی پرینتر مجازی (۱۳ سناریو)، تحمل قطعی لحظه‌ای، تونر سه مدل Canon/HP، گروه‌ها و Yield Engine.',
+ {id:'tests',cat:'tool',title:'tests/ (59 tests)',sub:'pytest — 7 suites',file:'tests/',
+  desc:'59 automated pytest tests: print event logic, A3/A4 breakdown, end-to-end simulation on a virtual printer (13 scenarios), tolerance of momentary outages, toner of three Canon/HP models, groups and the Yield Engine.',
   arch:null, depCol:10},
- {id:'diag',cat:'tool',title:'tools/diagnose_printer.py',sub:'دامپ خام یک پرینتر',file:'tools/diagnose_printer.py',
-  desc:'ابزار عیب‌یابی: دامپ خام SNMP (سیستم/کانترها/supplies) و صفحات وب یک دستگاه در فایل diagnose_<ip>.md تا پشتیبانی مدل‌های جدید دقیق اضافه شود.',
+ {id:'diag',cat:'tool',title:'tools/diagnose_printer.py',sub:'raw dump of one printer',file:'tools/diagnose_printer.py',
+  desc:'Troubleshooting tool: raw SNMP dump (system/counters/supplies) and a device web pages, saved in the file diagnose_<ip>.md, so that support for new models can be added precisely.',
   arch:null, depCol:10}
 ];
 
-/* --- نمای وابستگی: ستون‌های اضافی برای فایل‌های دقیق --- */
-const DEP_EXTRA = []; // (همه در NODES با depCol آمده‌اند)
+/* --- Dependency view: extra columns for the detailed files --- */
+const DEP_EXTRA = []; // (all are in NODES with depCol)
 
 const ZONES = [
- {x:20,y:20,w:1730,h:120, t:'۱ | دستگاه‌ها و سرویس‌های بیرونی'},
- {x:20,y:170,w:1730,h:120,t:'۲ | لایه‌ی شبکه — SNMP (UDP/161) و HTTP'},
- {x:20,y:320,w:1730,h:200,t:'۳ | جمع‌آوری: Poller + Collectorها'},
- {x:20,y:545,w:1730,h:165,t:'۴ | پردازش، وضعیت زنده و هوش (Yield/Audit/Groups)'},
- {x:20,y:730,w:1730,h:115,t:'۵ | ذخیره‌سازی: SQLite و فایل‌های JSON'},
- {x:20,y:870,w:1730,h:130,t:'۶ | لایه‌ی وب — Flask، احراز هویت و APIها'},
- {x:20,y:1020,w:1730,h:140,t:'۷ | رابط کاربری — قالب‌ها، JS و مرورگر'}
+ {x:20,y:20,w:1730,h:120, t:'1 | external devices and services'},
+ {x:20,y:170,w:1730,h:120,t:'2 | network layer — SNMP (UDP/161) and HTTP'},
+ {x:20,y:320,w:1730,h:200,t:'3 | collection: Poller + Collectors'},
+ {x:20,y:545,w:1730,h:165,t:'4 | processing, live status and intelligence (Yield/Audit/Groups)'},
+ {x:20,y:730,w:1730,h:115,t:'5 | storage: SQLite and JSON files'},
+ {x:20,y:870,w:1730,h:130,t:'6 | web layer — Flask, authentication and APIs'},
+ {x:20,y:1020,w:1730,h:140,t:'7 | user interface — templates, JS and browser'}
 ];
 
-/* یال‌های نمای معماری: [from, to, label] — جهت = مسیر حرکت داده */
+/* Architecture view edges: [from, to, label] — direction = data flow */
 const EDGES_ARCH = [
  ['dev_printers','protocol','SNMP GET · UDP/161'],
  ['dev_sensor','protocol','SNMP v1'],
- ['dev_printers','http_scrape','صفحات وب'],
- ['poller','enhanced','مسیر اصلی'],
- ['poller','toshiba','fallback برند'],
- ['poller','sensor','سنسور'],
+ ['dev_printers','http_scrape','web pages'],
+ ['poller','enhanced','main path'],
+ ['poller','toshiba','brand fallback'],
+ ['poller','sensor','sensor'],
  ['enhanced','protocol',''],
  ['toshiba','protocol',''],
  ['sensor','protocol',''],
  ['toshiba','http_scrape',''],
  ['canon','http_scrape',''],
- ['enhanced','cbase','کانتر/تونر'],
+ ['enhanced','cbase','counter/toner'],
  ['toshiba','cbase',''],
- ['cbase','store','state زنده'],
+ ['cbase','store','live state'],
  ['cbase','dbfile','add_event'],
  ['sensor','dbfile','sensor_readings'],
- ['store','prjson','خواندن/نوشتن'],
- ['yield','dbfile','نمونه‌های یادگیری'],
- ['yield','ycat','ظرفیت اسمی'],
+ ['store','prjson','read/write'],
+ ['yield','dbfile','learning samples'],
+ ['yield','ycat','nominal capacity'],
  ['groups','grjson',''],
  ['scanner','oidjson','profile'],
  ['scanner','protocol',''],
  ['scanner','classifier',''],
- ['scanner','oidcat','اعتبارسنجی'],
- ['oid_map','enhanced','OIDها'],
- ['run','poller','شروع loop'],
+ ['scanner','oidcat','validation'],
+ ['oid_map','enhanced','OIDs'],
+ ['run','poller','start loop'],
  ['run','scanner','startup'],
  ['run','dbfile','init_db'],
  ['run','wapp','create_app'],
@@ -486,7 +486,7 @@ const EDGES_ARCH = [
  ['auth','models',''],
  ['auth','utils',''],
  ['utils','svc_smtp',''],
- ['utils','svc_recap','تایید ربات'],
+ ['utils','svc_recap','bot check'],
  ['auth','svc_google',''],
  ['wapp','r_api','blueprint'],
  ['wapp','r_adm','blueprint'],
@@ -503,10 +503,10 @@ const EDGES_ARCH = [
  ['wapp','tpl','render'],
  ['browser','r_api','fetch /api'],
  ['browser','auth','login/forms'],
- ['browser','r_rep','دانلود خروجی']
+ ['browser','r_rep','export download']
 ];
 
-/* یال‌های نمای وابستگی: {a,b,k} — k: imp(عادی) rw(فایل) http render test */
+/* Dependency view edges: {a,b,k} — k: imp (normal) rw (file) http render test */
 const E=(a,b,k,l)=>({a,b,k:k||'imp',l:l||''});
 const EDGES_DEP = [
  /* root */
@@ -569,171 +569,171 @@ const EDGES_DEP = [
  E('diag','protocol','test'),E('diag','dev_printers','http')
 ];
 
-/* ====== نمای جریان داده — ۱۳ مرحله ====== */
+/* ====== Data flow view — 13 steps ====== */
 const FLOW = [
- {n:1, cat:'entry', t:'🚀 راه‌اندازی — run.py',
-  b:'برنامه با python run.py بالا می‌آید: دیتابیس init می‌شود، app فلسک ساخته می‌شود و threadها (poll فوری، حلقه‌ی ۶۰ ثانیه‌ای، اسکن هفتگی، cleanup) استارت می‌خورند.',
+ {n:1, cat:'entry', t:'🚀 Start-up — run.py',
+  b:'The program starts with python run.py: the database is initialised, the Flask app is built, and the threads (immediate poll, 60-second loop, weekly scan, cleanup) start.',
   x:40,  y:40},
- {n:2, cat:'core', t:'🧾 بارگذاری لیست — store.py',
-  b:'store.py فایل printers.json را می‌خواند و لیست PRINTERS را در حافظه نگه می‌دارد؛ PrevStore هم آخرین snapshot هر دستگاه را حفظ می‌کند تا مقایسه‌ی قبلی/فعلی ممکن شود.',
+ {n:2, cat:'core', t:'🧾 Loading the list — store.py',
+  b:'store.py reads the printers.json file and keeps the PRINTERS list in memory; PrevStore also keeps the latest snapshot of each device, so that previous/current comparison is possible.',
   x:460, y:40},
- {n:3, cat:'collect', t:'🔁 حلقه‌ی Polling — poller.py',
-  b:'هر ۶۰ ثانیه (POLL_INTERVAL) روی همه‌ی IPها poll زده می‌شود؛ هر IP قفل جدا دارد تا دو poll هم‌زمان روی یک دستگاه اجرا نشود.',
+ {n:3, cat:'collect', t:'🔁 Polling loop — poller.py',
+  b:'Every 60 seconds (POLL_INTERVAL) all IPs are polled; each IP has its own lock, so two polls do not run at the same time on one device.',
   x:880, y:40},
- {n:4, cat:'collect', t:'🏷️ تشخیص نوع دستگاه',
-  b:'بر اساس OIDها (detect_brand در base.py و device_classifier) مشخص می‌شود دستگاه پرینتر است یا سنسور ECS100G و برندش چیست (Toshiba/HP/Canon/Brother).',
+ {n:4, cat:'collect', t:'🏷️ Device-type detection',
+  b:'Based on OIDs (detect_brand in base.py and device_classifier) it is determined whether the device is a printer or an ECS100G sensor, and what its brand is (Toshiba/HP/Canon/Brother).',
   x:1300,y:40},
  {n:5, cat:'protocol', t:'📡 SNMP GET — protocol.py',
-  b:'درخواست SNMP روی UDP/161 ارسال می‌شود؛ اول v2c و در صورت شکست، خودکار v1. نسخه‌ی هر IP کش می‌شود تا pollهای بعدی سریع باشند.',
+  b:'An SNMP request is sent over UDP/161: v2c first and, if that fails, v1 automatically. Each IP version is cached so that later polls are fast.',
   x:40,  y:230},
- {n:6, cat:'collect', t:'🧰 مسیر اصلی — enhanced_collector.py',
-  b:'Generic MIB-2 + Host Resources + Printer MIB + OIDهای vendor: کانترها، supplies (تونر/دولوپر/درام)، سینی‌ها، مدل و سریال خوانده می‌شود. واحدهای تونر (درصد، کد گسسته‌ی Canon 0/5/7، sentinel -2/-3) هم اینجا نرمال می‌شوند.',
+ {n:6, cat:'collect', t:'🧰 Main path — enhanced_collector.py',
+  b:'Generic MIB-2 + Host Resources + Printer MIB + vendor OIDs: counters, supplies (toner/developer/drum), trays, model and serial are read. Toner units (percentage, Canon discrete code 0/5/7, -2/-3 sentinels) are also normalised here.',
   x:460, y:230},
- {n:7, cat:'collect', t:'🔄 Fallback برند + HTTP scrape',
-  b:'اگر مسیر اصلی ناقص بود: collector اختصاصی برند (toshiba/hp/canon/brother) اجرا می‌شود؛ و اگر SNMP تونر نداشت، رابط وب دستگاه (TopAccess / Remote UI) scrape می‌شود.',
+ {n:7, cat:'collect', t:'🔄 Brand fallback + HTTP scrape',
+  b:'If the main path is incomplete, the brand-specific collector (toshiba/hp/canon/brother) runs; and if SNMP has no toner data, the device web interface (TopAccess / Remote UI) is scraped.',
   x:880, y:230},
- {n:8, cat:'core', t:'⚙️ فیلتر صحت — _counters_event',
-  b:'base.py مقادیر جدید را با PrevStore مقایسه می‌کند: اولین poll فقط مبنا می‌شود؛ ریست (COUNTER_RESET)، افت (COUNTER_DROP)، جهش غیرواقعی (PRINT_OVERFLOW) و ناهنجاری (COUNTER_ANOMALY) شناسایی می‌شوند تا لاگ غلط تولید نشود.',
+ {n:8, cat:'core', t:'⚙️ Accuracy filter — _counters_event',
+  b:'base.py compares new values with PrevStore: the first poll only sets the baseline; a reset (COUNTER_RESET), a drop (COUNTER_DROP), an unrealistic jump (PRINT_OVERFLOW) and an anomaly (COUNTER_ANOMALY) are detected, so that no false log is produced.',
   x:1300,y:230},
- {n:9, cat:'core', t:'📄 تفکیک کاغذ — attribute_paper_size',
-  b:'با چرخه‌ی تطبیق snapshotها، اختلاف کانتر بزرگ (A3/B4) و کوچک (A4/A5) به هر رویداد چاپ نسبت داده می‌شود؛ اگر شمارنده‌ی فرعی عقب مانده باشد، پرچم lag زده می‌شود تا لاگ صادقانه بماند.',
+ {n:9, cat:'core', t:'📄 Paper split — attribute_paper_size',
+  b:'Using the snapshot reconciliation cycle, the counter difference for large (A3/B4) and small (A4/A5) paper is attributed to each print event; if a sub-counter has fallen behind, a lag flag is set so that the log stays honest.',
   x:40,  y:420},
- {n:10, cat:'core', t:'🎨 تونر — yield_engine + کاتالوگ',
-  b:'درصد/وضعیت کارتریج محاسبه و با منابع ظرفیت ترکیب می‌شود: اول auto_learn (یادگیری از resetها)، بعد device_capacity، بعد کاتالوگ cartridge_yield_catalog.json و در آخر مقدار پیش‌فرض.',
+ {n:10, cat:'core', t:'🎨 Toner — yield_engine + catalogue',
+  b:'Cartridge percentage and status are calculated and combined with capacity sources: first auto_learn (learning from resets), then device_capacity, then the cartridge_yield_catalog.json catalogue, and finally the default value.',
   x:460, y:420},
- {n:11, cat:'data', t:'💾 ذخیره‌سازی — store + logs.db',
-  b:'نتیجه‌ی نهایی دو جا می‌رود: حافظه‌ی زنده (store.printer_data برای APIها) و دیتابیس (database.add_event → logs.db) برای تاریخچه و گزارش‌گیری.',
+ {n:11, cat:'data', t:'💾 Storage — store + logs.db',
+  b:'The final result goes to two places: live memory (store.printer_data for the APIs) and the database (database.add_event → logs.db) for history and reporting.',
   x:880, y:420},
- {n:12, cat:'web', t:'🌐 APIها — web/routes/*',
-  b:'روت‌های فلسک (با احراز هویت و محدودیت دفتر/ماژول) داده را از store و logs.db می‌خوانند و JSON برمی‌گردانند: /api/printers، /api/logs/all، /api/stats/daily و ...',
+ {n:12, cat:'web', t:'🌐 APIs — web/routes/*',
+  b:'Flask routes (with authentication and office/module restriction) read data from store and logs.db and return JSON: /api/printers, /api/logs/all, /api/stats/daily and ...',
   x:1300,y:420},
- {n:13, cat:'ui', t:'🖥️ نمایش — dashboard.js',
-  b:'فرانت‌اند هر چند ثانیه /api/printers را fetch می‌کند و کارت‌ها، نمودارها (Chart.js)، گروه‌ها و هشدارها را رندر/به‌روز می‌کند؛ اکشن‌های کاربر (ریست تونر، گروه، خروجی اکسل) هم از همین مسیر به API برمی‌گردد.',
+ {n:13, cat:'ui', t:'🖥️ Display — dashboard.js',
+  b:'The front end fetches /api/printers every few seconds and renders/updates cards, charts (Chart.js), groups and alerts; user actions (toner reset, group, Excel export) also go back to the API through this same path.',
   x:460, y:600}
 ];
 const FLOW_SUB = [
- {cat:'protocol', t:'🌡️ جریان فرعی: سنسور ECS100G', b:'sensor.py در هر سیکل دما/رطوبت را می‌خواند → جدول sensor_readings + رویداد SENSOR_CHANGE (تغییر ≥۱°C یا ≥۵٪).', x:40,  y:600},
- {cat:'collect', t:'🛰️ جریان فرعی: اسکن OID', b:'scanner.py در startup و هر هفته OIDها را اسکن می‌کند → oid_profiles.json + device_classifier (برای سازگاری مدل‌ها).', x:880, y:600},
- {cat:'web', t:'👤 جریان فرعی: اکشن‌های کاربر', b:'افزودن پرینتر، ریست تونر، گروه‌بندی، مدیریت کاربران و خروجی اکسل → routes/* → store/database (با CSRF + rate limit).', x:1300,y:600}
+ {cat:'protocol', t:'🌡️ Sub-flow: ECS100G sensor', b:'sensor.py reads temperature/humidity in each cycle → sensor_readings table + SENSOR_CHANGE event (change of at least 1°C or 5%).', x:40,  y:600},
+ {cat:'collect', t:'🛰️ Sub-flow: OID scan', b:'scanner.py scans the OIDs at startup and weekly → oid_profiles.json + device_classifier (for model compatibility).', x:880, y:600},
+ {cat:'web', t:'👤 Sub-flow: user actions', b:'Adding a printer, toner reset, grouping, user management and Excel export → routes/* → store/database (with CSRF + rate limit).', x:1300,y:600}
 ];
 
 
-/* ====== محتوای سورس هر فایل (توضیح بولتی برای پنل جزئیات) ====== */
+/* ====== Source content of each file (bullet explanations for the details panel) ====== */
 const CODE_CONTENT = {
- run:['خط ۳۰: خواندن پورت از ENV با پیش‌فرض <code>FLASK_PORT=5053</code>',
-  '<code>main()</code> — لاگ‌نویسی، <code>init_db()</code>، ساخت app با <code>create_app()</code>، و شروع ۵ thread: <code>poll-init</code>، <code>polling_loop</code>، <code>weekly_scan_loop</code>، <code>cleanup_loop</code> و <code>clear_terminal_loop</code>؛ در پایان <code>app.run(host="0.0.0.0")</code>',
-  '<code>signal_handler()</code> — خاموش‌شدن تمیز با Ctrl+C (stop_event)', '<code>cleanup_loop()</code> — حذف دوره‌ای لاگ‌های PRINT قدیمی با <code>prune_old_print_logs()</code>'],
- cadmin:['<code>main()</code> — خواندن username/email/رمز از ورودی استاندارد، ساخت کاربر جدید یا ارتقای نقش کاربر موجود به <code>admin</code>؛ از <code>models.User</code> و <code>init_db()</code> استفاده می‌کند'],
- cfg:['بدون تابع — فقط ثابت‌ها و خواندن ENV: <code>PRINTERS_FILE</code>، <code>DB_PATH</code>، <code>OID_PROFILES_FILE</code>، <code>POLL_INTERVAL=60</code>، <code>FLASK_PORT=5053</code>، <code>SNMP_PORT=161</code>',
-  '<code>TONER_ALERT_THRESHOLDS</code>، <code>OFFICE_SUBNETS</code> (قابل override با ENV)، <code>SECRET_KEY</code> و کلیدهای ایمیل/OAuth/reCAPTCHA، و جلوگیری از کلید ناامن پیش‌فرض در production'],
- models:['کلاس <code>User(UserMixin)</code> — فیلدها: id، username، email، role، verified، allowed_offices، allowed_modules',
-  '<code>set_password()</code> با <code>bcrypt.hashpw()</code> و <code>verify_password()</code> با <code>bcrypt.checkpw()</code>؛ خواندن/نوشتن رکورد کاربر با توابع core.database'],
- utils:['<code>make_serializer()</code> و <code>generate/verify_reset_token()</code> — توکن ریست رمز امضاشده (itsdangerous) با انقضای ۱ساعته',
-  '<code>hash_token()</code> — SHA-256 برای ذخیره امن توکن؛ <code>verify_recaptcha()</code> — POST به siteverify گوگل؛ <code>send_email()</code> — SMTP با TLS'],
- db:['<code>db_connection()</code> — کانتکست‌منیجر SQLite با timeout؛ <code>init_db()</code> — ساخت همه‌ی جدول‌ها: logs، users، printer_counters، toner_history، reset_history، sensor_readings، security_events و جدول‌های yield',
-  '<code>add_event()</code> — نقطه‌ی واحد ثبت رویداد (PRINT/STATUS/ALERT/REFILL/SERVICE/SENSOR_CHANGE) با details به‌صورت JSON؛ توابع خواندن لاگ: <code>get_log</code>، <code>get_all_logs</code>، <code>clear_logs</code>، <code>prune_old_print_logs</code>',
-  'مدیریت کامل کاربران: <code>create_user</code>، <code>list_users</code>، <code>update_user_role/verified/access</code>، <code>delete_user</code>؛ helperهای <code>_dump_json_list</code>/<code>_load_json_list</code> برای ستون‌های JSON'],
- poller:['<code>collect()</code> → <code>_collect_inner()</code> — مسیر اصلی: اول <code>collect_enhanced</code>، در صورت نقص fallback به <code>collect_toshiba/hp/canon/brother</code> و برای ECS100G به <code>collect_sensor</code>',
-  '<code>_note_health_failure()</code>/<code>_reset_health_failure()</code> — وضعیت «آفلاین» فقط بعد از ۲ شکست متوالی (grace)؛ <code>_get_ip_lock()</code> — قفل جدا برای هر IP ضد poll هم‌زمان؛ <code>_probe_snmp_agent_reachable()</code> — پروب سریع سلامت',
-  '<code>poll_all()</code> — یک دور روی همه‌ی PRINTERS؛ <code>polling_loop()</code> — حلقه‌ی بی‌نهایت با خواب POLL_INTERVAL و ثبت نتیجه در store'],
- store:['کلاس <code>PrevStore</code> — snapshot قبلی هر دستگاه (کانترها، uptime، سطوح تونر، paper split، پرچم‌های <code>a3_lagged/a4_lagged</code>، زمان آخرین رویداد) با merge امن پیش‌فرض‌ها',
-  '<code>load_printers()</code>/<code>save_printers()</code> — خواندن/نوشتن <code>printers.json</code> با <code>_normalize_printer</code> و <code>_deduplicate_printers</code>؛ دیکشنری‌های سراسری <code>PRINTERS</code>، <code>printer_data</code> و <code>poll_stats</code>'],
- enhanced:['<code>collect_enhanced()</code> — ارکستر: خواندن مدل/سریال/uptime، کانترها، supplies، سینی‌ها و ذخیره در store و db',
-  '<code>walk_supplies_table()</code> — پیمایش Printer MIB و تشخیص واحد هر supply: درصد مستقیم (unit=19)، کد گسسته‌ی Canon (۰/۵/۷)، sentinelهای RFC (‑3=unknown/‑2=نامشخص)؛ <code>try_alternative_oids()</code> — نقشه‌ی HP (NPCL) بدون حساسیت به حروف بزرگ',
-  '<code>walk_input_trays()</code> — سینی‌های کاغذ؛ <code>_read_toshiba_value()</code>/<code>_collect_toshiba_job_data()</code> — کانترهای اختصاصی Toshiba؛ <code>detect_printer_type_from_supplies()</code> و <code>_canon_display_percent()</code> — درصد نمایشی امن برای کانن'],
- yield:['<code>build_cartridge_key()</code> — کلید یکتای «مدل‌پرینتر+نام‌کارتریج+رنگ» برای اشتراک yield؛ <code>ensure_yield_tables()</code> — ساخت جداول state/snapshots/samples/profiles',
-  '<code>_load_yield_catalog()/_catalog_lookup()</code> — خواندن <code>cartridge_yield_catalog.json</code> و انتخاب مقدار بر اساس mode (local=&zwnj;پیش‌فرض | oem | compatible | refill) و ضریب CARTRIDGE_YIELD_FACTOR',
-  '<code>_record_snapshot()/_record_sample()</code> — ذخیره‌ی نمونه‌های یادگیری؛ <code>_compute_usage_counter()</code> — انتخاب کانتر مصرفی هر رنگ؛ یادگیری anchor-based برای مصرف‌های کوچک و گزارش <code>get_yield_status()/write_yield_status_report()</code>'],
- groups:['<code>_slugify()</code> — ساخت id پایدار و امن از نام فارسی/لاتین؛ <code>load_groups()/save_groups()</code> — خواندن/نوشتن <code>groups.json</code>',
-  '<code>create_group()/rename_group()/delete_group()</code> — با اعتبارسنجی نام، انتخاب خودکار آیکون/رنگ و فیلدهای created_at/updated_at'],
- audit:['enumهای <code>Severity</code> (info/warning/critical) و <code>SecurityEvent</code> (login، login_failed، logout، lockout و...)؛ <code>init_security_audit()</code> — ساخت جدول security_events',
-  '<code>log_security_event()</code> — ثبت رویداد با ip کاربر و user-agent؛ <code>count_recent_failed_logins()</code> — مبنای قفل‌کردن/هشدار؛ <code>get_recent_events()</code> با فیلتر؛ <code>cleanup_old_events(90)</code>'],
- classifier:['<code>_walk_supplies()</code> — پیمایش محدود supplies برای تشخیص؛ <code>classify_device_detailed()</code> — تشخیص مستقیم از SNMP',
-  '<code>classify_from_scan()</code> — تصمیم‌گیری نوع دستگاه از روی OIDهای فعال اسکن‌شده (پرینتر/سنسور/برند)'],
- cbase:['ثابت‌های آستانه: <code>MAX_REASONABLE_DELTA</code> (دینامیک نسبت به POLL_INTERVAL)، <code>MAX_TOTAL_AFTER_RESET=5000</code>، <code>MIN_VALID_TOTAL_FOR_FIRST_POLL=50</code>؛ helperهای <code>si()</code>/<code>ss()</code>/<code>_g()</code>',
-  '<code>_counters_event()</code> — قلب تصمیم‌گیری: اولین poll فقط baseline؛ سپس تشخیص چاپ واقعی در برابر <code>COUNTER_RESET</code>/<code>COUNTER_DROP</code>/<code>PRINT_OVERFLOW</code>/<code>COUNTER_ANOMALY</code> و مدیریت <code>PRINT_GAP</code>',
-  '<code>attribute_paper_size()</code> — نسبت‌دادن A3/A4 با چرخه‌ی تطبیق دلتا و پرچم lag؛ <code>get_pages_since_last_reset()/apply_toner_override()</code> — ریست دستی تونر؛ <code>_learn_yield_per_page()</code> — تغذیه‌ی Yield Engine؛ <code>validate_counter_consistency()/detect_brand()</code>'],
- cbenh:['فقط یک خط: <code>from core.enhanced_collector import collect_enhanced</code> — پل سازگاری تا import از مسیر collectors پایدار بماند'],
- toshiba:['<code>NE_LEVEL</code> — نگاشت کدهای وضعیت تونر Toshiba به درصد؛ کش ۵دقیقه‌ای تونر (<code>_TONER_CACHE_TTL</code>)',
-  '<code>_scrape_toshiba_toners()</code> — پارس صفحات TopAccess برای تونر وقتی SNMP نمی‌دهد؛ <code>_walk_toner_remaining()</code> — fallback SNMP',
-  '<code>collect_toshiba()</code> — کانترهای vendor (۲۰۷=کلاس بزرگ A3/B4، ۲۰۸=کلاس کوچک، ۲۰۹/۲۱۰=زیرشمارنده job، ۲۲۷=نامشخص)، رویداد twin و سینی‌ها؛ در پایان <code>_counters_event</code> و <code>attribute_paper_size</code>'],
- hp:['<code>_HP_TONER_COLOR_MAP/_hp_toner_key()</code> — نرمال‌سازی نام کارتریج به رنگ/مدل', '<code>collect_hp()</code> — OIDهای JetDirect/FutureSmart برای کانتر و تونر + ذخیره در store و ثبت رویداد از طریق <code>_counters_event</code>'],
- canon:['<code>_scrape_canon_toners()</code> — تلاش چند مسیر Remote UI ‏(<code>/status.html</code>، <code>/supply.html</code> و...) با regex منعطف برای استخراج درصد تونر',
-  '<code>collect_canon()</code> — کانترها/تونر مدل‌های MF و LBP؛ برای مدل‌هایی مثل LBP233dw که کد گسسته می‌دهند، enhanced مسیر اصلی است و این fallback remains'],
- brother:['<code>_BRO_TONER_COLOR_MAP/_bro_toner_key()</code> — نگاشت نام‌های تونر Brother به رنگ/مدل', '<code>collect_brother()</code> — کانتر/تونر/درام با fallback ذخیره در store و رویداد مشترک'],
- sensor:['<code>SENSOR_BASE_OIDS</code> + <code>_port_oids()</code> — ساخت OID هر پورت (تا ۸ پورت با <code>SENSOR_PORT_COUNT</code>)؛ آستانه‌های warning/critical و دلتای لاگ همه از ENV',
-  '<code>collect_sensor()</code> — خواندن دما/رطوبت، محدوده‌گذاری (min/max)، ثبت در <code>record_sensor_readings</code> و ساخت رویداد <code>SENSOR_CHANGE</code> فقط برای تغییر معنی‌دار (≥۱°C یا ≥۵٪)'],
- protocol:['ساخت بسته BER: <code>encode_oid()</code>، <code>encode_length()</code>، <code>build_snmp_get_v1()</code>، <code>build_snmp_get_v2c()</code>',
-  'پارس پاسخ: <code>parse_snmp_response(_debug)()</code> — با تحمل <code>request_id_mismatch</code> و گزارش خطاها از <code>SNMP_ERROR_NAMES</code>',
-  'کش نسخه: <code>_get/_set/_clear_cached_version()</code> با TTL مثبت ۳۶۰۰ثانیه و منفی ۳۰ثانیه؛ <code>_detect_snmp_version()</code> — پروب دومرحله‌ای؛ <code>snmp_get()/snmp_get_with_fallback()/snmp_get_bulk()</code> — API اصلی'],
- oid_map:['<code>OID_BASE = "1.3.6.1.4.1.1129.2.3.50"</code> (Toshiba)؛ دیکشنری بزرگ <code>OIDS</code> — نگاشت کلید به OID برای کانترها/تونر/وضعیت',
-  '<code>PAPER_SIZE_MAP</code> — کد سینی به اندازه کاغذ؛ <code>TONER_STATUS</code>/<code>TONER_LEVEL</code> — کد وضعیت به برچسب و درصد'],
- scanner:['<code>scan_printer_oids()</code> — خواندن OIDهای کاتالوگ روی یک IP با کش ۲۴ساعته مگر force؛ <code>_load/_save_oid_profiles()</code> — مدیریت <code>oid_profiles.json</code>',
-  '<code>startup_scan_all()</code> — اسکن یک‌باره در بوت؛ <code>weekly_scan_loop()</code> — حلقه‌ی هفتگی (<code>WEEK</code>) برای تازه‌سازی profileها و تغذیه‌ی classifier'],
- catalog:['فقط داده: دیکشنری <code>OID_CATALOG</code> — برای هر OID شناخته‌شده: کلید، دسته (system/counter/supply/tray)، نوع مقدار و توضیح فارسی؛ scanner و validator از آن استفاده می‌کنند'],
- validator:['<code>VALID_NEGATIVE_VALUES = {-1,-2,-3}</code> — مقادیر معتبر خاص RFC 3805', '<code>_validate_oid_value_strict()/validate_oid_value()</code> — بررسی نوع/محدوده‌ی مقادیر هر OID؛ <code>log_validation_error()</code> — ثبت در <code>oid_validation_errors.txt</code>'],
- wapp:['<code>create_app()</code> — ساخت Flask با SECRET_KEY از settings، صدا زدن <code>init_security(app)</code> و <code>init_auth(app)</code>، ثبت ۱۴ blueprint (dashboard تا yield_status) و تنظیم CORS از ENV',
-  'template filterها و context processor برای ASSET_VERSION (cache busting) و دسترسی کاربر'],
- auth:['<code>auth_bp</code> — روت‌های <code>/login</code>، <code>/register</code>، <code>/logout</code>، <code>/forgot-password</code>، <code>/reset-password/&lt;token&gt;</code>، <code>/auth/google[/callback]</code>؛ اولین کاربر خودکار admin و verified می‌شود',
-  '<code>init_auth()</code>/<code>load_user()</code> — اتصال Flask-Login؛ دکوریتورهای <code>admin_required</code> و توابع دسترسی: <code>office_for_ip()</code>، <code>user_allowed_offices()/modules()</code>، <code>user_can_access_office()/module()</code>؛ <code>_is_safe_next_url()</code> — جلوگیری از open redirect؛ ثبت رویداد امنیتی در هر ورود/خطا'],
- wsec:['<code>limiter</code> — Flask-Limiter با محدودیت روی اندپوینت‌های حساس (لاگین/ثبت‌نام)؛ <code>init_security()</code> — فعال‌سازی CSRF (Flask-WTF) و limiter',
-  '<code>_security_headers()</code> — افزودن headerهای امنیتی (X-Frame-Options، nosniff، Referrer-Policy و...) به هر پاسخ'],
- r_api:['<code>printers.py</code>: <code>/api/printers</code>، <code>/api/printer/&lt;ip&gt;</code>، add/bulk-add/remove، <code>/update</code>، <code>/toner_reset</code>، discover/auto-add و debugهای داخلی — همه با محدودیت دفتر',
-  '<code>logs.py</code>: <code>/api/logs/all</code>، <code>/api/printer/&lt;ip&gt;/log</code>، <code>/api/logs/clear</code>، <code>/api/events/manual</code>؛ <code>groups.py</code>: ۴ endpoint روی core/groups؛ <code>system.py</code>: <code>/api/status</code> و <code>/api/poll/now</code>؛ <code>stats.py</code>: آمار روزانه‌ی چاپ و سنسور'],
- r_adm:['<code>users.py</code> — CRUD کاربران فقط برای admin: ایجاد (با لینک reset ایمیلی)، تغییر role، verify، تنظیم dفاتر/ماژول‌ها و حذف',
-  '<code>security.py</code> — صفحه‌ی <code>/security</code> و API رویدادها/آمار از core/security_audit (فقط admin)؛ <code>yield_status.py</code> — وضعیت Yield Engine و تولید گزارش متنی'],
- r_rep:['<code>export_bp.py</code> — <code>/api/export/excel</code>: سه شیت (Printer Status، Job Log، Reset History) با openpyxl؛ <code>/api/export/logs?format=csv|excel</code>',
-  '<code>import_db.py</code> — <code>/api/import/analyze</code> (خواندن جداول فایل آپلودی و پیش‌نمایش) و <code>/api/import/confirm</code> (با <code>_make_backup()</code> خودکار و import با مدیریت تکراری‌ها skip/update)'],
- r_scan:['<code>scan.py</code> — <code>/api/scan/oids</code>، <code>/api/scan/oids/&lt;ip&gt;</code>، <code>/api/scan/all</code>، <code>/api/scan/profiles</code> روی core/oid/scanner',
-  '<code>validation.py</code> — <code>/api/validate/counters</code> و <code>/api/validate/oids/&lt;ip&gt;</code>؛ <code>discover.py</code> — کشف دستگاه‌ها با ThreadPool؛ <code>dashboard.py</code> — رندر صفحه‌ی اصلی'],
- rdash:['یک روت: <code>GET /</code> — رندر <code>dashboard.html</code> و تزریق <code>POLL_INTERVAL</code> تا فرانت‌اند هم‌دوره بماند'],
- rprint:['روت‌های GET: <code>/api/printers</code> (از store) و <code>/api/printer/&lt;ip&gt;</code>؛ POST: add/bulk-add/remove با اعتبارسنجی IP و community',
-  '<code>/update</code> (نام/گروه/آیکون)، <code>/toner_reset</code> (ثبت REFILL و تنظیم override)، <code>/discover</code> و <code>/auto-add</code>؛ اندپوینت‌های <code>/api/debug/*</code> برای توسعه؛ همه با <code>allowed_printer_ips</code> فیلتر می‌شوند'],
- rlogs:['<code>/api/logs/all</code> و <code>/api/printer/&lt;ip&gt;/log</code> — خواندن از <code>get_all_logs/get_log</code> با فیلتر دسترسی دفتر؛ <code>/api/logs/clear</code> و <code>/api/events/manual</code> برای پاک‌سازی و رویداد دستی (SERVICE/REFILL)'],
- rexport:['<code>/api/export/excel</code> — ساخت workbook با openpyxl: شیت <code>Printer Status</code> از store، شیت <code>Job Log</code> و <code>Reset History</code> از db؛ <code>/api/export/logs?format=csv</code> هم موجود است'],
- rdisc:['<code>POST /api/printers/discover</code> — با <code>ThreadPoolExecutor</code> روی رنج IP، با snmp_get کوتاه sysDescr را می‌خواند و دستگاه‌های زنده را برمی‌گرداند'],
- rscan:['روت‌های scan: اجرای <code>scan_printer_oids()</code> روی یک IP یا همه (<code>startup_scan_all</code>) و نمایش profileهای ذخیره‌شده؛ با فیلتر و قفل thread'],
- rstats:['<code>/api/stats/daily</code> — تجمیع رویدادهای PRINT هر روز از logs.db (group by date) برای نمودار؛ <code>/api/stats/sensor/daily</code> — میانگین/min/max روزانه‌ی سنسورها'],
- rsys:['<code>/api/status</code> — وضعیت کلی: تعداد پرینترها/آنلاین، POLL_INTERVAL و نسخه؛ <code>/api/poll/now</code> — استارت thread برای poll فوری همه دستگاه‌ها'],
- rsec:['<code>GET /security</code> — رندر <code>security.html</code> (فقط admin)؛ <code>/api/security/events</code> و <code>/api/security/stats</code> — خواندن از core/security_audit با فیلتر severity/type'],
- rusers:['<code>GET /users</code> — صفحه‌ی مدیریت؛ API: لیست/ساخت کاربر (با تولید رمز تصادفی و ایمیل لینک reset از utils)، تغییر role، verify، تنظیم allowed_offices/modules و حذف — همه <code>admin_required</code>'],
- rvalid:['<code>/api/validate/counters</code> — اجرای <code>validate_counter_consistency()</code> روی state فعلی؛ <code>/api/validate/oids/&lt;ip&gt;</code> — اعتبارسنجی مقادیر profile ذخیره‌شده با oid/validator'],
- rgroups:['۴ روت: <code>GET/POST /api/groups</code>، <code>POST /api/groups/&lt;gid&gt;/rename</code>، <code>DELETE /api/groups/&lt;gid&gt;</code> روی core/groups؛ <code>_clear_group_from_printers()</code> — هنگام حذف گروه، آن را از همه‌ی پرینترها پاک می‌کند'],
- rimport:['<code>_tables/_columns/_table_count/_table_range/_table_printers</code> — خودشناسی ساختاری فایل آپلودی؛ <code>_make_backup()</code> — کپی logs.db قبل از import',
-  '<code>/api/import/analyze</code> — گزارش جداول/رکوردها/بازه‌ی تاریخ؛ <code>/api/import/confirm</code> — اجرای <code>_import_table()</code> با فیلتر IP/تاریخ و مدیریت تکراری skip/update (فقط admin)'],
- ryield:['<code>GET /api/yield/status</code> — خروجی JSON وضعیت یادگیری هر پرینتر/کارتریج از yield_engine؛ <code>POST /api/yield/report</code> — تولید و ذخیره‌ی فایل گزارش متنی (فقط admin)'],
- tpl:['<code>base.html</code> — قالب مادر: متا CSRF، بارگذاری CSS/JS نسخه‌دار (ASSET_VERSION)، نوبار، toast container و بلاک محتوا',
-  'صفحات: <code>dashboard.html</code> (کانتینر کارت‌ها، سایدبار گروه‌ها، مودال‌ها)، <code>login/register/forgot/reset_password/pending_verification.html</code>، <code>users.html</code> و <code>security.html</code>'],
- dashjs:['حلقه‌ی <code>fetch("/api/printers")</code> هر چند ثانیه + رندر مجدد کارت‌ها؛ ساخت کارت پرینتر: وضعیت، کانترها (با tooltip و آکاردئون)، تونر/سینی/هشدار و منوی اکشن',
-  'نمودار مصرف روزانه با Chart.js از <code>/api/stats/daily</code>؛ مدیریت گروه‌ها (ساخت/تغییرنام/حذف از <code>/api/groups</code>)؛ ریست تونر و خروجی اکسل؛ ذخیره‌ی تم و چیدمان کارت‌ها در localStorage با Sortable'],
- css:['متغیرهای CSS تم دارک/لایت بر اساس data-theme؛ استایل کارت پرینتر، badge وضعیت، progress تونر/سینی، جدول لاگ، مودال، toast و فرم‌ها؛ ریسپانسیو و RTL کامل'],
- libs:['<code>Sortable.min.js</code> — Drag&Drop کارت‌ها؛ <code>chart.umd.min.js</code> — نمودارها؛ <code>legacy-mode.js</code> — نمای سازگاری قدیمی'],
- dbfile:['جداول اصلی: <code>logs</code> (رویداد + details JSON)، <code>users</code>، <code>printer_counters</code>، <code>toner_history</code>، <code>reset_history</code>، <code>sensor_readings</code>',
-  'جداول yield: <code>yield_state</code>، <code>yield_snapshots</code>، <code>yield_samples</code>، <code>yield_profiles</code>؛ و <code>security_events</code> برای داشبورد امنیت'],
- prjson:['آرایه‌ای از آبجکت‌ها: <code>{"ip": "...", "name": "...", "community": "public", "group": "g_...", ...}</code> — منبع لیست PRINTERS در store'],
- grjson:['آرایه‌ای از گروه‌های سفارشی: <code>{"id": "g_xxxx", "name": "...", "icon": "🏢", "color": "cyan", "created_at": "...", "updated_at": "..."}</code>'],
- oidjson:['نگاشت <code>ip → profile</code>: مدل تشخیص‌داده‌شده، زمان آخرین اسکن و دیکشنری <code>oids {key: {oid,value,valid}}</code> برای هر دستگاه'],
- ycat:['آرایه‌ای از entryها: <code>brand</code>، <code>model_contains</code>، <code>name_regex</code>، <code>colors</code> و چهار ظرفیت <code>yield_per_page_oem/compatible/refill/local</code> — ۳۴ مدل از جمله HP 87A/X/Y، Canon 071/071H'],
- dev_printers:['کد محلی ندارد — موجودیت شبکه است؛ تعامل از طریق SNMP (UDP/161، community) و برای تونر بعضی مدل‌ها از طریق HTTP روی رابط وب خود دستگاه'],
- dev_sensor:['کد محلی ندارد — ECS100G با SNMP v1 دما/رطوبت را روی OIDهای پورت خودش ارائه می‌کند'],
- svc_google:['سرویس خارجی گوگل؛ پروژه با <code>authlib</code> جریان OAuth را مدیریت می‌کند (web/auth.py → <code>/auth/google</code>)'],
- svc_recap:['سرویس خارجی گوگل؛ utils.py با POST به <code>siteverify</code> توکن فرم را اعتبارسنجی می‌کند'],
- svc_smtp:['سرور ایمیل خارجی (TLS)؛ utils.py تابع <code>send_email()</code> لینک ریست رمز را می‌فرستد'],
- browser:['کد سمت کلاینت: فایل‌های static/js (مخصوصاً dashboard.js) که در مرورگر اجرا شده و با APIهای Flask صحبت می‌کنند'],
- http_scrape:['منطق در کد پروژه: <code>_scrape_toshiba_toners()</code> (toshiba.py) و <code>_scrape_canon_toners()</code> (canon.py) — GET صفحات وضعیت دستگاه و استخراج درصد با regexهایی مثل <code>(toner|cartridge|black)[^0-9%]{0,40}(\d{1,3})%</code>'],
- tests:['<code>test_counters_event.py</code> — سناریوهای چاپ/ریست/ناهنجاری؛ <code>test_paper_size.py</code> — تطبیق A3/A4؛ <code>test_logging_simulation.py</code> — ۱۳ سناریوی End-to-End با پرینتر مجازی',
-  '<code>test_offline_resilience.py</code> — grace cycle؛ <code>test_brand_supplies.py</code> — ۸ تست تونر Canon LBP233dw و HP M527/E52645؛ <code>test_groups.py</code> و <code>test_yield_engine.py</code> — در مجموع ۵۹ تست با pytest'],
- diag:['<code>python tools/diagnose_printer.py &lt;IP&gt; [--community] [--timeout]</code> — خواندن sysDescr/sysObjectID، پیمایش کانترها و supplies با SNMP و دانلود چند صفحه‌ی وب دستگاه',
-  'خروجی: فایل <code>diagnose_&lt;ip&gt;.md</code> با همه‌ی مقادیر خام + تحلیل اولیه برای افزودن پشتیبانی مدل جدید'],
- oidcat:['<code>catalog.py</code> فقط داده‌ی OID_CATALOG را دارد و <code>validator.py</code> توابع <code>validate_oid_value</code> و <code>log_validation_error</code> را']
+ run:['Line 30: reads the port from ENV with default <code>FLASK_PORT=5053</code>',
+  '<code>main()</code> — logging, <code>init_db()</code>, builds the app with <code>create_app()</code>, and starts 5 threads: <code>poll-init</code>, <code>polling_loop</code>, <code>weekly_scan_loop</code>, <code>cleanup_loop</code> and <code>clear_terminal_loop</code>; at the end <code>app.run(host="0.0.0.0")</code>',
+  '<code>signal_handler()</code> — clean shutdown with Ctrl+C (stop_event)', '<code>cleanup_loop()</code> — periodic deletion of old PRINT logs with <code>prune_old_print_logs()</code>'],
+ cadmin:['<code>main()</code> — reads username/email/password from standard input, creates a new user or promotes an existing user to <code>admin</code>; it uses <code>models.User</code> and <code>init_db()</code> '],
+ cfg:['No function — only constants and reading ENV: <code>PRINTERS_FILE</code>, <code>DB_PATH</code>, <code>OID_PROFILES_FILE</code>, <code>POLL_INTERVAL=60</code>, <code>FLASK_PORT=5053</code>, <code>SNMP_PORT=161</code>',
+  '<code>TONER_ALERT_THRESHOLDS</code>, <code>OFFICE_SUBNETS</code> (can be overridden with ENV), <code>SECRET_KEY</code> and the email/OAuth/reCAPTCHA keys, and preventing an insecure default key in production'],
+ models:['class <code>User(UserMixin)</code> — fields: id, username, email, role, verified, allowed_offices, allowed_modules',
+  '<code>set_password()</code> with <code>bcrypt.hashpw()</code> and <code>verify_password()</code> with <code>bcrypt.checkpw()</code>; reading and writing the user record with core.database functions'],
+ utils:['<code>make_serializer()</code> and <code>generate/verify_reset_token()</code> — password-reset token (signed with itsdangerous) with a one-hour expiry',
+  '<code>hash_token()</code> — SHA-256 for secure token storage; <code>verify_recaptcha()</code> — POST to the Google siteverify endpoint; <code>send_email()</code> — SMTP with TLS'],
+ db:['<code>db_connection()</code> — SQLite context manager with timeout; <code>init_db()</code> — creation of all tables: logs, users, printer_counters, toner_history, reset_history, sensor_readings, security_events and the yield tables',
+  '<code>add_event()</code> — the single point for recording an event (PRINT/STATUS/ALERT/REFILL/SERVICE/SENSOR_CHANGE) with details as JSON; log-reading functions: <code>get_log</code>, <code>get_all_logs</code>, <code>clear_logs</code>, <code>prune_old_print_logs</code>',
+  'Full user management: <code>create_user</code>, <code>list_users</code>, <code>update_user_role/verified/access</code>, <code>delete_user</code>; helpers <code>_dump_json_list</code>/<code>_load_json_list</code> for the JSON columns'],
+ poller:['<code>collect()</code> → <code>_collect_inner()</code> — main path: first <code>collect_enhanced</code>, if incomplete, fall back to <code>collect_toshiba/hp/canon/brother</code> and for ECS100G to <code>collect_sensor</code>',
+  '<code>_note_health_failure()</code>/<code>_reset_health_failure()</code> — offline status only after 2 consecutive failures (grace period); <code>_get_ip_lock()</code> — a separate lock for each IP against concurrent polls; <code>_probe_snmp_agent_reachable()</code> — quick health probe',
+  '<code>poll_all()</code> — one pass over all PRINTERS; <code>polling_loop()</code> — infinite loop that sleeps POLL_INTERVAL and records the result in store'],
+ store:['class <code>PrevStore</code> — the previous snapshot of each device (counters, uptime, toner levels, paper split, the a3_lagged/a4_lagged flags, time of the last event), with safe default merging <code>a3_lagged/a4_lagged</code>,',
+  '<code>load_printers()</code>/<code>save_printers()</code> — reading/writing <code>printers.json</code> with <code>_normalize_printer</code> and <code>_deduplicate_printers</code>; global dictionaries <code>PRINTERS</code>, <code>printer_data</code> and <code>poll_stats</code>'],
+ enhanced:['<code>collect_enhanced()</code> — orchestration: reads model/serial/uptime, counters, supplies, trays and saves to store and db',
+  '<code>walk_supplies_table()</code> — walks the Printer MIB and detects the unit of each supply: direct percentage (unit=19), Canon discrete codes (0/5/7), RFC sentinels (-3=unknown/-2=not specified); <code>try_alternative_oids()</code> — HP map (NPCL), case-insensitive',
+  '<code>walk_input_trays()</code> — paper trays; <code>_read_toshiba_value()</code>/<code>_collect_toshiba_job_data()</code> — Toshiba-specific counters; <code>detect_printer_type_from_supplies()</code> and <code>_canon_display_percent()</code> — safe display percentage for Canon'],
+ yield:['<code>build_cartridge_key()</code> — unique key of model + cartridge name + colour, for sharing yield; <code>ensure_yield_tables()</code> — creation of the state/snapshots/samples/profiles tables',
+  '<code>_load_yield_catalog()/_catalog_lookup()</code> — reading <code>cartridge_yield_catalog.json</code> and selecting the value by mode (local=default | oem | compatible | refill) and the CARTRIDGE_YIELD_FACTOR',
+  '<code>_record_snapshot()/_record_sample()</code> — saving learning samples; <code>_compute_usage_counter()</code> — selecting the consumption counter for each colour; anchor-based learning for small consumption and report <code>get_yield_status()/write_yield_status_report()</code>'],
+ groups:['<code>_slugify()</code> — building a stable, safe id from the Persian or Latin name; <code>load_groups()/save_groups()</code> — reading/writing <code>groups.json</code>',
+  '<code>create_group()/rename_group()/delete_group()</code> — with name validation, automatic selection of icon and colour, and the created_at/updated_at fields'],
+ audit:['enums of <code>Severity</code> (info/warning/critical) and <code>SecurityEvent</code> (login, login_failed, logout, lockout, etc.); <code>init_security_audit()</code> — creation of the security_events table',
+  '<code>log_security_event()</code> — records an event with the user IP and user-agent; <code>count_recent_failed_logins()</code> — basis for locking/alerting; <code>get_recent_events()</code> with filter; <code>cleanup_old_events(90)</code>'],
+ classifier:['<code>_walk_supplies()</code> — limited walk of supplies for detection; <code>classify_device_detailed()</code> — direct detection from SNMP',
+  '<code>classify_from_scan()</code> — device-type decision from the active scanned OIDs (printer/sensor/brand)'],
+ cbase:['threshold constants: <code>MAX_REASONABLE_DELTA</code> (dynamic relative to POLL_INTERVAL), <code>MAX_TOTAL_AFTER_RESET=5000</code>, <code>MIN_VALID_TOTAL_FOR_FIRST_POLL=50</code>; helpers <code>si()</code>/<code>ss()</code>/<code>_g()</code>',
+  '<code>_counters_event()</code> — the decision core: the first poll is baseline only; then detection of real print vs <code>COUNTER_RESET</code>/<code>COUNTER_DROP</code>/<code>PRINT_OVERFLOW</code>/<code>COUNTER_ANOMALY</code> and handling of <code>PRINT_GAP</code>',
+  '<code>attribute_paper_size()</code> — attributing A3/A4 with the delta reconciliation cycle and the lag flag; <code>get_pages_since_last_reset()/apply_toner_override()</code> — manual toner reset; <code>_learn_yield_per_page()</code> — feeding the Yield Engine; <code>validate_counter_consistency()/detect_brand()</code>'],
+ cbenh:['Only one line: <code>from core.enhanced_collector import collect_enhanced</code> — compatibility bridge so that imports from the collectors path stay stable'],
+ toshiba:['<code>NE_LEVEL</code> — mapping Toshiba toner status codes to percentages; 5-minute toner cache (<code>_TONER_CACHE_TTL</code>)',
+  '<code>_scrape_toshiba_toners()</code> — parses TopAccess pages for toner when SNMP does not provide it; <code>_walk_toner_remaining()</code> — fallback SNMP',
+  '<code>collect_toshiba()</code> — vendor counters (207 = large class A3/B4, 208 = small class, 209/210 = job sub-counter, 227 = unknown), twin event and trays; at the end <code>_counters_event</code> and <code>attribute_paper_size</code>'],
+ hp:['<code>_HP_TONER_COLOR_MAP/_hp_toner_key()</code> — normalising the cartridge name to colour/model', '<code>collect_hp()</code> — JetDirect/FutureSmart OIDs for counter and toner, plus saving in store and recording the event through <code>_counters_event</code>'],
+ canon:['<code>_scrape_canon_toners()</code> — trying several Remote UI paths (<code>/status.html</code>, <code>/supply.html</code> etc.) with a flexible regex to extract the toner percentage',
+  '<code>collect_canon()</code> — counters/toner of the MF and LBP models; for models such as LBP233dw that return discrete codes, enhanced is the main path and this fallback still exists'],
+ brother:['<code>_BRO_TONER_COLOR_MAP/_bro_toner_key()</code> — mapping Brother toner names to colour/model', '<code>collect_brother()</code> — counter/toner/drum with fallback, saved in store and a shared event'],
+ sensor:['<code>SENSOR_BASE_OIDS</code> + <code>_port_oids()</code> — builds the OID of each port (up to 8 ports with <code>SENSOR_PORT_COUNT</code>); warning/critical thresholds and log deltas all taken from ENV',
+  '<code>collect_sensor()</code> — reads temperature/humidity, range limits (min/max), recording in <code>record_sensor_readings</code> and building the event <code>SENSOR_CHANGE</code> only for significant changes (≥1°C or ≥5%)'],
+ protocol:['BER packet building: <code>encode_oid()</code>, <code>encode_length()</code>, <code>build_snmp_get_v1()</code>, <code>build_snmp_get_v2c()</code>',
+  'response parsing: <code>parse_snmp_response(_debug)()</code> — with tolerance <code>request_id_mismatch</code> and error reporting from <code>SNMP_ERROR_NAMES</code>',
+  'version cache: <code>_get/_set/_clear_cached_version()</code> with positive TTL of 3600 seconds and negative TTL of 30 seconds; <code>_detect_snmp_version()</code> — two-stage probe; <code>snmp_get()/snmp_get_with_fallback()/snmp_get_bulk()</code> — main API'],
+ oid_map:['<code>OID_BASE = "1.3.6.1.4.1.1129.2.3.50"</code> (Toshiba); large dictionary <code>OIDS</code> — mapping key to OID for counters/toner/status',
+  '<code>PAPER_SIZE_MAP</code> — tray code to paper size; <code>TONER_STATUS</code>/<code>TONER_LEVEL</code> — status code to label and percentage'],
+ scanner:['<code>scan_printer_oids()</code> — reads the catalogue OIDs on one IP with a 24-hour cache unless forced; <code>_load/_save_oid_profiles()</code> — management <code>oid_profiles.json</code>',
+  '<code>startup_scan_all()</code> — one-off scan at boot; <code>weekly_scan_loop()</code> — weekly loop (<code>WEEK</code>) to refresh profiles and feed the classifier'],
+ catalog:['data only: dictionary <code>OID_CATALOG</code> — for each known OID: key, category (system/counter/supply/tray), value type and a Persian description; scanner and validator use it'],
+ validator:['<code>VALID_NEGATIVE_VALUES = {-1,-2,-3}</code> — specific valid RFC 3805 values', '<code>_validate_oid_value_strict()/validate_oid_value()</code> — checks the type and range of each OID values; <code>log_validation_error()</code> — recording in <code>oid_validation_errors.txt</code>'],
+ wapp:['<code>create_app()</code> — builds Flask with SECRET_KEY from settings, calls <code>init_security(app)</code> and <code>init_auth(app)</code>, registers 14 blueprints (dashboard through yield_status) and sets CORS from ENV',
+  'template filters and a context processor for ASSET_VERSION (cache busting) and user access'],
+ auth:['<code>auth_bp</code> — routes <code>/login</code>, <code>/register</code>, <code>/logout</code>, <code>/forgot-password</code>, <code>/reset-password/&lt;token&gt;</code>, <code>/auth/google[/callback]</code>; the first user is automatically made admin and verified',
+  '<code>init_auth()</code>/<code>load_user()</code> — Flask-Login connection; decorators <code>admin_required</code> and access functions: <code>office_for_ip()</code>, <code>user_allowed_offices()/modules()</code>, <code>user_can_access_office()/module()</code>; <code>_is_safe_next_url()</code> — prevents open redirect; records a security event on every sign-in or error'],
+ wsec:['<code>limiter</code> — Flask-Limiter with limits on sensitive endpoints (sign-in/sign-up); <code>init_security()</code> — enables CSRF (Flask-WTF) and the limiter',
+  '<code>_security_headers()</code> — adds security headers (X-Frame-Options, nosniff, Referrer-Policy etc.) to each response'],
+ r_api:['<code>printers.py</code>: <code>/api/printers</code>, <code>/api/printer/&lt;ip&gt;</code>, add/bulk-add/remove, <code>/update</code>, <code>/toner_reset</code>, discover/auto-add and internal debug endpoints, all restricted by office',
+  '<code>logs.py</code>: <code>/api/logs/all</code>, <code>/api/printer/&lt;ip&gt;/log</code>, <code>/api/logs/clear</code>, <code>/api/events/manual</code>; <code>groups.py</code>: 4 endpoints on core/groups; <code>system.py</code>: <code>/api/status</code> and <code>/api/poll/now</code>; <code>stats.py</code>: daily print and sensor statistics'],
+ r_adm:['<code>users.py</code> — user CRUD for admin only: create (with an e-mailed reset link), change role, verify, set office/module access and delete',
+  '<code>security.py</code> — the security page <code>/security</code> and events/statistics API from core/security_audit (admin only); <code>yield_status.py</code> — Yield Engine status and text report generation'],
+ r_rep:['<code>export_bp.py</code> — <code>/api/export/excel</code>: three sheets (Printer Status, Job Log, Reset History) with openpyxl; <code>/api/export/logs?format=csv|excel</code>',
+  '<code>import_db.py</code> — <code>/api/import/analyze</code> (reading the tables of the uploaded file and preview) and <code>/api/import/confirm</code> (with <code>_make_backup()</code> automatic backup and import with duplicate handling skip/update)'],
+ r_scan:['<code>scan.py</code> — <code>/api/scan/oids</code>, <code>/api/scan/oids/&lt;ip&gt;</code>, <code>/api/scan/all</code>, <code>/api/scan/profiles</code> on core/oid/scanner',
+  '<code>validation.py</code> — <code>/api/validate/counters</code> and <code>/api/validate/oids/&lt;ip&gt;</code>; <code>discover.py</code> — device discovery with ThreadPool; <code>dashboard.py</code> — rendering the main page'],
+ rdash:['one route: <code>GET /</code> — renders <code>dashboard.html</code> and injection of <code>POLL_INTERVAL</code> so that the front end stays in sync'],
+ rprint:['GET routes: <code>/api/printers</code> (from store) and <code>/api/printer/&lt;ip&gt;</code>; POST: add/bulk-add/remove with IP and community validation',
+  '<code>/update</code> (name/group/icon), <code>/toner_reset</code> (REFILL event recording and override setting), <code>/discover</code> and <code>/auto-add</code>; endpoints <code>/api/debug/*</code> for development; all are filtered by <code>allowed_printer_ips</code> access rules'],
+ rlogs:['<code>/api/logs/all</code> and <code>/api/printer/&lt;ip&gt;/log</code> — reading from <code>get_all_logs/get_log</code> with the office access filter; <code>/api/logs/clear</code> and <code>/api/events/manual</code> for cleanup and manual events (SERVICE/REFILL)'],
+ rexport:['<code>/api/export/excel</code> — building the workbook with openpyxl: sheet <code>Printer Status</code> from store, sheet <code>Job Log</code> and <code>Reset History</code> from db; <code>/api/export/logs?format=csv</code> is also available'],
+ rdisc:['<code>POST /api/printers/discover</code> — with <code>ThreadPoolExecutor</code> over the IP range, reads sysDescr with a short snmp_get and returns the live devices'],
+ rscan:['scan routes: running <code>scan_printer_oids()</code> on one IP or all (<code>startup_scan_all</code>) and displaying saved profiles; with filter and thread lock'],
+ rstats:['<code>/api/stats/daily</code> — aggregating PRINT events per day from logs.db (group by date) for the chart; <code>/api/stats/sensor/daily</code> — daily average/min/max of sensors'],
+ rsys:['<code>/api/status</code> — overall status: number of printers and online devices, POLL_INTERVAL and version; <code>/api/poll/now</code> — starts a thread for an immediate poll of all devices'],
+ rsec:['<code>GET /security</code> — rendering <code>security.html</code> (admin only); <code>/api/security/events</code> and <code>/api/security/stats</code> — reads from core/security_audit with severity/type filter'],
+ rusers:['<code>GET /users</code> — management page; API: list/create user (generating a random password and e-mailing the reset link from utils), change role, verify, set allowed_offices/modules and delete — all <code>admin_required</code>'],
+ rvalid:['<code>/api/validate/counters</code> — running <code>validate_counter_consistency()</code> on the current state; <code>/api/validate/oids/&lt;ip&gt;</code> — validating stored profile values with oid/validator'],
+ rgroups:['4 routes: <code>GET/POST /api/groups</code>, <code>POST /api/groups/&lt;gid&gt;/rename</code>, <code>DELETE /api/groups/&lt;gid&gt;</code> on core/groups; <code>_clear_group_from_printers()</code> — when a group is deleted, it is removed from all printers'],
+ rimport:['<code>_tables/_columns/_table_count/_table_range/_table_printers</code> — structural self-check of the uploaded file; <code>_make_backup()</code> — copy of logs.db before import',
+  '<code>/api/import/analyze</code> — report of tables, records and date range; <code>/api/import/confirm</code> — running <code>_import_table()</code> with IP/date filter and duplicate handling skip/update (admin only)'],
+ ryield:['<code>GET /api/yield/status</code> — JSON output of the learning status of each printer/cartridge from yield_engine; <code>POST /api/yield/report</code> — generating and saving the text report file (admin only)'],
+ tpl:['<code>base.html</code> — master template: CSRF meta, loading of versioned CSS/JS (ASSET_VERSION), noscript, toast container and content block',
+  'pages: <code>dashboard.html</code> (card container, group sidebar, modals), <code>login/register/forgot/reset_password/pending_verification.html</code>, <code>users.html</code> and <code>security.html</code>'],
+ dashjs:['loop of <code>fetch("/api/printers")</code> every few seconds + re-rendering of the cards; building the printer card: status, counters (with tooltip and accordion), toner/tray/alert and action menu',
+  'daily consumption chart with Chart.js from <code>/api/stats/daily</code>; group management (create/rename/delete from <code>/api/groups</code>); toner reset and Excel export; saving the theme and card layout in localStorage with Sortable'],
+ css:['CSS variables for the dark/light theme based on data-theme; printer card style, status badge, toner/tray progress, log table, modal, toast and forms; fully responsive and RTL layout'],
+ libs:['<code>Sortable.min.js</code> — Drag&Drop of cards; <code>chart.umd.min.js</code> — charts; <code>legacy-mode.js</code> — legacy compatibility view'],
+ dbfile:['main tables: <code>logs</code> (event + details JSON), <code>users</code>, <code>printer_counters</code>, <code>toner_history</code>, <code>reset_history</code>, <code>sensor_readings</code>',
+  'yield tables: <code>yield_state</code>, <code>yield_snapshots</code>, <code>yield_samples</code>, <code>yield_profiles</code>; and <code>security_events</code> for the security dashboard'],
+ prjson:['array of objects: <code>{"ip": "...", "name": "...", "community": "public", "group": "g_...", ...}</code> — source of the PRINTERS list in store'],
+ grjson:['array of custom groups: <code>{"id": "g_xxxx", "name": "...", "icon": "🏢", "color": "cyan", "created_at": "...", "updated_at": "..."}</code>'],
+ oidjson:['mapping <code>ip → profile</code>: detected model, last scan time and the dictionary <code>oids {key: {oid,value,valid}}</code> for each device'],
+ ycat:['array of entries: <code>brand</code>, <code>model_contains</code>, <code>name_regex</code>, <code>colors</code> and four capacities <code>yield_per_page_oem/compatible/refill/local</code> — 34 models including HP 87A/X/Y and Canon 071/071H'],
+ dev_printers:['no local code — it is a network entity; interaction via SNMP (UDP/161, community) and, for the toner of some models, via HTTP on the device own web interface'],
+ dev_sensor:['no local code — the ECS100G provides temperature/humidity over SNMP v1 on its own port OIDs'],
+ svc_google:['external Google service; the project handles the OAuth flow with <code>authlib</code> (web/auth.py → <code>/auth/google</code>)'],
+ svc_recap:['external Google service (reCAPTCHA); utils.py sends a POST to <code>siteverify</code> to validate the form token'],
+ svc_smtp:['external email server (TLS); utils.py function <code>send_email()</code> sends the password-reset link'],
+ browser:['client-side code: static/js files (especially dashboard.js) that run in the browser and talk to the Flask APIs'],
+ http_scrape:['logic in project code: <code>_scrape_toshiba_toners()</code> (toshiba.py) and <code>_scrape_canon_toners()</code> (canon.py) — GET of device status pages and extraction of the percentage with regexes such as <code>(toner|cartridge|black)[^0-9%]{0,40}(\d{1,3})%</code>'],
+ tests:['<code>test_counters_event.py</code> — printing/reset/anomaly scenarios; <code>test_paper_size.py</code> — A3/A4 reconciliation; <code>test_logging_simulation.py</code> — 13 end-to-end scenarios with a virtual printer',
+  '<code>test_offline_resilience.py</code> — grace cycle; <code>test_brand_supplies.py</code> — 8 toner tests for Canon LBP233dw and HP M527/E52645; <code>test_groups.py</code> and <code>test_yield_engine.py</code> — 59 tests in total with pytest'],
+ diag:['<code>python tools/diagnose_printer.py &lt;IP&gt; [--community] [--timeout]</code> — reads sysDescr/sysObjectID, walks counters and supplies with SNMP and downloads several device web pages',
+  'output: file <code>diagnose_&lt;ip&gt;.md</code> with all raw values and an initial analysis for adding support for a new model'],
+ oidcat:['<code>catalog.py</code> has only the OID_CATALOG data, and <code>validator.py</code> has the functions <code>validate_oid_value</code> and <code>log_validation_error</code> ']
 };
 
 /* ======================================================================
-   LAYOUT — موقعیت‌یابی نمای وابستگی (pure)
+   LAYOUT — positioning of the dependency view (pure)
    ====================================================================== */
 const DEP_COLS = [
- {t:'ریشه پروژه'}, {t:'config'}, {t:'core'}, {t:'core/collectors'}, {t:'core/snmp'},
- {t:'core/oid'}, {t:'web'}, {t:'web/routes'}, {t:'templates + static'}, {t:'داده / فایل‌ها'}, {t:'بیرون · تست · ابزار'}
+ {t:'project root'}, {t:'config'}, {t:'core'}, {t:'core/collectors'}, {t:'core/snmp'},
+ {t:'core/oid'}, {t:'web'}, {t:'web/routes'}, {t:'templates + static'}, {t:'data / files'}, {t:'external · test · tools'}
 ];
 const DEP_COL_W = 235, DEP_NODE_W = 205, DEP_NODE_H = 36, DEP_GAP = 10, DEP_TOP = 64, DEP_LEFT = 30;
 const DEP_ORDER_EXTRA = {cfg:0, db:0, poller:1, store:2, enhanced:3, yield:4, groups:5, audit:6, classifier:7};
@@ -757,7 +757,7 @@ function depLayout(){
 }
 
 /* ======================================================================
-   XML EXPORT — ساخت mxfile سه‌صفحه‌ای برای draw.io (pure)
+   XML EXPORT — building a three-page mxfile for draw.io (pure)
    ====================================================================== */
 function xesc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function vert(id, value, x,y,w,h, style){
@@ -777,7 +777,7 @@ function buildXml(){
   const zoneStyle='rounded=1;whiteSpace=wrap;html=1;fillColor=#f1f5f9;opacity=40;strokeColor=#94a3b8;dashed=1;fontColor=#334155;fontSize=13;fontStyle=1;verticalAlign=top;spacingTop=6;align=right;spacingRight=12;';
   const eStyle='html=1;rounded=1;edgeStyle=orthogonalEdgeStyle;strokeColor=#64748b;fontSize=10;fontColor=#475569;endArrow=block;endFill=1;jumpStyle=arc;';
   const eDash='html=1;rounded=1;edgeStyle=orthogonalEdgeStyle;dashed=1;dashPattern=4 4;strokeColor=#7c8db0;fontSize=10;fontColor=#475569;endArrow=block;endFill=1;jumpStyle=arc;';
-  /* صفحه ۱: معماری */
+  /* page 1: architecture */
   let cells='';
   ZONES.forEach((z,i)=>{ cells += vert('a_z'+i, z.t, z.x,z.y,z.w,z.h, zoneStyle); });
   NODES.forEach(n=>{ if(!n.arch) return;
@@ -785,8 +785,8 @@ function buildXml(){
     cells += vert('a_'+n.id, lbl, n.arch[0],n.arch[1],n.arch[2],n.arch[3], nodeStyle(n.cat));
   });
   EDGES_ARCH.forEach((e,i)=>{ cells += edge('a_e'+i, e[2]||'', 'a_'+e[0], 'a_'+e[1], eStyle); });
-  const pageArch = '<diagram id="arch" name="معماری لایه‌ها"><mxGraphModel dx="1400" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1780" pageHeight="1200" math="0" shadow="0"><root><mxCell id="0"/><mxCell id="1" parent="0"/>'+cells+'</root></mxGraphModel></diagram>';
-  /* صفحه ۲: جریان داده */
+  const pageArch = '<diagram id="arch" name="layer architecture"><mxGraphModel dx="1400" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1780" pageHeight="1200" math="0" shadow="0"><root><mxCell id="0"/><mxCell id="1" parent="0"/>'+cells+'</root></mxGraphModel></diagram>';
+  /* page 2: data flow */
   cells='';
   const FW=380, FH=110;
   FLOW.forEach(s=>{
@@ -794,14 +794,14 @@ function buildXml(){
   });
   for(let i=0;i<FLOW.length;i++){
     const a=FLOW[i], b=FLOW[i+1]; if(!b) break;
-    /* زنجیره: فقط بین مراحل اصلی ۱..۱۳ و اگر فاصله منطقی است */
+    /* chain: only between main steps 1..13, and only if the gap is logical */
     cells += edge('f_e'+i, '', 'f_'+a.n, 'f_'+b.n, eStyle+';strokeWidth=2;strokeColor=#2563eb;');
   }
   FLOW_SUB.forEach((s,i)=>{
     cells += vert('f_sub'+i, s.t+'<br>'+s.b, s.x+40, s.y, FW, FH, nodeStyle(s.cat)+'align=right;verticalAlign=top;spacing=8;fontSize=11;dashed=1;opacity=90;');
   });
-  const pageFlow = '<diagram id="flow" name="جریان داده (چرخه polling)"><mxGraphModel dx="1400" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1780" pageHeight="760" math="0" shadow="0"><root><mxCell id="0"/><mxCell id="1" parent="0"/>'+cells+'</root></mxGraphModel></diagram>';
-  /* صفحه ۳: وابستگی فایل‌ها */
+  const pageFlow = '<diagram id="flow" name="data flow (polling cycle)"><mxGraphModel dx="1400" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1780" pageHeight="760" math="0" shadow="0"><root><mxCell id="0"/><mxCell id="1" parent="0"/>'+cells+'</root></mxGraphModel></diagram>';
+  /* page 3: file dependencies */
   cells='';
   const colHdrStyle='rounded=0;whiteSpace=wrap;html=1;fillColor=#1e2c44;strokeColor=none;fontColor=#dbe7fa;fontSize=12;fontStyle=1;';
   DEP_COLS.forEach((c,i)=>{
@@ -814,12 +814,12 @@ function buildXml(){
     const st = e.k==='imp' ? eStyle : eDash;
     cells += edge('d_e'+i, e.l||'', 'd_'+e.a, 'd_'+e.b, st);
   });
-  const pageDep = '<diagram id="dep" name="وابستگی فایل‌ها"><mxGraphModel dx="1800" dy="700" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2640" pageHeight="820" math="0" shadow="0"><root><mxCell id="0"/><mxCell id="1" parent="0"/>'+cells+'</root></mxGraphModel></diagram>';
+  const pageDep = '<diagram id="dep" name="file dependencies"><mxGraphModel dx="1800" dy="700" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2640" pageHeight="820" math="0" shadow="0"><root><mxCell id="0"/><mxCell id="1" parent="0"/>'+cells+'</root></mxGraphModel></diagram>';
   return '<?xml version="1.0" encoding="UTF-8"?>\n<mxfile host="app.diagrams.net" agent="Mozilla/5.0" version="24.7.8" type="device">'
        + pageArch + pageFlow + pageDep + '</mxfile>';
 }
 
-/* ذخیره فایل — فقط در مرورگر */
+/* saving the file — only in the browser */
 function downloadXml(){
   const blob = new Blob([buildXml()], {type:'application/xml;charset=utf-8'});
   const a = document.createElement('a');
@@ -830,7 +830,7 @@ function downloadXml(){
 }
 
 /* ======================================================================
-   UI — همه‌ی کدهای DOM (فقط اگر مرورگر موجود است)
+   UI — all DOM code (only if a browser is available)
    ====================================================================== */
 if (typeof document !== 'undefined' && document.getElementById){
 (function(){
@@ -899,11 +899,11 @@ if (typeof document !== 'undefined' && document.getElementById){
   let edgeRefs = [];   /* {g, a, b} */
   let nodeRefs = {};   /* id -> g */
   function render(){
-    /* متن نکته‌ی بالای صفحه */
+    /* text of the note at the top of the page */
     const notes = {
-      arch:'🏗️ مسیر حرکت داده از بالا به پایین: دستگاه‌ها ← شبکه ← جمع‌آوری ← پردازش ← ذخیره ← وب ← مرورگر. روی هر گره کلیک کنید.',
-      flow:'🔄 چرخه‌ی کامل دریافت اطلاعات در ۱۳ مرحله؛ با «▶ پخش» مراحل را دنبال کنید.',
-      dep:'🧩 ۶۰ گره: همه‌ی فایل‌های پروژه + فایل‌های داده + گره‌های بیرونی/تست، گروه‌بندی بر اساس پوشه. A ─▶ B یعنی «A از B استفاده می‌کند». آبی‌چین = HTTP، بنفش نقطه‌چین = فایل، خاکستری چین = تست.'
+      arch:'🏗️ Data-flow path from top to bottom: devices ← network ← collection ← processing ← storage ← web ← browser. Click any node.',
+      flow:'🔄 The complete information-receiving cycle in 13 steps; follow the steps with ▶ Play.',
+      dep:'🧩 60 nodes: all project files + data files + external/test nodes, grouped by folder. A ─▶ B means A uses B. Blue dashed = HTTP, purple dotted = file, grey dashed = test.'
     };
     document.getElementById('viewNote').textContent = notes[VIEW];
     document.getElementById('flowBar').classList.toggle('show', VIEW==='flow');
@@ -912,7 +912,7 @@ if (typeof document !== 'undefined' && document.getElementById){
     const data = currentData();
     const posMap = {}; data.nodes.forEach(o=>posMap[o.n.id]=o.p);
 
-    /* زون‌های معماری */
+    /* architecture zones */
     if (VIEW==='arch'){
       ZONES.forEach(z=>{
         el('rect',{class:'zone', x:z.x,y:z.y,width:z.w,height:z.h,rx:16,fill:'#7ea6ff',opacity:.5},world);
@@ -927,7 +927,7 @@ if (typeof document !== 'undefined' && document.getElementById){
         t.textContent = (i+1)+' | '+c.t;
       });
     }
-    /* سه لایه‌ی جدا: مسیر یال‌ها (زیرین) ← گره‌ها ← برچسب یال‌ها (روی‌ترین) */
+    /* three separate layers: edge paths (bottom) ← nodes ← edge labels (top) */
     const gE = el('g',{},world);
     const gN = el('g',{},world);
     const gL = el('g',{},world);
@@ -947,7 +947,7 @@ if (typeof document !== 'undefined' && document.getElementById){
       }
       edgeRefs.push({g, lab, a:e.a, b:e.b, pth});
     });
-    /* گره‌ها */
+    /* nodes */
     data.nodes.forEach(o=>{
       const n = o.n, p = o.p;
       const g = el('g',{class:'node', 'data-id':n.id, transform:'translate('+p.x+','+p.y+')'},gN);
@@ -985,7 +985,7 @@ if (typeof document !== 'undefined' && document.getElementById){
   function codeHtml(id){
     const arr = CODE_CONTENT[id];
     if (!arr || !arr.length) return '';
-    return '<div class="pSec"><h4>🧬 محتوای سورس:</h4><ul class="pCode">'
+    return '<div class="pSec"><h4>🧬 Source content:</h4><ul class="pCode">'
          + arr.map(x=>'<li>'+x+'</li>').join('') + '</ul></div>';
   }
   function wrapText(text, maxW, size){
@@ -1051,9 +1051,9 @@ if (typeof document !== 'undefined' && document.getElementById){
       + (n.file? '<div class="pFile">📄 '+n.file+'</div>':'')
       + '<div class="pDesc">'+n.desc+'</div>'
       + codeHtml(n.id)
-      + '<div class="pStat"><div><b>'+uses.length+'</b><span>استفاده می‌کند از</span></div><div><b>'+used.length+'</b><span>مصرف‌کننده‌ها</span></div></div>'
-      + (uses.length? '<div class="pSec"><h4>⬅️ استفاده می‌کند از:</h4><div class="pChips">'+uses.map(chipOf).join('')+'</div></div>':'')
-      + (used.length? '<div class="pSec"><h4>➡️ این‌ها از او استفاده می‌کنند:</h4><div class="pChips">'+used.map(chipOf).join('')+'</div></div>':'');
+      + '<div class="pStat"><div><b>'+uses.length+'</b><span>uses (imports)</span></div><div><b>'+used.length+'</b><span>consumers</span></div></div>'
+      + (uses.length? '<div class="pSec"><h4>⬅️ Uses:</h4><div class="pChips">'+uses.map(chipOf).join('')+'</div></div>':'')
+      + (used.length? '<div class="pSec"><h4>➡️ These use it:</h4><div class="pChips">'+used.map(chipOf).join('')+'</div></div>':'');
     p.querySelectorAll('.pChip').forEach(c=>c.addEventListener('click',()=>{
       const t = c.getAttribute('data-goto');
       select(t);
@@ -1107,8 +1107,8 @@ if (typeof document !== 'undefined' && document.getElementById){
     tx=drag.tx+(e.clientX-drag.x); ty=drag.ty+(e.clientY-drag.y); applyT(); });
   window.addEventListener('pointerup',()=>{drag=null;});
   svg.addEventListener('click',()=>{ if(dragged){dragged=false; return;} SEL=null; refreshHL();
-    document.getElementById('panelBody').innerHTML='<div class="pEmpty">👆 روی هر گره کلیک کنید تا<br>توضیح، مسیر فایل و ارتباطاتش را ببینید.</div>';
-    document.getElementById('pHead').textContent='جزئیات';
+    document.getElementById('panelBody').innerHTML='<div class="pEmpty">👆 Click any node to<br>see its description, file path and connections.</div>';
+    document.getElementById('pHead').textContent='Details';
   });
   document.getElementById('zin').onclick=()=>{scale=Math.min(2.6,scale*1.2);applyT();};
   document.getElementById('zout').onclick=()=>{scale=Math.max(.25,scale/1.2);applyT();};
@@ -1172,9 +1172,9 @@ if (typeof document !== 'undefined' && document.getElementById){
   /* ---------- flow player ---------- */
   function syncFlowBar(){
     const total = FLOW.length;
-    document.getElementById('flowStepLbl').textContent = flowIdx<0? 'آماده‌ی پخش (۱۳ مرحله)' : ('مرحله '+flowIdx+' از '+total);
+    document.getElementById('flowStepLbl').textContent = flowIdx<0? 'Ready to play (13 steps)' : ('Step '+flowIdx+' of '+total);
     document.querySelector('#flowProg i').style.width = (flowIdx<0?0:(flowIdx/total*100))+'%';
-    document.getElementById('flowPlay').textContent = playing? '⏸ توقف' : '▶ پخش';
+    document.getElementById('flowPlay').textContent = playing? '⏸ Pause' : '▶ Play';
   }
   function stepFlow(){
     flowIdx = flowIdx+1;
@@ -1199,7 +1199,7 @@ if (typeof document !== 'undefined' && document.getElementById){
   document.getElementById('exportXml').onclick=()=>{
     downloadXml();
     const t=document.getElementById('toast');
-    t.textContent='✅ فایل XML ساخته شد — آن را در draw.io با File → Open باز کنید (۳ صفحه دارد).';
+    t.textContent='✅ XML file created — open it in draw.io with File → Open (it has 3 pages).';
     t.style.display='block'; setTimeout(()=>t.style.display='none', 4200);
   };
   document.getElementById('helpBtn').onclick=()=>document.getElementById('helpModal').classList.add('show');

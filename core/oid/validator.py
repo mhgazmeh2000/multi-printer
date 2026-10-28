@@ -1,19 +1,30 @@
+# =============================================================================
+# @file:         core/oid/validator.py
+# @brief:        Validates OID values and records validation errors to a log file.
+# @details:      Responsibilities: Check OID value shapes and append errors for later review.
+#                Main API: validate_oid_value(), log_validation_error()
+#                Side effects: file I/O
+# @dependencies: internal: config.settings
+# @notes:        None.
+# =============================================================================
+
 """
-اعتبارسنجی مقادیر OID و ثبت خطاها در فایل log
+Validate OID values and record errors in the log file
 """
 
 import logging
 from datetime import datetime
+
 from config.settings import VALIDATION_LOG_FILE
 
 log = logging.getLogger("PrinterMonitor")
 
-# مقادیر منفی معتبر در SNMP
+# Valid negative values in SNMP
 # -1 = other, -2 = unknown, -3 = not supported
-VALID_NEGATIVE_VALUES = {-1, -2, -3}
 
 
 def _validate_oid_value_strict(key: str, value, category: str) -> tuple:
+    """Validate an OID value strictly; returns (ok, message, status code)."""
     if value is None:
         return False, "مقدار None است", "null_value"
 
@@ -26,7 +37,7 @@ def _validate_oid_value_strict(key: str, value, category: str) -> tuple:
     elif category == "supply":
         if not isinstance(value, int):
             return False, f"supply باید int باشد، دریافت: {type(value).__name__}", "type_error"
-        # 🔥 تغییر: پذیرش مقادیر -1, -2, -3 (مقادیر منفی معتبر SNMP)
+        # 🔥 Change: Accept values -1, -2, -3 (valid SNMP negative values)
         if value < -3 or value > 200_000_000:
             return False, f"supply خارج از بازه [-3, 200M]: {value}", "range_error"
 
@@ -51,12 +62,14 @@ def _validate_oid_value_strict(key: str, value, category: str) -> tuple:
 
 
 def validate_oid_value(key: str, value, category: str) -> tuple:
-    """برمی‌گرداند: (valid: bool, reason: str)"""
+    """Returns: (valid: bool, reason: str)"""
     valid, reason, _ = _validate_oid_value_strict(key, value, category)
     return valid, reason
 
 
 def log_validation_error(ip: str, error_type: str, details: str):
+    """Append a validation error line for one printer to the validation log file."""
+
     try:
         timestamp = datetime.now().isoformat()
         with open(VALIDATION_LOG_FILE, "a", encoding="utf-8") as f:

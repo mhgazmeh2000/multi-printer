@@ -1,23 +1,35 @@
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         core/db/schema.py
+# @brief:        Schema inspection helpers for PostgreSQL (table, column and boolean checks).
+# @details:      Responsibilities: Report missing tables and boolean columns so the app can
+#                validate its schema.
+#                Main API: boolean_columns_of(), is_postgres(), schema_columns(),
+#                present_tables(), missing_tables(), verify_postgres_tables()
+#                Side effects: none at import time
+# @dependencies: internal: .connection
+# @notes:        None.
+# =============================================================================
+
 """
-core/db/schema.py — تأیید schema روی PostgreSQL (E.4.5).
+core/db/schema.py — Schema validation on PostgreSQL (E.4.5).
 
-قاعده‌ی E.4.5
+Rule E.4.5
 -------------
-روی **SQLite** هر ماژول جدول‌های خودش را با ``CREATE TABLE IF NOT EXISTS`` می‌سازد
-(شکل تاریخی پروژه و لازم است، چون فایل دیتابیس می‌تواند از نسخه‌ی قدیمی بیاید).
+On **SQLite** each module creates its own tables with ``CREATE TABLE IF NOT EXISTS''
+(The historical form of the project is necessary, because the database file can come from an old version).
 
-روی **PostgreSQL** این کار ممنوع است: ``Alembic`` تنها منبع DDL است
-(``alembic/versions/``). نگه‌داشتن دو نسخه از یک DDL (یکی در Python، یکی در
-migration) دیر یا زود واگرا می‌شود و دلیل اصلی شکست‌ها را از چشم می‌اندازد؛
-``INTEGER PRIMARY KEY AUTOINCREMENT`` هم اصلاً نحو PostgreSQL نیست.
+This is forbidden on **PostgreSQL**: ``Alembic'' is the only source of DDL
+(``alembic/versions/``). Keeping two copies of the same DDL (one in Python, one in
+migration sooner or later diverges and overlooks the main reason for failures;
+``INTEGER PRIMARY KEY AUTOINCREMENT'' is not PostgreSQL syntax at all.
 
-پس مسیر PG توابع bootstrap فقط **تأیید** می‌کنند: اگر جدولی که باید باشد نباشد،
-خطای روشن با راه‌حل می‌دهند (شکست بی‌صدا ممنوع — همان درسی که
-``init_security_audit`` می‌داد: خطا فقط log می‌شد و برنامه جلو می‌رفت).
+So the PG path bootstrap functions only **verify**: if the table is not what it should be,
+They give a clear error with a solution (silent failure is prohibited - the same lesson as
+``init_security_audit'' gave: the error was only logged and the program continued).
 
-نکته: این ماژول به ``connection`` وابسته است، نه به ``core/db/__init__`` — تا
-import چرخه‌ای نسازد.
+Note: This module depends on ``connection'', not ``core/db/__init__'' — so
+Import does not create a cycle.
 """
 
 from __future__ import annotations
@@ -26,8 +38,8 @@ from typing import Iterable, Sequence
 
 from .connection import BACKEND_POSTGRESQL, quote_ident, resolve_backend
 
-#: جدول‌هایی که migration ``0001`` می‌سازد (۱۱ مورد). روی PG این‌ها باید موجود
-#: باشند؛ روی SQLite فقط مبنای مقایسه‌اند (تست‌ها).
+#: Tables that make migration ``0001'' (11 items). These should be available on PG
+#: to be; On SQLite, they are only based on comparison (tests).
 APP_TABLES = (
     "logs",
     "printer_counters",
@@ -42,7 +54,7 @@ APP_TABLES = (
     "meta",
 )
 
-#: جدول‌هایی که ``core.yield_engine.ensure_yield_tables`` روی SQLite می‌سازد.
+#: Tables that ``core.yield_engine.ensure_yield_tables'' builds on SQLite.
 YIELD_TABLES = (
     "cartridge_state",
     "yield_samples",
@@ -50,14 +62,14 @@ YIELD_TABLES = (
     "cartridge_yield_profiles",
 )
 
-#: جدول‌هایی که ``core.security_audit.init_security_audit`` روی SQLite می‌سازد.
+#: Tables that ``core.security_audit.init_security_audit'' builds on SQLite.
 SECURITY_TABLES = ("security_events",)
 
-#: ستون‌هایی که روی PostgreSQL نوع ``BOOLEAN`` دارند (migration ``0002``).
-#: روی SQLite نوع BOOLEAN وجود ندارد و ``0/1`` شکل کانونیک است، پس این فهرست
-#: **فقط** برای درج مقادیر از یک فایل SQLite به PostgreSQL معنا دارد
-#: (مصرف‌کننده‌ی امروز: ``web/routes/import_db.py`` در E.4.8).
-#: هم‌خوانی این فهرست با migration در تست قفل شده است.
+#: Columns that have type ``BOOLEAN'' on PostgreSQL (migration ``0002'').
+#: There is no BOOLEAN type on SQLite, and ``0/1'' is the canonical form, so this list
+#: **Only** means to insert values from a SQLite file into PostgreSQL
+#: (today's user: ``web/routes/import_db.py'' in E.4.8).
+#: Matching this list with migration is locked in the test.
 BOOLEAN_COLUMNS = (
     ("users", "is_verified"),
     ("users", "email_verified"),
@@ -68,35 +80,35 @@ BOOLEAN_COLUMNS = (
 
 
 def boolean_columns_of(table: str) -> tuple:
-    """نام ستون‌های بولی یک جدول (زیرمجموعه‌ی ``BOOLEAN_COLUMNS``)."""
+    """Boolean column names of a table (subset of ``BOOLEAN_COLUMNS'')."""
     return tuple(col for tbl, col in BOOLEAN_COLUMNS if tbl == table)
 
 
-#: جدولی که خودِ Alembic می‌سازد (نشانه‌ی اجرای migration).
+#: The table that Alembic itself creates (indicator of running migration).
 ALEMBIC_TABLE = "alembic_version"
 
 
 def is_postgres() -> bool:
-    """آیا backend فعال ``postgresql`` است؟ (بدون نیاز به اتصال، از ``DB_BACKEND``)"""
+    """Is the backend ``postgresql'' enabled? (no need to connect, from ``DB_BACKEND'')"""
     return resolve_backend() == BACKEND_POSTGRESQL
 
 
 def schema_columns(conn, table: str) -> list:
     """
-    نام ستون‌های یک جدول، مستقل از backend.
+    The names of the columns of a table, independent of the backend.
 
-    چرا لازم است: ``PRAGMA table_info`` فقط نحو SQLite است و روی PostgreSQL با
-    ``syntax error at or near "PRAGMA"`` می‌شکند (سنجیده‌شده، E.4.8). هر کدی که
-    فهرست ستون‌ها را برای ساختن یک جمله‌ی SQL لازم دارد باید از این‌جا بگیرد.
+    Why it's needed: ``PRAGMA table_info'' is just SQLite syntax, and on PostgreSQL with
+    ``syntax error at or near "PRAGMA"'' breaks (measured, E.4.8). Any code that
+    The list of columns needed to make a SQL statement should be taken from here.
 
     Args:
-        conn: اتصال adapter (روی هر دو backend).
-        table: نام جدول.
+        conn: adapter connection (on both backends).
+        table: name of the table.
 
     Returns:
-        فهرست نام ستون‌ها **به ترتیب اعلام** در جدول؛ جدول ناموجود ⇒ ``[]``
-        (روی هر دو backend یکسان: نه PRAGMA و نه ``information_schema`` برای
-        جدول ناموجود خطا نمی‌دهند).
+        List of column names **in order of announcement** in the table; Missing table ⇒ ``[]''
+        (same on both backends: neither PRAGMA nor ``information_schema'' for
+        The non-existent table does not give an error).
     """
     if conn.backend == BACKEND_POSTGRESQL:
         rows = conn.execute(
@@ -111,7 +123,7 @@ def schema_columns(conn, table: str) -> list:
 
 
 def present_tables(conn) -> set:
-    """نام جدول‌های پایه در schema جاری (روی هر دو backend؛ روی SQLite از sqlite_master)."""
+    """The names of the base tables in the current schema (on both backends; on SQLite from sqlite_master)."""
     if conn.backend == BACKEND_POSTGRESQL:
         rows = conn.execute(
             "SELECT table_name FROM information_schema.tables "
@@ -125,22 +137,22 @@ def present_tables(conn) -> set:
 
 
 def missing_tables(conn, tables: Sequence[str]) -> list:
-    """زیرمجموعه‌ی ``tables`` که در دیتابیس موجود نیست."""
+    """Subcategory of ``tables'' which is not available in the database."""
     present = present_tables(conn)
     return [t for t in tables if t not in present]
 
 
 def verify_postgres_tables(conn, tables: Iterable[str], *, context: str) -> None:
     """
-    تأیید حضور جدول‌ها روی PostgreSQL (Alembic تنها منبع DDL است).
+    Verifying the presence of tables on PostgreSQL (Alembic is the only source of DDL).
 
     Args:
-        conn: اتصال adapter (باید backend آن ``postgresql`` باشد).
-        tables: جدول‌هایی که باید موجود باشند.
-        context: نام فراخوان، برای پیام خطای روشن.
+        conn: adapter connection (its backend must be ``postgresql'').
+        tables: the tables that must exist.
+        context: the name of the callback, for clear error messages.
 
     Raises:
-        RuntimeError: اگر جدولی نباشد — با فهرست دقیق و راه‌حل (``alembic upgrade head``).
+        RuntimeError: if no table — with detailed list and solution (``alembic upgrade head'').
     """
     missing = missing_tables(conn, sorted(set(tables)))
     if missing:

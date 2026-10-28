@@ -1,24 +1,34 @@
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tests/golden_profiles.py
+# @brief:        Virtual-machine profiles used by the enhanced-collector golden scenarios.
+# @details:      Responsibilities: Describe simulated printers and their OID responses.
+#                Main API: none (no public functions or classes)
+#                Side effects: none at import time
+# @dependencies: internal: tests.fake_snmp
+# @notes:        None.
+# =============================================================================
+
 """
-پروفایل دستگاه‌های مجازی برای سناریوهای ``collect_enhanced`` (کار ۱ فاز C).
+Profile of virtual machines for ``collect_enhanced'' scenarios (task 1 phase C).
 
-هر پروفایل یک دیکشنری ``{oid: value}`` است که توسط ``FakeSnmpTransport`` سرو
-می‌شود؛ OIDهای غایب ⇒ ``None`` (یعنی «دستگاه پاسخ نداد») — دقیقاً مثل واقعیت.
-مقادیر عددی از مستندات RFC 3805 (Printer-MIB)، فایل ``core/snmp/oid_map.py``
-(شمارنده‌ها/تونر Toshiba) و رفتار واقعی collectorها انتخاب شده‌اند.
+Each profile is a ``{oid: value}'' dictionary served by ``FakeSnmpTransport''
+becomes; Missing OIDs ⇒ ``None'' (i.e. "device did not respond") — just like reality.
+Numerical values from RFC 3805 (Printer-MIB) documentation, file ``core/snmp/oid_map.py''
+(Toshiba counters/toner) and the actual behavior of the collectors are selected.
 
-سناریوها:
-  1) ``hp_color_full``               — HP رنگی، هر چهار تونر سالم
-  2) ``hp_color_empty``              — HP رنگی، هر چهار تونر خالی
-  3) ``brother_unknown_toner``       — Brother، ظرفیت/سطح نامعلوم (۳-)
-  4) ``toshiba_offline_then_online`` — Toshiba: فاز ۱ آفلاین، فاز ۲ آنلاین
-  5) ``ecs100g_sensor``              — سنسور دما/رطوبت ECS100G (SNMP v1)
+Scenarios:
+  1) ``hp_color_full'' — HP color, all four toners intact
+  2) ``hp_color_empty'' — Color HP, all four toners empty
+  3) ``brother_unknown_toner'' — Brother, unknown capacity/level (-3)
+  4) ``toshiba_offline_then_online'' — Toshiba: phase 1 offline, phase 2 online
+  5) ``ecs100g_sensor'' — ECS100G temperature/humidity sensor (SNMP v1)
 """
 from __future__ import annotations
 
 import copy
 
-# ─── OIDهای مشترک ───────────────────────────────────────────────────────────
+# Common OIDs
 SYS_DESCR = "1.3.6.1.2.1.1.1.0"
 SYS_OBJECT_ID = "1.3.6.1.2.1.1.2.0"
 SYS_UPTIME = "1.3.6.1.2.1.1.3.0"
@@ -51,9 +61,10 @@ TOSHIBA_HTML = """
 """
 
 
-# ─── سازنده‌ی پروفایل HP ───────────────────────────────────────────────────
+# HP Profile Builder
 def _hp_oids(levels: dict, total: int = 84_210, color: int = 21_480,
              mono: int = 62_730, uptime: int = 1_241_567) -> dict:
+    """Helper: hp oids."""
     oids = {
         SYS_DESCR: "HP Color LaserJet MFP M577",
         SYS_OBJECT_ID: "1.3.6.1.4.1.11.2.3.9.1.1.1",
@@ -62,7 +73,7 @@ def _hp_oids(levels: dict, total: int = 84_210, color: int = 21_480,
         SYS_LOCATION: "Print Room",
         HR_DEVICE_DESCR: "HP Color LaserJet MFP M577",
         PRT_MODEL: "HP Color LaserJet MFP M577",
-        PRT_SERIAL: "CNMOCK0001",  # E.0.7: سریال واقعی‌نما با mock جایگزین شد
+        PRT_SERIAL: "CNMOCK0001",  # E.0.7: Replaced real view serial with mock
         PRT_TOTAL: total,
         PRT_COLOR: color,
         PRT_MONO: mono,
@@ -81,8 +92,9 @@ def _hp_oids(levels: dict, total: int = 84_210, color: int = 21_480,
     return oids
 
 
-# ─── سازنده‌ی پروفایل Brother ──────────────────────────────────────────────
+# ─── Brother profile builder
 def _brother_oids() -> dict:
+    """Helper: brother oids."""
     return {
         SYS_DESCR: "Brother HL-L2350DW series",
         SYS_OBJECT_ID: "1.3.6.1.4.1.2435.2.3.9.1",
@@ -94,7 +106,7 @@ def _brother_oids() -> dict:
         "1.3.6.1.4.1.2435.2.4.3.1240.6.5.0": "1.44",
         PRT_TOTAL: 25_431,
         "1.3.6.1.4.1.2435.2.3.9.4.2.1.5.5.1.1": 25_431,
-        # کارتریج با ظرفیت/سطح نامعلوم (۳-) — سناریوی اصلی این تست
+        # Cartridge with unknown capacity/level (-3) — the main scenario of this test
         f"{SUP}.5.1.1": 3,
         f"{SUP}.6.1.1": "Black Toner Cartridge TN-2430",
         f"{SUP}.7.1.1": 0,      # unit unknown
@@ -107,8 +119,9 @@ def _brother_oids() -> dict:
     }
 
 
-# ─── سازنده‌ی پروفایل Toshiba (کلیدهای oid_map) ────────────────────────────
+# Toshiba profile builder (oid_map keys)
 def _toshiba_oids() -> dict:
+    """Helper: toshiba oids."""
     base = "1.3.6.1.4.1.1129.2.3.50"
     oids = {
         SYS_DESCR: "TOSHIBA e-STUDIO3515AC",
@@ -121,7 +134,7 @@ def _toshiba_oids() -> dict:
         f"{base}.1.2.4.1.8.1.1": "CBA1234567",
         f"{base}.1.2.3.1.4.1.1": "T300SY0.1234",
         f"{base}.1.2.3.1.11.1.1": 900_000,
-        # شمارنده‌ها (a3_total + a4_total == print_total)
+        # counters (a3_total + a4_total == print_total)
         f"{base}.1.3.21.6.1.2.1.4": 152_300,
         f"{base}.1.3.21.6.1.2.1.1": 41_200,
         f"{base}.1.3.21.6.1.2.1.3": 111_100,
@@ -134,7 +147,7 @@ def _toshiba_oids() -> dict:
         f"{base}.1.3.21.6.1.208.1.3": 101_200,
         f"{base}.1.3.21.6.1.209.1.4": 45_000,
         f"{base}.1.3.21.6.1.210.1.4": 95_300,
-        # تونر (کد وضعیت NE) + usage
+        # Toner (NE status code) + usage
         f"{base}.1.3.21.8.1.5.1.1": 3,      # magenta ok
         f"{base}.1.3.21.8.1.5.1.2": 3,      # cyan ok
         f"{base}.1.3.21.8.1.5.1.3": 4,      # yellow ok
@@ -143,13 +156,13 @@ def _toshiba_oids() -> dict:
         f"{base}.1.3.21.8.1.2.1.2": 1_500_000_000,
         f"{base}.1.3.21.8.1.2.1.3": 2_100_000_000,
         f"{base}.1.3.21.8.1.2.1.4": 8_400_000_000,
-        # نام کارتریج‌ها از Printer-MIB استاندارد (black=1, cyan=2, magenta=3, yellow=4)
+        # The names of the cartridges from the standard Printer-MIB (black=1, cyan=2, magenta=3, yellow=4)
         f"{SUP}.6.1.1": "Black Toner T-FC415K",
         f"{SUP}.6.1.2": "Cyan Toner T-FC415C",
         f"{SUP}.6.1.3": "Magenta Toner T-FC415M",
         f"{SUP}.6.1.4": "Yellow Toner T-FC415Y",
     }
-    # سینی‌ها: level کد است (0=خالی، <=25 low، <=75 medium، >75 ok)
+    # Trays: level is the code (0=empty, <=25 low, <=75 medium, >75 ok)
     for num, (lvl, size) in {1: (95, 3), 2: (60, 3), 3: (10, 37), 6: (0, 3)}.items():
         oids[f"{base}.1.3.5.1.1.5.1.{num}"] = lvl
         oids[f"{base}.1.3.5.1.1.4.1.{num}"] = size
@@ -157,8 +170,9 @@ def _toshiba_oids() -> dict:
     return oids
 
 
-# ─── سازنده‌ی پروفایل ECS100G ───────────────────────────────────────────────
+# ECS100G profile builder
 def _sensor_oids() -> dict:
+    """Helper: sensor oids."""
     return {
         "1.3.6.1.4.1.47206.1.0": "ECS100G",
         "1.3.6.1.4.1.47206.2.0": "ECS-2201-0417",
@@ -174,7 +188,7 @@ def _sensor_oids() -> dict:
     }
 
 
-# ─── سناریوها ──────────────────────────────────────────────────────────────
+# - Scenarios - Scenarios
 IP_HP_FULL = "192.0.2.11"
 IP_HP_EMPTY = "192.0.2.12"
 IP_BROTHER = "192.0.2.13"
@@ -183,6 +197,7 @@ IP_SENSOR = "192.0.2.15"
 
 
 def hp_color_full():
+    """Helper: hp color full."""
     return {
         "name": "enhanced_01_hp_color_toner_full",
         "desc": "HP Color LaserJet MFP M577 — چهار تونر سالم (۷۸/۵۸/۴۴/۲۹٪)، ۳ سینی",
@@ -196,6 +211,7 @@ def hp_color_full():
 
 
 def hp_color_empty():
+    """Helper: hp color empty."""
     return {
         "name": "enhanced_02_hp_color_toner_empty",
         "desc": "HP Color LaserJet MFP M577 — هر چهار تونر خالی (۰٪)",
@@ -210,6 +226,7 @@ def hp_color_empty():
 
 
 def brother_unknown_toner():
+    """Helper: brother unknown toner."""
     return {
         "name": "enhanced_03_brother_toner_unknown",
         "desc": "Brother HL-L2350DW — ظرفیت و سطح تونر نامعلوم (max=-3, level=-3)",
@@ -222,6 +239,7 @@ def brother_unknown_toner():
 
 
 def toshiba_offline_then_online():
+    """Helper: toshiba offline then online."""
     online_oids = _toshiba_oids()
     return {
         "name": "enhanced_04_toshiba_offline_then_online",
@@ -238,6 +256,7 @@ def toshiba_offline_then_online():
 
 
 def ecs100g_sensor():
+    """Helper: ecs 100 g sensor."""
     return {
         "name": "enhanced_05_ecs100g_sensor",
         "desc": "سنسور ECS100G — پورت ۱ و ۲: دما ۲۴٫۵/۲۶٫۸ و رطوبت ۵۵٫۳/۴۷٫۱",
@@ -249,9 +268,9 @@ def ecs100g_sensor():
     }
 
 
-# ─── ساخت transport از سناریو یا fixture ───────────────────────────────────
+# Creating transport from scenario or fixture
 def build_transport(obj):
-    """``obj`` می‌تواند سناریو (کلید ``phases``) یا fixture (``input.phases``) باشد."""
+    """``obj'' can be a scenario (key ``phases'') or a fixture (``input.phases'')."""
     from tests.fake_snmp import FakeSnmpTransport
 
     phases = obj.get("phases") or obj["input"]["phases"]

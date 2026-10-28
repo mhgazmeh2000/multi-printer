@@ -1,26 +1,37 @@
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         core/db/upsert.py
+# @brief:        Backend-independent 'insert or replace' SQL builder.
+# @details:      Responsibilities: Produce the upsert statement for SQLite and PostgreSQL from one
+#                definition.
+#                Main API: upsert_sql()
+#                Side effects: none at import time
+# @dependencies: internal: .connection
+# @notes:        None.
+# =============================================================================
+
 """
-core.db.upsert — جملهٔ «درج یا جایگزینی» مستقل از backend (فاز E.5).
+core.db.upsert — backend-independent "insert or replace" statement (phase E.5).
 
-چرا این هِلپر لازم شد
+Why was this helper necessary?
 ---------------------
-``INSERT OR REPLACE`` **نحو SQLite** است. روی PostgreSQL می‌شکند:
-``syntax error at or near "OR"`` (SQLSTATE 42601 — سنجیده در آغاز E.5،
-۲۰ شکست فقط از همین یک الگو). جایگزین PostgreSQL عبارت
-``INSERT … ON CONFLICT (کلید) DO UPDATE SET`` است.
+``INSERT OR REPLACE'' is the SQLite syntax. On PostgreSQL it breaks:
+``syntax error at or near "OR"'' (SQLSTATE 42601 — measured at the beginning of E.5,
+20 failures from just this one pattern). Replace the PostgreSQL statement
+``INSERT... ON CONFLICT (key) DO UPDATE SET''.
 
-معنای دو عبارت **وقتی همهٔ ستون‌ها نوشته می‌شوند** یکسان است:
-  • SQLite: ردیف کهنه حذف و ردیف تازه درج می‌شود ⇒ ستونِ نوشته‌نشده به
-    پیش‌فرض برمی‌گردد؛
-  • PG: ردیف درجا به‌روزرسانی می‌شود ⇒ ستونِ نوشته‌نشده **ارزش قبلی** را نگه
-    می‌دارد.
-پس این هِلپر عمداً فقط برای جمله‌هایی ساخته شده که **همهٔ ستون‌های جدول** را
-می‌نویسند (`docs/insert-or-replace-inventory.md` §۳.۱ — همان سه محلی که در E.5
-منتقل شدند). برای جمله‌های با ستون ناقص، ترجمه بی‌دقت یعنی تغییر معنای داده
-(بخش ۳.۲ همان سند، کد مرده، آگاهانه دست‌نخورده).
+The meaning of the two expressions **when all columns are written** is the same:
+  • SQLite: the old row is deleted and the new row is inserted ⇒ column not written to
+    Default returns;
+  • PG: row is updated in-place ⇒ unwritten column keep **previous value**
+    takes
+So this helper is intentionally made only for sentences that **all the columns of the table**
+They write (`docs/insert-or-replace-inventory.md` §3.1 — the same three places as in E.5
+were transferred). For sentences with incomplete columns, careless translation means changing the meaning of the data
+(Section 3.2 of the same document, dead code, consciously untouched).
 
-قاعده‌ی E.5: کد برنامه (``core/`` و ``web/``) هیچ ``INSERT OR REPLACE`` دستی
-نمی‌نویسد؛ از این هِلپر استفاده می‌کند (قفل: ``tests/test_upsert_cross_backend.py``).
+Rule E.5: Program code (``core/'' and ``web/'') No manual ``INSERT OR REPLACE''
+does not write; It uses this helper (lock: ``tests/test_upsert_cross_backend.py'').
 """
 
 from __future__ import annotations
@@ -29,11 +40,12 @@ from typing import Iterable, Optional, Sequence
 
 from .connection import BACKEND_POSTGRESQL, quote_ident, resolve_backend
 
-#: جای‌نمای ستونِ درج‌شده در بند ``DO UPDATE SET`` پستگرس.
+#: Place the column view inserted in ``DO UPDATE SET'' clause of Postgres.
 _EXCLUDED = "EXCLUDED"
 
 
 def _ident_list(names: Iterable[str]) -> str:
+    """Quote a list of identifiers and join them with commas."""
     return ", ".join(quote_ident(n) for n in names)
 
 
@@ -46,25 +58,25 @@ def upsert_sql(
     backend: Optional[str] = None,
 ) -> str:
     """
-    جملهٔ «درج یا جایگزینی» را برای backend فعال می‌سازد.
+    Enables the "insert or replace" statement for the backend.
 
     Args:
-        table: نام جدول (نقل‌قول می‌شود).
-        columns: ستون‌های درج‌شده، **به همان ترتیبی که پارامترها داده می‌شوند**.
-        conflict_columns: کلید یکتایی که تعارض روی آن سنجیده می‌شود
-            (روی PG به‌عنوان هدف ``ON CONFLICT``؛ روی SQLite صرفاً اعتبارسنجی می‌شود).
-        values_sql: بدنهٔ ``VALUES`` — اگر داده نشود، یک ``?`` به‌ازای هر ستون
-            ساخته می‌شود. برای جمله‌هایی که مقدار ثابت در فهرست دارند
-            (مثلاً ``?, ?, 'high', ?``) باید صریح داده شود؛ در این حالت طول
-            فهرست ستون‌ها و تعداد جای‌نماها عمداً مقایسه نمی‌شود.
-        backend: پوشش ``DB_BACKEND`` (عمدتاً برای تست).
+        table: table name (quoted).
+        columns: The inserted columns, **in the same order as the parameters are given**.
+        conflict_columns: the unique key on which the conflict is measured
+            (on PG as ``ON CONFLICT'' target; on SQLite it is just validated).
+        values_sql: ``VALUES'' body — if not given, a ``?'' per column
+            is made For statements that have a constant value in the list
+            (eg ``?,?, 'high',?``) must be given explicitly; In this case, length
+            The list of columns and the number of view slots are intentionally not compared.
+        backend: ``DB_BACKEND'' wrapper (mainly for testing).
 
     Returns:
-        متن SQL با جای‌نمای ``?`` (ترجمهٔ placeholder کار adapter است).
+        SQL text with ``?'' view placeholder (translation of placeholder is work of adapter).
 
     Raises:
-        ValueError: اگر ``columns`` یا ``conflict_columns`` خالی باشد، یا
-            ``conflict_columns`` زیرمجموعهٔ ``columns`` نباشد.
+        ValueError: if ``columns'' or ``conflict_columns'' are empty, or
+            ``conflict_columns'' should not be a subset of ``columns''.
     """
     if not columns:
         raise ValueError("upsert_sql: فهرست ستون‌ها نمی‌تواند خالی باشد")
@@ -81,12 +93,12 @@ def upsert_sql(
     values = values_sql if values_sql is not None else ", ".join(["?"] * len(columns))
 
     if active != BACKEND_POSTGRESQL:
-        # مسیر SQLite: بایت‌به‌بایت همان عبارت تاریخی (REPLACE = حذف + درج).
+        # SQLite path: byte by byte same historical statement (REPLACE = delete + insert).
         return f"INSERT OR REPLACE INTO {quote_ident(table)} ({cols_sql}) VALUES ({values})"
 
     update_cols = [c for c in columns if c not in conflict_columns]
     if not update_cols:
-        # «تعارض ⇒ هیچ کاری نکن» معادل DO NOTHING است؛ DO UPDATE SET خالی مجاز نیست.
+        # "Conflict ⇒ do nothing" is equivalent to DO NOTHING; Empty DO UPDATE SET is not allowed.
         return (
             f"INSERT INTO {quote_ident(table)} ({cols_sql}) VALUES ({values}) "
             f"ON CONFLICT ({_ident_list(conflict_columns)}) DO NOTHING"

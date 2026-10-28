@@ -1,5 +1,18 @@
+# =============================================================================
+# @file:         web/routes/logs.py
+# @brief:        API routes for reading, clearing and adding printer log events.
+# @details:      Responsibilities: Expose log queries and manual events over HTTP.
+#                Main API: api_printer_log(), api_all_logs(), api_clear_logs(), api_manual_event()
+#                Side effects: defines HTTP routes
+# @dependencies: internal: core, core.database, web.auth | external: flask, flask_login
+# @notes:        None.
+# =============================================================================
+
+"""Printer log API routes."""
+
 from flask import Blueprint, jsonify, request
 from flask_login import current_user
+
 from core.database import get_log, get_all_logs, clear_logs, add_event
 from core import store
 from web.auth import allowed_printer_ips, user_can_access_office, user_allowed_offices
@@ -9,6 +22,8 @@ bp = Blueprint("logs", __name__)
 
 @bp.route('/api/printer/<path:ip>/log')
 def api_printer_log(ip):
+    """Return the log rows of one printer."""
+
     limit = request.args.get('limit', default=500, type=int)
     if not user_can_access_office(current_user, ip):
         return jsonify({"error": "forbidden"}), 403
@@ -18,6 +33,8 @@ def api_printer_log(ip):
 
 @bp.route('/api/logs/all')
 def api_all_logs():
+    """Return log rows across printers, with optional time range filters."""
+
     start = request.args.get('start')
     end = request.args.get('end')
     limit = request.args.get('limit', default=1000, type=int)
@@ -35,16 +52,18 @@ def api_all_logs():
 
 @bp.route('/api/logs/clear', methods=['POST'])
 def api_clear_logs():
+    """Delete the log rows of the selected printers."""
+
     data = request.json or {}
     ip = data.get("ip")
-    types = data.get("types") # لیستی از نوع‌های انتخابی برای حذف
-    
+    types = data.get("types") # A list of selected types to delete
+
     if types and not isinstance(types, list):
         return jsonify({"error": "فرمت types نامعتبر است"}), 400
 
     allowed_offices = user_allowed_offices(current_user)
     allowed_ips = allowed_printer_ips(current_user)
-    
+
     if allowed_offices and getattr(current_user, "role", None) != "admin":
         if ip:
             if ip not in allowed_ips:
@@ -54,9 +73,9 @@ def api_clear_logs():
             deleted = clear_logs(ips=allowed_ips, types=types)
     else:
         deleted = clear_logs(ip, types=types)
-        
+
     return jsonify({
-        "status": "cleared", 
+        "status": "cleared",
         "deleted": deleted,
         "note": "رویدادها با موفقیت پاکسازی شدند"
     })
@@ -65,7 +84,7 @@ def api_clear_logs():
 @bp.route('/api/events/manual', methods=['POST'])
 def api_manual_event():
     """
-    ثبت دستی رویداد سرویس یا شارژ کارتریج
+    Manual registration of service event or cartridge charging
     POST {"ip":"...", "type":"SERVICE"|"REFILL", "notes":"...", "technician":"..."}
     """
     import logging

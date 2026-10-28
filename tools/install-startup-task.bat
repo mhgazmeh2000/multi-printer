@@ -1,24 +1,32 @@
 @echo off
+REM ============================================================
+REM @file:         tools/install-startup-task.bat
+REM @brief:        Installs a Windows Scheduled Task that keeps PrintGuard running at boot.
+REM @details:      Responsibilities: Create run-watchdog.bat and register a startup task that runs even without a login.
+REM @dependencies: schtasks, run-watchdog.bat
+REM @notes:        Requires administrator rights. Re-running the script replaces the existing task.
+REM ============================================================
+
 chcp 65001 >nul
 rem =====================================================================
-rem  install-startup-task.bat — جلوگیری از خاموش‌ماندن مانیتورینگ
+rem  install-startup-task.bat — Prevent monitoring from being turned off
 rem
-rem  علت ساخت: خاموشی ۸۹ساعته‌ی سرور (پنجشنبه تا یکشنبه صبح) باعث شد چاپ‌ها
-rem  دیر ثبت شوند. این اسکریپت:
-rem   ۱) یک نگهبان (run-watchdog.bat) می‌سازد که اگر برنامه کرش کرد، بعد از
-rem      ۱۰ ثانیه دوباره بالا می‌آورد
-rem   ۲) یک Scheduled Task می‌سازد که هنگام بالا آمدن ویندوز (حتی بدون لاگین)
-rem      نگهبان را اجرا کند
-rem   ۳) Sleep خودکار ویندوز را خاموش می‌کند
+rem  The reason for the creation: 89-hour shutdown of the server Thursday to Sunday morning caused the prints
+rem  Register late. This script:
+rem   1 Creates a watchdog run-watchdog.bat that if the program crashes, after
+rem      10 seconds brings it up again
+rem   2 Creates a Scheduled Task that starts when Windows starts up even without login
+rem      Run the watchdog
+rem   3 Sleep automatically shuts down Windows
 rem
-rem  اجرا: روی فایل راست‌کلیک → Run as administrator
-rem  حذف تسک: schtasks /Delete /TN "PrintGuardMonitor" /F
+rem  Run: right click on the file → Run as administrator
+rem  Delete task: schtasks /Delete /TN PrintGuardMonitor /F
 rem =====================================================================
 setlocal
 
 set "APP_DIR=%~dp0"
 set "APP_DIR=%APP_DIR:~0,-1%"
-rem اگر اسکریپت داخل tools\ است، ریشه‌ی برنامه = والد آن است
+rem If the script is inside tools\, the program root = its parent
 if not exist "%APP_DIR%\run.py" if exist "%APP_DIR%\..\run.py" set "APP_DIR=%APP_DIR%\.."
 if not exist "%APP_DIR%\run.py" (
   echo [FAIL] این فایل باید کنار run.py (ریشه‌ی برنامه) باشد: %APP_DIR%
@@ -46,8 +54,8 @@ echo    OK
 
 echo.
 echo  === [۲/۳] ساخت Scheduled Task (ONLOGON — اجرای خودکار با کاربر فعلی)
-rem مسیر پروژه روی share شبکه است؛ SYSTEM معمولاً به آن دسترسی ندارد.
-rem ONLOGON با حساب فعلی اجازه دسترسی به مسیر UNC را حفظ می‌کند.
+rem The path of the project is on the network share; SYSTEM does not normally have access to it.
+rem ONLOGON with the current account maintains access to the UNC path.
 schtasks /Create /TN "PrintGuardMonitor" /SC ONLOGON /RU "%USERNAME%" /TR "cmd.exe /c call \"%APP_DIR%\\run-watchdog.bat\"" /F
 if errorlevel 1 (
   echo [هشدار] ساخت تسک ONLOGON ناموفق بود.

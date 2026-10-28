@@ -1,38 +1,48 @@
-"""
-تست‌های ابزار تشخیصی مستقل سلامت و کیفیت داده‌های پایگاه‌داده (diagnose_data_quality.py).
+# =============================================================================
+# @file:         tests/test_diagnose_data_quality.py
+# @brief:        Tests for the standalone data-quality diagnostic tool.
+# @details:      Responsibilities: Check the diagnostic counts and reports.
+#                Main API: DiagnoseDataQualityTests
+#                Side effects: database access, file I/O
+# @dependencies: internal: tools.diagnose_data_quality
+# @notes:        Can be run directly as a script.
+# =============================================================================
 
-بررسی می‌کند که:
-۱. دیتابیس سالم دارای وضعیت healthy=True و بدون اشکال باشد.
-۲. ردیف‌های شیفت‌خورده با مقادیر متنی در ستون‌های عددی به دقت شناسایی شوند.
-۳. کسری سطرهای cartridge_state نسبت به پرینترها کشف و گزارش شود.
-۴. ابزار CLI خروجی استاندارد JSON را در مسیر مشخص‌شده تولید کند.
+"""
+Standalone database health and data quality diagnostic tool tests (diagnose_data_quality.py).
+
+Checks that:
+1. A healthy database should have a status of healthy=True and no problems.
+2. Carefully identify shifted rows with text values ​​in numeric columns.
+3. Deficiency of cartridge_state lines relative to printers should be discovered and reported.
+4. The CLI tool produces JSON standard output in the specified path.
 """
 
 import json
 import os
-from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+from pathlib import Path
 
 from tools.diagnose_data_quality import (
     diagnose_database,
     main as cli_main,
-    scan_table_data_quality,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
 
 
 class DiagnoseDataQualityTests(unittest.TestCase):
-    """مجموعه آزمون‌های تشخیصی کیفیت داده‌های دیتابیس SQLite."""
+    """A collection of SQLite database data quality diagnostic tests."""
 
     def setUp(self):
+        """Prepare the fixtures that each test in this class uses."""
         self.tmp_dir = tempfile.TemporaryDirectory()
         self.db_path = os.path.join(self.tmp_dir.name, "test_diagnosis.db")
         self.printers_path = os.path.join(self.tmp_dir.name, "test_printers.json")
 
-        # ساخت فایل پرینترها: ۱ پرینتر رنگی (حداقل ۴ کارتریج)
+        # Creating files for printers: 1 color printer (at least 4 cartridges)
         printers_cfg = [
             {"ip": "10.0.0.1", "name": "Color-MFP", "device_type": "color"}
         ]
@@ -61,11 +71,12 @@ class DiagnoseDataQualityTests(unittest.TestCase):
         self.conn.commit()
 
     def tearDown(self):
+        """Release the resources that each test in this class created."""
         self.conn.close()
         self.tmp_dir.cleanup()
 
     def test_healthy_database_reports_no_issues(self):
-        """دیتابیس بدون تناقض باید ۱۰۰٪ سالم گزارش شود."""
+        """A database with no conflicts should be reported as 100% healthy."""
         self.conn.execute(
             "INSERT INTO printer_counters VALUES (?, ?, ?)",
             ("10.0.0.1", 5000, 1200),
@@ -83,8 +94,8 @@ class DiagnoseDataQualityTests(unittest.TestCase):
         self.assertEqual(report["summary"]["tables_with_issues"], 0)
 
     def test_detects_corrupt_text_in_numeric_columns(self):
-        """تشخیص ردیف شیفت‌خورده مشابه مشکل ۴ پروداکشن (دستگاه با متن در ستون عددی)."""
-        # یک سطر شیفت‌خورده که در آن device_type داخل print_total قرار گرفته است
+        """Detecting the shifted row similar to production problem 4 (device with text in numeric column)."""
+        # A shifted line where device_type is inserted into print_total
         self.conn.execute(
             "INSERT INTO printer_counters VALUES (?, ?, ?)",
             ("172.16.25.54", "MFP07622411", 500),
@@ -104,8 +115,8 @@ class DiagnoseDataQualityTests(unittest.TestCase):
         self.assertEqual(pc_issues[0]["value"], "MFP07622411")
 
     def test_detects_cartridge_state_row_count_deficit(self):
-        """تشخیص کسری سطرهای cartridge_state ناشی از ریکاوری ناقص (مشکل ۵)."""
-        # فقط ۲ سطر کارتریج ثبت شده در حالی که پرینتر رنگی نیاز به ۴ کارتریج دارد
+        """Detecting the deficit of cartridge_state lines due to incomplete recovery (problem 5)."""
+        # Only 2 lines of cartridges are registered while the color printer needs 4 cartridges
         self.conn.execute(
             "INSERT INTO cartridge_state VALUES (?, ?, ?, ?)",
             (1, "10.0.0.1", "black", 80),
@@ -125,9 +136,9 @@ class DiagnoseDataQualityTests(unittest.TestCase):
         self.assertTrue(any(iss.get("issue_type") == "row_count_deficit" for iss in issues))
 
     def test_cli_execution_generates_json_file(self):
-        """بررسی اجرای CLI و تولید فایل JSON با ساختار صحیح."""
+        """Checking the CLI implementation and generating a JSON file with the correct structure."""
         out_json = os.path.join(self.tmp_dir.name, "output_diag.json")
-        exit_code = cli_main([
+        cli_main([
             "--db", self.db_path,
             "--printers", self.printers_path,
             "--output", out_json,

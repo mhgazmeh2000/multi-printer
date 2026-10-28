@@ -1,4 +1,4 @@
-# Cutover Runbook — گذار به PostgreSQL
+# Cutover Runbook — moving to PostgreSQL
 
 > فاز **E.7.1** از [phase-e-plan.md](phase-e-plan.md).
 > محتوای راهبردی از §۳ [cutover-plan.md](cutover-plan.md) است و جزئیات فنی از
@@ -8,7 +8,7 @@
 
 ---
 
-## ۰. راهنمای خواندن
+## 0. Reading guide
 
 - **«گیت»** = شرطی که تا برآورده نشود، گام بعد **اجرا نمی‌شود**. همهٔ گیت‌ها با یک دستور
   قابل بررسی‌اند؛ نتیجه را در لاگِ اجرا (یک فایل متنی کنار `logs.db`) یادداشت کنید.
@@ -31,7 +31,7 @@
 
 ---
 
-## ۱. پیش‌نیازها (هیچ‌کدام اختیاری نیست)
+## 1. Prerequisites (none of them optional)
 
 | # | پیش‌نیاز | چطور بررسی شود |
 |---|---|---|
@@ -67,7 +67,7 @@ PG_DSN=postgresql+psycopg://printguard:PW@localhost:5432/printguard
 
 ---
 
-## ۲. مرحلهٔ ۰ — یک روز قبل (بدون توقف سرویس)
+## 2. Step 0 — one day before (no service interruption)
 
 هدف: همه‌چیز آماده و تأیید شود، در حالی‌که برنامه همچنان روی SQLite کار می‌کند.
 
@@ -123,7 +123,7 @@ PG_DSN=postgresql+psycopg://printguard:PW@localhost:5432/printguard
 
 ---
 
-## ۳. مرحلهٔ ۱ — روز اجرا (ده گام، به همان ترتیب)
+## 3. Step 1 — run day (ten steps, in the same order)
 
 > گام ۱ تا ۹ **هیچ داده‌ای را از بین نمی‌برند**؛ برگشت در هر لحظه ممکن است.
 
@@ -267,7 +267,7 @@ curl.exe -s http://localhost:5050/metrics | Select-String "^printguard_" | Measu
 
 ---
 
-## ۴. مرحلهٔ ۲ — بیست‌وچهار ساعت بعد
+## 4. Step 2 — twenty-four hours later
 
 سنجه‌ها از §۷ [cutover-plan.md](cutover-plan.md) است؛ «چگونه اندازه‌گیری شود» به نسخهٔ PG
 سازگار شده:
@@ -285,7 +285,7 @@ curl.exe -s http://localhost:5050/metrics | Select-String "^printguard_" | Measu
 
 ---
 
-## ۵. Rollback — بدون فشار زمان
+## 5. Rollback — no time pressure
 
 **حالت A — قبل از نوشتن marker (گام ۱۰):** هیچ داده‌ای در PG معنادار نیست.
 ```powershell
@@ -318,7 +318,7 @@ python tools\export_from_pg.py --dsn "..." --mode sql --out D:\pgbackup\after-cu
 
 ---
 
-## ۶. نکات پایداری که در اجرا گریبان‌گیر می‌شوند
+## 6. Stability notes that cause trouble during execution
 
 - **`public` را hard-code نگه دارید تا TD-011 بسته شود.** اگر `PG_DSN` شامل
   `options=-csearch_path=<schema>` باشد، جدول‌ها در همان schema ساخته می‌شوند و **`public.logs`
@@ -336,7 +336,7 @@ python tools\export_from_pg.py --dsn "..." --mode sql --out D:\pgbackup\after-cu
 
 ---
 
-## ۷. تست‌شده در sandbox (E.7.3)
+## 7. Tested in sandbox (E.7.3)
 
 این runbook و ابزار `tools/check_cutover_readiness.py` در sandbox لینوکسی **اجرا شده‌اند**؛
 لاگ کامل و اعداد در [`docs/e7-sandbox-dryrun.md`](e7-sandbox-dryrun.md) است. خلاصه:
@@ -353,7 +353,7 @@ python tools\export_from_pg.py --dsn "..." --mode sql --out D:\pgbackup\after-cu
 
 ---
 
-## ۸. پیوست الف — زمان‌های اندازه‌گیری‌شده در sandbox
+## 8. Appendix A — timings measured in the sandbox
 
 **ماشین اندازه‌گیری:** sandbox لینوکسی — ۲ vCPU Intel Xeon @ 2.60 GHz · ۱ GB RAM · ۲۰ GB فضای
 آزاد · PostgreSQL 16.15 · Python 3.13.14 · `logs.db` = ۱۶۷٬۹۳۶ بایت (۷ ردیف در `logs`).
@@ -389,7 +389,7 @@ Measure-Command { pg_dump -Fc -h localhost -U printguard -f $env:TEMP\t.dump pri
 
 ---
 
-## ۸.۱. نتایج تمرین Cutover با داده‌ی مصنوعی ۳۰MB (فاز F.4)
+## 8.1. Results of the cutover drill with 30 MB synthetic data (phase F.4)
 
 در جریان زیرفاز F.4، تمرین کامل Cutover با دیتابیس مصنوعی ۳۰ مگابایتی (`tests/fixtures/cutover_synthetic.db`) شامل **۱۵۷٬۱۸۷ سطر در ۱۱ جدول** که بر مبنای توزیع و ساختار واقعی دیتابیس پروداکشن (از جمله timestampهای بدون Z) توسط `tools/generate_cutover_fixture.py` تولید شد، در آزمون خودکار `tests/test_cutover_rehearsal.py` به اجرا درآمد.
 
@@ -447,7 +447,7 @@ Measure-Command { pg_dump -Fc -h localhost -U printguard -f $env:TEMP\t.dump pri
 
 ---
 
-## ۹. چک‌لیست نهایی (همین را چاپ کنید)
+## 9. Final checklist (print this)
 
 ```
 [ ] بکاپ logs.db روی دیسک دوم + SHA-256 ثبت شد

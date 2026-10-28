@@ -1,11 +1,21 @@
 # -*- coding: utf-8 -*-
-"""
-هلپر مشترک تست‌ها: خواندن گراف migrationهای Alembic از روی فایل‌ها.
+# =============================================================================
+# @file:         tests/migration_graph.py
+# @brief:        Test helper that reads the Alembic migration graph from files.
+# @details:      Responsibilities: Parse migration revisions and return the graph and its head.
+#                Main API: none (no public functions or classes)
+#                Side effects: none at import time
+# @dependencies: stdlib only
+# @notes:        None.
+# =============================================================================
 
-چرا لازم شد: چند تست «سرِ migrationها» را با عدد ثابت (`0003`) مقایسه می‌کردند؛
-با هر migration تازه، آن تست‌ها بی‌دلیل می‌شکستند (و کسی برای سبز کردن، عدد را
-به‌روز می‌کرد — یعنی تست چیزی را نگهبانی نمی‌کرد). این هلپر سر را **از روی فایل‌ها**
-محاسبه می‌کند تا قفل‌ها معنادار بمانند: «اسکیمای اجراشده = سرِ واقعیِ زنجیره».
+"""
+Common helper for tests: reading the graph of Alembic migrations from files.
+
+Why was it necessary: ​​some tests were comparing "migration heads" with a fixed number (`0003`);
+With every new migration, those tests would break for no reason (and someone to green the number
+was updating — that is, the test was not guarding anything). This head helper **from the files**
+Computes so that locks remain meaningful: "executed schema = actual head of chain".
 """
 from pathlib import Path
 
@@ -13,6 +23,7 @@ VERSIONS_DIR = Path(__file__).resolve().parent.parent / "alembic" / "versions"
 
 
 def _field(lines, name):
+    """Helper: field."""
     for line in lines:
         stripped = line.strip()
         if stripped.startswith(f"{name} ="):
@@ -21,7 +32,7 @@ def _field(lines, name):
 
 
 def migration_graph():
-    """``{revision: down_revision}`` — فقط از متغیرهای سطح‌ماژول فایل‌ها."""
+    """``{revision: down_revision}'' — only from file module level variables."""
     graph = {}
     for path in sorted(VERSIONS_DIR.glob("0*.py")):
         revision = _field(path.read_text(encoding="utf-8").splitlines(), "revision")
@@ -33,7 +44,7 @@ def migration_graph():
 
 
 def migration_head() -> str:
-    """سرِ یکتای زنجیره؛ اگر بیش از یک سر باشد (شاخه‌شدن) آزمون می‌شکند."""
+    """the head of the chain; If there is more than one end (branching), the test breaks."""
     graph = migration_graph()
     heads = set(graph) - {p for p in graph.values() if p}
     if len(heads) != 1:

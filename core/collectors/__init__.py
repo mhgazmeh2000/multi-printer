@@ -1,5 +1,15 @@
+# =============================================================================
+# @file:         core/collectors/__init__.py
+# @brief:        Package of per-brand data collectors.
+# @details:      Responsibilities: Groups the brand collectors; no runtime logic.
+#                Main API: none (no public functions or classes)
+#                Side effects: none at import time
+# @dependencies: internal: .base, .brother, .canon, .hp, .toshiba
+# @notes:        None.
+# =============================================================================
+
 """
-بسته جمع‌آوری‌کننده‌های داده برای برندهای مختلف
+Pack of data collectors for different brands
 """
 
 from .toshiba import collect_toshiba

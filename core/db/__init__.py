@@ -1,27 +1,38 @@
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         core/db/__init__.py
+# @brief:        Data-layer entry point that selects the SQLite or PostgreSQL backend.
+# @details:      Responsibilities: Expose get_connection() and the connection helpers used by the
+#                application.
+#                Main API: get_connection(), connect_to(), db_connection()
+#                Side effects: none at import time
+# @dependencies: internal: .connection, .exceptions, .placeholders, .schema, .scripts, .upsert
+# @notes:        None.
+# =============================================================================
+
 """
-core.db — لایه‌ی داده‌ی PrintGuard (فاز D: adapter نازک؛ فاز E.2: دو backend).
+core.db — PrintGuard data layer (phase D: thin adapter; phase E.2: two backends).
 
-معنای این پکیج
+The meaning of this package
 --------------
-یک **دورگیر** نازک است: از بیرون (web/core/tools) هیچ رفتاری تغییر نمی‌کند.
-نقشه‌ی فازها:
-  • فاز D: فقط ``sqlite`` (گارد ``UnsupportedBackendError`` برای هر مقدار دیگر).
-  • فاز E.2 (همین حالا): ``postgresql`` هم در ``SUPPORTED_BACKENDS`` است و
-    :func:`connect_postgres` با درایور ``psycopg`` ۳ وصل می‌شود (TimeZone=UTC قفل‌شده).
-    ترجمه‌ی placeholder در همین فاز فعال می‌شود.
-  • فاز E.3: فعال‌سازی ``DB_BACKEND=postgresql`` در production + writers آگاه-UTC.
-    تا آن لحظه پیش‌فرضِ محیط توسعه همچنان ``sqlite`` است.
+A **wrapper** is thin: from outside (web/core/tools) no behavior is changed.
+Map of phases:
+  • Phase D: ``sqlite'' only (``UnsupportedBackendError'' guard for any other value).
+  • Phase E.2 (right now): ``postgresql'' is also in ``SUPPORTED_BACKENDS'' and
+    :func:`connect_postgres` connects with ``psycopg`` 3 driver (TimeZone=UTC locked).
+    Placeholder translation is activated in this phase.
+  • Phase E.3: Enable ``DB_BACKEND=postgresql'' in production + UTC-aware writers.
+    Until then, the default development environment is still ``sqlite''.
 
-مسیر سازگاری
+Adaptation path
 ------------
-``core.database.db_connection`` و ``core.security_audit._db_conn`` هر دو به
-همین ماژول delegate می‌کنند، پس:
-  • امضای توابع و محل import در کد موجود **تغییر نکرده**؛
-  • ``monkeypatch``های احتمالی تست‌ها روی ``core.database.db_connection``
-    هم‌چنان کار می‌کنند؛
-  • backend از ``DB_BACKEND`` فقط در زمان فراخوانی خوانده می‌شود (نه در زمان
-    import)، پس تست‌ها می‌توانند آن را عوض کنند و بلافاصله اثر بگیرند.
+``core.database.db_connection'' and ``core.security_audit._db_conn'' both to
+This same module delegates, so:
+  • Signature of functions and place of import in existing code **not changed**;
+  • Possible ``monkeypatch'' tests on ``core.database.db_connection''
+    They still work;
+  • The backend is read from ``DB_BACKEND'' only at call time (not at
+    import), so tests can change it and take effect immediately.
 """
 
 from __future__ import annotations
@@ -30,7 +41,7 @@ import logging
 from contextlib import contextmanager
 from typing import Iterator, Optional
 
-from .connection import (  # noqa: F401  (بازصادرسازی برای مصرف‌کنندگان فاز E)
+from .connection import (  # noqa: F401 (re-export for phase E consumers)
     ALL_BACKENDS,
     BACKEND_ALIASES,
     BACKEND_POSTGRESQL,
@@ -68,9 +79,9 @@ from .placeholders import (  # noqa: F401
     escape_percent_signs,
     translate_placeholders,
 )
-from .scripts import split_sql_statements  # noqa: F401  (E.4.7: شکستن اسکریپت)
-from .upsert import upsert_sql  # noqa: F401  (E.5: درج یا جایگزینی، مستقل از backend)
-from .schema import (  # noqa: F401  (E.4.5: تأیید schema روی PG)
+from .scripts import split_sql_statements  # noqa: F401 (E.4.7: script breaking)
+from .upsert import upsert_sql  # noqa: F401 (E.5: insert or replace, independent of backend)
+from .schema import (  # noqa: F401 (E.4.5: schema verification on PG)
     APP_TABLES,
     BOOLEAN_COLUMNS,
     SECURITY_TABLES,
@@ -85,11 +96,12 @@ from .schema import (  # noqa: F401  (E.4.5: تأیید schema روی PG)
 
 log = logging.getLogger("PrinterMonitor")
 
-#: هشدار «backend تصمیم‌گیری‌شده» فقط یک بار در طول عمر پروسه چاپ می‌شود.
+#: The "backend decided" warning is printed only once during the lifetime of the process.
 _BACKEND_LOGGED: Optional[str] = None
 
 
 def _log_backend_once(backend: str) -> None:
+    """Log the active database backend once per process."""
     global _BACKEND_LOGGED
     if _BACKEND_LOGGED == backend:
         return
@@ -99,44 +111,44 @@ def _log_backend_once(backend: str) -> None:
 
 def get_connection(timeout: float = 30.0, commit: bool = False) -> ConnectionAdapter:
     """
-    یک اتصال تازه به دیتابیسِ پیش‌فرض (``config.settings.DB_PATH``) می‌سازد.
+    Creates a new connection to the default database (``config.settings.DB_PATH'').
 
     Args:
-        timeout: مهلت قفل‌شدن (ثانیه). همان معنای ``sqlite3.connect(timeout=...)``.
-        commit: در این فاز **بدون اثر** است؛ فقط برای سازگاری امضا نگه داشته
-            شده و اتصال را *commit نمی‌کند*. مدیریت تراکنش در
-            :func:`db_connection` انجام می‌شود.
+        timeout: lock timeout (seconds). Same meaning as ``sqlite3.connect(timeout=...)''.
+        commit: **no effect** in this phase; Signature kept only for consistency
+            and does not *commit* the connection. Transaction management in
+            :func:`db_connection` is done.
 
     Raises:
-        UnsupportedBackendError: اگر ``DB_BACKEND`` مقدار ناشناخته داشته باشد.
-        ConfigurationError: اگر ``DB_BACKEND=postgresql`` باشد و ``PG_DSN`` نباشد.
-        DatabaseConnectionError: اگر ساخت اتصال شکست بخورد.
+        UnsupportedBackendError: If ``DB_BACKEND'' has an unknown value.
+        ConfigurationError: if ``DB_BACKEND=postgresql'' and not ``PG_DSN''.
+        DatabaseConnectionError: If connection creation fails.
     """
     return _open(path=None, timeout=timeout)
 
 
 def connect_to(path: str, timeout: float = 30.0) -> ConnectionAdapter:
     """
-    اتصال به یک **فایل مشخص** (نه مسیر پیش‌فرض) — برای دیتابیس‌های موقت/آپلودی
-    مثل مسیر ``temp_import_*.db`` در ``web/routes/import_db.py``.
+    Connect to a **specified file** (not the default path) — for temporary/upload databases
+    Like ``temp_import_*.db'' route in ``web/routes/import_db.py''.
 
-    توجه: پارامتر ``timeout`` را فراخوان‌ها صریح می‌فرستند تا رفتار قبلی
-    (``sqlite3.connect(temp_path)`` با پیش‌فرض ۵ ثانیه) عوض نشود.
+    Note: The ``timeout'' parameter is explicitly sent by the calls rather than the previous behavior
+    (``sqlite3.connect(temp_path)'' with the default of 5 seconds) should not be changed.
 
-    **قفل backend (E.6.1):** این هِلپر «یک فایل» را باز می‌کند و فایلِ ``.db`` یعنی
-    SQLite — پس backend صریحاً ``sqlite`` است و ``DB_BACKEND`` برنامه را نمی‌خواند.
-    پیش از این، زیر ``DB_BACKEND=postgresql`` خودِ ``connect()`` با
-    ``ConfigurationError`` («path همراه postgresql») رد می‌شد و
-    ``/api/import/analyze`` با ۵۰۰ می‌سوخت، در حالی که گارد E.4.8 صریحاً analyze را
-    باز گذاشته بود («فایل مبدأ همیشه SQLite است»). این قفل همان نیت را پیاده می‌کند
-    و هیچ مسیر نوشتن برنامه را تغییر نمی‌دهد.
+    **backend lock (E.6.1):** This helper opens "a file" and the ``.db'' file is
+    SQLite — so the backend is explicitly ``sqlite'' and does not read the ``DB_BACKEND'' program.
+    Previously, under ``DB_BACKEND=postgresql'' itself ``connect()'' with
+    ``ConfigurationError'' ("path with postgresql") was thrown and
+    ``/api/import/analyze'' fires with 500, while the E.4.8 guard explicitly disables analyze
+    was left open ("The source file is always SQLite"). This lock implements the same intention
+    And it doesn't change any writing path of the program.
     """
     return _open(path=path, timeout=timeout, backend=BACKEND_SQLITE)
 
 
 def _open(path: Optional[str], timeout: float,
           backend: Optional[str] = None) -> ConnectionAdapter:
-    """ساخت اتصال + یک‌بار لاگ‌کردن backend انتخاب‌شده."""
+    """Create connection + log selected backend once."""
     conn = connect(path, timeout=timeout, backend=backend)
     _log_backend_once(conn.backend)
     return conn
@@ -145,17 +157,17 @@ def _open(path: Optional[str], timeout: float,
 @contextmanager
 def db_connection(timeout: float = 30.0, commit: bool = False) -> Iterator[ConnectionAdapter]:
     """
-    Context manager برای اتصال امن به دیتابیس (نسخه‌ی adapter).
+    Context manager for secure connection to the database (adapter version).
 
-    سازگاری با ``core.database.db_connection`` قبلی:
-      • برنگشتن خطا ⇒ ``commit`` فقط اگر ``commit=True`` باشد؛
-      • بروز خطا ⇒ ``rollback`` (فقط در حالت ``commit=True``، مثل قبل) و
-        سپس **بازتاب همان استثنا**؛
-      • در همه‌ی حالت‌ها ``close()``.
+    Compatibility with previous ``core.database.db_connection'':
+      • return error ⇒ ``commit'' only if ``commit=True'';
+      • Error occurrence ⇒ ``rollback'' (only in case of ``commit=True'', as before) and
+        then **reflect the same exception**;
+      • ``close()'' in all cases.
 
-    یک تفاوت فنی و بی‌اثر از بیرون: اتصال در لحظه‌ی ورود به ``with`` ساخته
-    می‌شود (قبلاً با ``sqlite3.connect`` در خط اول بدنه). خطاهای ساخت اتصال
-    اکنون در همان نقطه با نوع ``DatabaseConnectionError`` بالا می‌آیند.
+    A technical and ineffective difference from the outside: the connection is made at the moment of entering ``with''
+    (previously with ``sqlite3.connect'' in the first line of the body). Connection creation errors
+    Now they come up at the same point with ``DatabaseConnectionError'' type.
     """
     conn = get_connection(timeout=timeout, commit=commit)
     try:
@@ -177,7 +189,7 @@ def db_connection(timeout: float = 30.0, commit: bool = False) -> Iterator[Conne
 
 
 __all__ = [
-    # سازگاری
+    # compatibility
     "get_connection",
     "connect_to",
     "connect",
@@ -189,7 +201,7 @@ __all__ = [
     "default_db_path",
     "quote_ident",
     "db_connection",
-    # کلاس‌ها و خطاها
+    # Classes and errors
     "ConnectionAdapter",
     "DatabaseError",
     "DatabaseOperationalError",
@@ -216,7 +228,7 @@ __all__ = [
     "PLACEHOLDER_STYLE",
     "escape_percent_signs",
     "translate_placeholders",
-    # اسکریپت (E.4.7)
+    # script (E.4.7)
     "split_sql_statements",
     # upsert (E.5)
     "upsert_sql",

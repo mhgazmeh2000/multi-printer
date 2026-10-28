@@ -1,40 +1,51 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tools/export_from_pg.py
+# @brief:        Exports PostgreSQL data back to SQLite (return path after cutover).
+# @details:      Responsibilities: Convert values and DDL for SQLite and copy the tables.
+#                Main API: sqlite_type(), to_sqlite_value(), sqlite_ddl(), quote_ident(),
+#                sql_literal(), load_driver(), dsn_from_env(), mask_dsn() (+7 more)
+#                Side effects: database access, file I/O
+# @dependencies: external: psycopg, psycopg2
+# @notes:        Reads environment variables: PGPASSWORD, PG_DSN. Can be run directly as a script.
+# =============================================================================
+
 """
-tools/export_from_pg.py — برون‌بری PostgreSQL → SQLite (مسیر بازگشتِ پس از cutover).
+tools/export_from_pg.py — export PostgreSQL → SQLite (return path after cutover).
 
-چرا این ابزار لازم است؟
+Why is this tool necessary?
 -----------------------
-طبق `docs/cutover-plan.md`، لحظه‌ی cutover = **اولین نوشتن Flask روی PostgreSQL**.
-پس از آن، `DB_BACKEND=sqlite` دیگر مسیر بازگشت نیست (داده‌های تازه فقط در PG هستند).
-برای بازگشت واقعی باید اول PG را به یک فایل SQLite سالم برگردانیم.
+According to `docs/cutover-plan.md`, cutover moment = **first Flask write on PostgreSQL**.
+After that, `DB_BACKEND=sqlite` is no longer a fallback path (fresh data is only in PG).
+For a real rollback we must first roll back the PG to a healthy SQLite file.
 
-این ابزار:
-  ۱) جدول‌ها را از `information_schema` می‌خواند (هیچ نامی هارد‌کد نشده)؛
-  ۲) برای هر ستون نوع SQLite را از نوع PG استنتاج می‌کند؛
-  ۳) مقادیر را به معادل SQLite ترجمه می‌کند (bool→0/1، TIMESTAMPTZ→ISO، JSONB→JSON متن)؛
-  ۴) یا یک فایل `.db` کامل می‌سازد (`--mode db`) یا فقط `INSERT`ها را چاپ می‌کند
-     (`--mode sql`، برای وارد کردن در دیتابیسِ ساخته‌شده با خودِ اپلیکیشن)؛
-  ۵) مانیتور برون‌بری (`--manifest`) با شمارش سطرها + sha256 + شمارش
-     «timestampهای naive» را می‌نویسد (شاهدی برای الزام آگاه-UTC فاز E).
+This tool:
+  1) reads tables from `information_schema` (no hard coded names);
+  2) for each column it infers the SQLite type from the PG type;
+  3) translates values ​​into SQLite equivalent (bool→0/1, TIMESTAMPTZ→ISO, JSONB→JSON text);
+  4) Either it creates a complete `.db` file (`--mode db`) or only prints `INSERTs`
+     (`--mode sql`, to insert into the database created with the application itself);
+  5) Output monitor (`--manifest`) with line count + sha256 + count
+     Writes "naive timestamps" (evidence for phase E's UTC-aware requirement).
 
-پیش‌نیاز فاز E: نصب `psycopg` (نسخه‌ی ۳) یا `psycopg2`. امروز (فاز E.0) backend
-`postgresql` در `core/db` فعال نیست؛ این ابزار برای اجرا در فاز E آماده است و
-مسیر کاملِ آن فقط با یک PG واقعی قابل آزمون است. برای آزمون منطقِ ترجمه بدون PG:
+Phase E prerequisite: installing ``psycopg'' (version 3) or ``psycopg2''. Today (Phase E.0) backend
+`postgresql` is not enabled in `core/db`; This tool is ready for implementation in phase E and
+Its full path can only be tested with a real PG. To test the logic of translation without PG:
 
     python tools/export_from_pg.py --self-test
 
-نشانی اتصال (به همین ترتیب اولویت):
+Connection address (in order of priority):
     1) `--dsn`
-    2) متغیر محیطی `PG_DSN`
-    3) متغیرهای استاندارد libpq (`PGHOST`/`PGPORT`/`PGDATABASE`/`PGUSER`/`PGPASSWORD`)
+    2) environment variable `PG_DSN`
+    3) libpq standard variables (`PGHOST`/`PGPORT`/`PGDATABASE`/`PGUSER`/`PGPASSWORD`)
 
-کد خروج:
-    0 = موفق
-    1 = خطا (اتصال/نوشتن/ترجمه)
-    2 = نیازمند اقدام انسانی: psycopg نصب نیست، DSN پیدا نشد، یا مقصد موجود است
+Exit code:
+    0 = successful
+    1 = error (connect/write/translate)
+    2 = Human action required: psycopg not installed, DSN not found, or destination exists
 
-نمونه:
+Example:
     python tools/export_from_pg.py --out archives/logs-after-cutover.db --manifest
     python tools/export_from_pg.py --mode sql --tables logs,users > restore.sql
 """
@@ -53,8 +64,8 @@ EXIT_OK = 0
 EXIT_ERROR = 1
 EXIT_NEEDS_ACTION = 2
 
-#: ترتیب پیشنهادی جدول‌ها (جدول‌های مستقل اول) — فقط برای پیام‌دهی بهتر؛
-#: خودِ اسکریپت هر ترتیبی که PG بدهد را می‌پذیرد.
+#: Suggested ordering of tables (independent tables first) — just for better messaging;
+#: The script itself accepts any order given by PG.
 KNOWN_TABLES = (
     "logs",
     "toner_history",
@@ -70,16 +81,16 @@ KNOWN_TABLES = (
 
 
 # ─────────────────────────────────────────────────────────────
-# ترجمه‌ی نوع و مقدار (توابع خالص — همین‌ها در --self-test آزمون می‌شوند)
+# Type and value translation (pure functions - these are tested in --self-test)
 # ─────────────────────────────────────────────────────────────
 
 def sqlite_type(pg_type: str, udt_name: str = "") -> str:
-    """نوع PG را به نزدیک‌ترین نوع SQLite نگاشت می‌کند.
+    """Maps the PG type to the closest SQLite type.
 
-    نقشه با `docs/postgresql-strictness.md` §۴ هم‌خوان است:
-      • boolean → INTEGER (اپلیکیشن با 0/1 کار می‌کند)
-      • timestamp*/date/time → TEXT (قالب ISO؛ مثل امروزِ SQLite)
-      • json/jsonb → TEXT (JSON رشته‌ای؛ مثل ستون‌های details/allowed_*)
+    The map is compatible with `docs/postgresql-strictness.md` §4:
+      • boolean → INTEGER (application works with 0/1)
+      • timestamp*/date/time → TEXT (ISO format; like SQLite today)
+      • json/jsonb → TEXT (string JSON; like columns details/allowed_*)
       • numeric/decimal/real/double precision → REAL
     """
     t = (pg_type or "").strip().lower()
@@ -102,10 +113,10 @@ def sqlite_type(pg_type: str, udt_name: str = "") -> str:
 
 
 def to_sqlite_value(value, sqlite_col_type: str):
-    """مقدار PG را به مقداری که `sqlite3` می‌پذیرد تبدیل می‌کند.
+    """Converts the PG value to a value accepted by `sqlite3`.
 
-    خروجی دوم: True اگر مقدار یک timestamp **naive** بود (باید صفر باشد؛ شاهد
-    برای «همه‌ی writers آگاه-UTC»).
+    Second output: True if the value of a timestamp was **naive** (must be zero; witness
+    for "all UTC-aware writers").
     """
     naive = False
     if value is None:
@@ -115,8 +126,8 @@ def to_sqlite_value(value, sqlite_col_type: str):
         return int(value), naive
 
     if isinstance(value, _dt.datetime):
-        # جداکننده‌ی "T" و ریزثانیه‌ها حفظ می‌شوند تا برون‌بری **بی‌اتلاف** باشد؛
-        # مقدار آگاه به UTC منتقل می‌شود تا پس از بازگشت هیچ ابهامی در TZ نماند.
+        # The "T" separator and the microseconds are preserved so that the output is **lossless**;
+        # The aware value is transferred to UTC so that no ambiguity remains in the TZ upon return.
         if value.tzinfo is None:
             naive = True
             return value.isoformat(timespec="microseconds"), naive
@@ -137,7 +148,7 @@ def to_sqlite_value(value, sqlite_col_type: str):
     if isinstance(value, float):
         return value, naive
 
-    try:  # Decimal و انواع عددی خاص
+    try:  # Decimal and special numeric types
         num = float(value)
         if num.is_integer() and not isinstance(value, float) and sqlite_col_type == "INTEGER":
             return int(num), naive
@@ -149,10 +160,10 @@ def to_sqlite_value(value, sqlite_col_type: str):
 
 
 def sqlite_ddl(table: str, columns) -> str:
-    """DDL جدول SQLite را از فراداده‌ی ستون‌های PG می‌سازد.
+    """DDL creates the SQLite table from the metadata of the PG columns.
 
     `columns` = [(name, sqlite_type, is_pk), ...]
-    کلید اصلی چندستونی پشتیبانی می‌شود (`PRIMARY KEY (a, b)`).
+    Multi-column primary key is supported (`PRIMARY KEY (a, b)`).
     """
     pk = [c[0] for c in columns if c[2]]
     parts = []
@@ -168,14 +179,16 @@ def sqlite_ddl(table: str, columns) -> str:
 
 
 def quote_ident(name: str) -> str:
+    """Quote an SQL identifier."""
+
     return '"' + str(name).replace('"', '""') + '"'
 
 
 def sql_literal(value) -> str:
-    """مقدار پایتونی را به لیترال SQL قابل‌بارگذاری در SQLite تبدیل می‌کند.
+    """Converts a Python value to a SQL literal that can be loaded into SQLite.
 
-    چرا لازم است: خروجی حالت `--mode sql` باید همین‌طور قابل اجرا باشد
-    (`sqlite3 restored.db < restore.sql`) — نه لیست placeholder به‌همراه کامنت.
+    Why it's needed: `--mode sql' mode output should be executable as well
+    (`sqlite3 restored.db < restore.sql`) — nine placeholder lists with comments.
     """
     if value is None:
         return "NULL"
@@ -191,11 +204,11 @@ def sql_literal(value) -> str:
 
 
 # ─────────────────────────────────────────────────────────────
-# لایه‌ی اتصال PG (تنها جایی که psycopg لازم است)
+# PG connection layer (only where psycopg is required)
 # ─────────────────────────────────────────────────────────────
 
 def load_driver():
-    """psycopg ۳ (ترجیح) یا psycopg2 را برمی‌گرداند؛ None اگر هیچ‌کدام نبود."""
+    """returns psycopg 3 (preferred) or psycopg2; None if none."""
     try:
         import psycopg  # type: ignore
         return ("psycopg3", psycopg)
@@ -209,7 +222,7 @@ def load_driver():
 
 
 def dsn_from_env() -> str:
-    """DSN را از `PG_DSN` یا متغیرهای libpq می‌سازد (رشته‌ی آماده برای connect)."""
+    """Constructs a DSN from `PG_DSN' or libpq variables (a ready-to-connect string)."""
     dsn = os.getenv("PG_DSN", "").strip()
     if dsn:
         return dsn
@@ -221,7 +234,7 @@ def dsn_from_env() -> str:
 
 
 def mask_dsn(dsn: str) -> str:
-    """password را از DSN حذف می‌کند (برای چاپ و مانیتور؛ هیچ‌وقت رمز لاگ نشود)."""
+    """Removes password from DSN (for printing and monitoring; never log password)."""
     out = []
     for token in dsn.split():
         if token.lower().startswith("password="):
@@ -232,6 +245,8 @@ def mask_dsn(dsn: str) -> str:
 
 
 def pg_tables(cur) -> list:
+    """Return the names of the tables in the PostgreSQL database."""
+
     cur.execute(
         """
         SELECT table_name FROM information_schema.tables
@@ -243,7 +258,7 @@ def pg_tables(cur) -> list:
 
 
 def pg_columns(cur, table: str) -> list:
-    """[(name, sqlite_type, is_pk), ...] به ترتیب موقعیت ستون در PG."""
+    """[(name, sqlite_type, is_pk),...] in order of column position in PG."""
     cur.execute(
         """
         SELECT column_name, data_type, udt_name
@@ -271,10 +286,12 @@ def pg_columns(cur, table: str) -> list:
 
 
 # ─────────────────────────────────────────────────────────────
-# مسیر اصلی
+# main route
 # ─────────────────────────────────────────────────────────────
 
 def run_export(args) -> int:
+    """Export the PostgreSQL data to a SQLite file."""
+
     driver = load_driver()
     if driver is None:
         print("✗ psycopg/psycopg2 نصب نیست (پیش‌نیاز فاز E).", file=sys.stderr)
@@ -300,8 +317,8 @@ def run_export(args) -> int:
                   " اگر واقعاً می‌خواهید، --force بدهید.", file=sys.stderr)
             return EXIT_NEEDS_ACTION
         if out.exists() and args.force:
-            # معنای --force: «از صفر بساز»؛ وگرنه درج‌کردن در فایل قبلی، سطر تکراری
-            # یا نقض کلید اصلی می‌دهد (نه بازنویسی).
+            # Meaning of --force: "build from scratch"; Otherwise, insert a duplicate line in the previous file
+            # or gives a primary key violation (not a rewrite).
             try:
                 out.unlink()
                 print(f"→ مقصد قبلی حذف شد (--force): {out}")
@@ -352,8 +369,8 @@ def run_export(args) -> int:
                           f'({", ".join(quote_ident(n) for n in names)}) VALUES ({placeholders})')
 
                 if sql_out is not None:
-                    # DDL به‌صورت کامنت: ساخت schema کارِ خودِ اپلیکیشن است؛ این
-                    # خطوط فقط برای مقایسه/بازبینی چشمی‌اند.
+                    # DDL as a comment: Schema creation is the job of the application itself; this
+                    # Lines are for visual comparison/review only.
                     for line in sqlite_ddl(table, cols).splitlines():
                         sql_out.write("-- " + line + "\n")
 
@@ -428,17 +445,17 @@ def run_export(args) -> int:
 
 
 def _live_sqlite_path():
-    """مسیر دیتابیس زنده‌ی SQLite را از `config/settings.py` می‌خواند.
+    """Reads the live SQLite database path from `config/settings.py`.
 
-    چرا import نمی‌کنیم؟ import کردن `config.settings` هنگام اجرا، هشدار
-    SECRET_KEY و مسیرهای جانبی را بیدار می‌کند و ابزار را به اپلیکیشن گره می‌زند.
-    اینجا فقط مقدار ثابت `DB_PATH` را با AST می‌خوانیم — بدون هیچ اثر جانبی.
+    Why don't we import? Import `config.settings` when running, warning
+    It wakes up the SECRET_KEY and side paths and binds the tool to the application.
+    Here we just read the constant value of `DB_PATH` with the AST — without any side effects.
     """
     import ast  # noqa: PLC0415
     settings_path = Path(__file__).resolve().parent.parent / "config" / "settings.py"
     try:
         tree = ast.parse(settings_path.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001 — نبود/خرابی config نباید مانع ابزار شود
+    except Exception:  # noqa: BLE001 — Missing/broken config should not block tools
         return None
     for node in tree.body:
         if isinstance(node, ast.Assign) and any(
@@ -449,6 +466,8 @@ def _live_sqlite_path():
 
 
 def sha256_file(path: Path) -> str:
+    """Return the SHA-256 hex digest of a file."""
+
     h = hashlib.sha256()
     with open(path, "rb") as fh:
         for chunk in iter(lambda: fh.read(1024 * 1024), b""):
@@ -457,19 +476,22 @@ def sha256_file(path: Path) -> str:
 
 
 # ─────────────────────────────────────────────────────────────
-# خودآزمون (بدون PostgreSQL؛ همان منطق ترجمه را می‌سنجد)
+# self-test (without PostgreSQL; tests the same translation logic)
 # ─────────────────────────────────────────────────────────────
 
 def self_test() -> int:
+    """Run the built-in self-test of the export conversion rules."""
+
     import sqlite3
 
     fails = []
 
     def eq(label, got, want):
+        """Record a failure when a value differs from the expected one."""
         if got != want:
             fails.append(f"{label}: got={got!r} want={want!r}")
 
-    # ۱) نقشه‌ی نوع
+    # 1) Type map
     eq("bool→INTEGER", sqlite_type("boolean", "bool"), "INTEGER")
     eq("int8→INTEGER", sqlite_type("bigint", "int8"), "INTEGER")
     eq("timestamptz→TEXT", sqlite_type("timestamp with time zone", "timestamptz"), "TEXT")
@@ -477,7 +499,7 @@ def self_test() -> int:
     eq("numeric→REAL", sqlite_type("numeric", "numeric"), "REAL")
     eq("text نامعلوم→TEXT", sqlite_type("character varying", "varchar"), "TEXT")
 
-    # ۲) تبدیل مقدار
+    # 2) Value conversion
     eq("bool True→1", to_sqlite_value(True, "INTEGER"), (1, False))
     eq("None→None", to_sqlite_value(None, "TEXT"), (None, False))
     eq("dict→JSON", to_sqlite_value({"a": 1}, "TEXT")[0], '{"a": 1}')
@@ -489,13 +511,13 @@ def self_test() -> int:
     eq("naive تشخیص داده می‌شود", to_sqlite_value(naive_dt, "TEXT")[1], True)
     eq("Decimal صحیح→int", to_sqlite_value(__import__("decimal").Decimal("42"), "INTEGER")[0], 42)
 
-    # ۳) DDL
+    # 3) DDL
     ddl = sqlite_ddl("t", [("ip", "TEXT", True), ("n", "INTEGER", False)])
     eq("DDL کلید اصلی", 'PRIMARY KEY' in ddl and '"ip" TEXT PRIMARY KEY' in ddl, True)
     ddl2 = sqlite_ddl("t2", [("a", "TEXT", True), ("b", "TEXT", True)])
     eq("DDL کلید مرکب", 'PRIMARY KEY ("a", "b")' in ddl2, True)
 
-    # ۴) چرخه‌ی درج واقعی در SQLite (ققنوس‌بودن DDL + ترجمه‌ی مقدار)
+    # 4) Real insert cycle in SQLite (DDL phoenix + value translation)
     conn = sqlite3.connect(":memory:")
     cols = [("id", "INTEGER", True), ("ok", "INTEGER", False), ("payload", "TEXT", False)]
     conn.execute(sqlite_ddl("demo", cols))
@@ -507,20 +529,20 @@ def self_test() -> int:
        {"x": 1})
     conn.close()
 
-    # ۵) لیترال SQL برای حالت --mode sql
+    # 5) SQL literal for --mode sql mode
     eq("لیترال NULL", sql_literal(None), "NULL")
     eq("لیترال bool", sql_literal(True), "1")
     eq("لیترال نقل‌قول فارسی", sql_literal("سلا\'م"), "'سلا''م'")
     eq("لیترال بایت", sql_literal(b"\x00\xff"), "X'00ff'")
 
-    # ۶) پوشاندن رمز در DSN
+    # 6) Masking the password in DSN
     eq("mask password", mask_dsn("host=h dbname=d password=secret user=u"),
        "host=h dbname=d password=*** user=u")
 
-    # ۷) مسیر دیتابیس زنده بدون import
+    # 7) Live database path without import
     eq("DB_PATH از AST", _live_sqlite_path(), "logs.db")
 
-    # ۸) sha256
+    # 8) sha256
     tmp = Path("/tmp/_export_selftest.bin")
     tmp.write_bytes(b"abc")
     eq("sha256", sha256_file(tmp), hashlib.sha256(b"abc").hexdigest())
@@ -536,6 +558,8 @@ def self_test() -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the command-line argument parser."""
+
     p = argparse.ArgumentParser(
         prog="export_from_pg.py",
         description="برون‌بری PostgreSQL → SQLite (مسیر بازگشتِ پس از cutover — فاز E).",
@@ -559,11 +583,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    """Command-line entry point of the PostgreSQL export."""
+
     args = build_parser().parse_args(argv)
     if args.self_test:
         return self_test()
     if args.mode == "sql" and not args.out:
-        args.out = "-"          # پیش‌فرض: چاپ روی stdout
+        args.out = "-"          # Default: print to stdout
     if not args.tables:
         allowed = None
     else:

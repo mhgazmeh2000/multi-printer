@@ -1,14 +1,24 @@
-"""
-تست بررسی انکودینگ و سازگاری alembic.ini با ویندوز و سیستم‌های غیر UTF-8.
+# =============================================================================
+# @file:         tests/test_alembic_ini_encoding.py
+# @brief:        Tests that alembic.ini is readable on Windows and non-UTF-8 systems.
+# @details:      Responsibilities: Check encoding and compatibility of the alembic.ini file.
+#                Main API: AlembicIniEncodingTests
+#                Side effects: database access, file I/O
+# @dependencies: internal: alembic.config
+# @notes:        Can be run directly as a script.
+# =============================================================================
 
-بررسی می‌کند که فایل alembic.ini صرفاً شامل کاراکترهای اسکی (ASCII-only) باشد
-تا در محیط‌های ویندوزی با انکودینگ‌های پیش‌فرض مانند cp1252 با خطای UnicodeDecodeError
-مواجه نشود.
+"""
+Alembic.ini encoding and compatibility test with Windows and non-UTF-8 systems.
+
+Checks that the alembic.ini file contains ASCII-only characters
+Even in Windows environments with default encodings such as cp1252 with UnicodeDecodeError error
+do not face
 """
 
 import configparser
-from pathlib import Path
 import unittest
+from pathlib import Path
 
 from alembic.config import Config
 
@@ -17,13 +27,14 @@ ALEMBIC_INI = ROOT / "alembic.ini"
 
 
 class AlembicIniEncodingTests(unittest.TestCase):
-    """تضمین انکودینگ اسکی خالص برای alembic.ini جهت سازگاری کامل با ویندوز."""
+    """Guaranteed pure Ski encoding for alembic.ini for full Windows compatibility."""
 
     def test_file_exists(self):
+        """Verifies file exists."""
         self.assertTrue(ALEMBIC_INI.is_file(), "فایل alembic.ini یافت نشد.")
 
     def test_alembic_ini_is_pure_ascii(self):
-        """فایل باید بدون هیچ خطایی با کدک ASCII دیکود شود (بدون بایت‌های غیر اسکی)."""
+        """The file should be decoded with the ASCII codec without any errors (no non-ASCII bytes)."""
         content_bytes = ALEMBIC_INI.read_bytes()
         try:
             decoded = content_bytes.decode("ascii")
@@ -35,7 +46,7 @@ class AlembicIniEncodingTests(unittest.TestCase):
         self.assertIn("[alembic]", decoded)
 
     def test_alembic_ini_decodes_with_cp1252(self):
-        """تست اختصاصی برای شبیه‌سازی خواندن فایل در ویندوزهای انگلیسی/اروپایی (cp1252)."""
+        """Dedicated test for simulating file reading on English/European Windows (cp1252)."""
         content_bytes = ALEMBIC_INI.read_bytes()
         try:
             text = content_bytes.decode("cp1252")
@@ -44,7 +55,7 @@ class AlembicIniEncodingTests(unittest.TestCase):
         self.assertIn("script_location", text)
 
     def test_configparser_reads_alembic_ini_with_cp1252(self):
-        """تست پردازش فایل توسط configparser با encoding=cp1252."""
+        """File processing test by configparser with encoding=cp1252."""
         parser = configparser.ConfigParser()
         with open(ALEMBIC_INI, "r", encoding="cp1252") as f:
             parser.read_file(f)
@@ -52,7 +63,7 @@ class AlembicIniEncodingTests(unittest.TestCase):
         self.assertIn("script_location", parser["alembic"])
 
     def test_alembic_config_object_loads_cleanly(self):
-        """آبجکت Config خود کتابخانه Alembic فایل را بدون اشکال لود کند."""
+        """The Config object of the Alembic library itself loads the file without any problems."""
         cfg = Config(str(ALEMBIC_INI))
         script_loc = cfg.get_main_option("script_location")
         self.assertTrue(script_loc and "alembic" in script_loc)

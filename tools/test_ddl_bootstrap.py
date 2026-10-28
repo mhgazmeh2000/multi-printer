@@ -1,31 +1,43 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tools/test_ddl_bootstrap.py
+# @brief:        Backend-aware DDL test script (phase E.4.5).
+# @details:      Responsibilities: Run the DDL bootstrap on SQLite and PostgreSQL and report
+#                results.
+#                Main API: Report, test_sqlite(), alembic_head(), test_postgres(), main()
+#                Side effects: database access
+# @dependencies: internal: alembic.config, alembic.script, core.database, core.db, core.db.schema,
+#                core.security_audit, core.yield_engine
+# @notes:        Reads environment variables: DB_BACKEND, PG_DSN. Can be run directly as a script.
+# =============================================================================
+
 """
-tools/test_ddl_bootstrap.py — آزمون DDL آگاه‌به-backend (فاز E.4.5).
+tools/test_ddl_bootstrap.py — backend-aware DDL test (phase E.4.5).
 
-چه می‌سنجد؟
+What does it measure?
 -----------
-سه تابع bootstrap برنامه — ``core.database.init_db``،
-``core.yield_engine.ensure_yield_tables`` و ``core.security_audit.init_security_audit`` —
-روی هر دو backend:
+Three program bootstrap functions — ``core.database.init_db'',
+``core.yield_engine.ensure_yield_tables'' and ``core.security_audit.init_security_audit'' —
+On both backends:
 
-  ۱) هیچ خطای نحوی/اجرایی نمی‌دهند (پیش از E.4.5، روی PG هم `PRAGMA` و هم
-     `INTEGER PRIMARY KEY AUTOINCREMENT` خطای نحوی می‌دادند)؛
-  ۲) **idempotent**‌اند (اجرای دوباره بی‌اثر و بی‌خطاست)؛
-  ۳) روی SQLite جدول‌های خودشان را می‌سازند؛ روی PostgreSQL **هیچ DDLی اجرا
-     نمی‌کنند** (Alembic تنها منبع DDL است) و فقط تأیید می‌کنند اسکیمای
-     migration کامل است.
+  1) do not give any syntax/execution errors (prior to E.4.5, on PG both `PRAGMA' and
+     ``INTEGER PRIMARY KEY AUTOINCREMENT'' gave a syntax error);
+  2) They are **idempotent** (re-execution is ineffective and error-free);
+  3) they create their own tables on SQLite; On PostgreSQL **No DDL execution
+     They don't** (Alembic is the only source of DDL) and only validates the schema
+     The migration is complete.
 
-کد خروج
+exit code
 -------
-  0 = همه‌ی بررسی‌ها سبز
-  1 = خطا (تابعی شکست خورد یا انتظار برنیامد)
-  2 = نیازمند اقدام انسانی (psycopg نصب نیست، DSN نیست، اسکیمای Alembic ناقص است
+  0 = all checks green
+  1 = error (function failed or not expected)
+  2 = requires human action (psycopg not installed, no DSN, incomplete Alembic schema
       ⇒ «python -m alembic upgrade head»)
 
-نمونه
+sample
 -----
-    python tools/test_ddl_bootstrap.py                 # هر دو backend
+    python tools/test_ddl_bootstrap.py # Both backends
     python tools/test_ddl_bootstrap.py --backend sqlite
     python tools/test_ddl_bootstrap.py --dsn "host=... dbname=printguard ..."
 """
@@ -49,34 +61,43 @@ VERSIONS_DIR = ROOT / "alembic" / "versions"
 
 
 # ─────────────────────────────────────────────────────────────
-# گزارش‌گیری
+# reporting
 # ─────────────────────────────────────────────────────────────
 class Report:
+    """Collects the pass or fail result of each DDL bootstrap check."""
+
     def __init__(self, title: str):
+        """Create a result entry with a title."""
         self.title = title
         self.results = []          # (ok: bool, text)
 
     def check(self, ok, text, extra=""):
+        """Record one check result."""
+
         self.results.append((bool(ok), text))
         mark = "✔" if ok else "✘"
         print(f"  {mark} {text}" + (f" — {extra}" if extra else ""))
         return bool(ok)
 
     def ok(self) -> bool:
+        """Return True when every recorded check passed."""
+
         return all(r[0] for r in self.results)
 
     def summary(self) -> str:
+        """Return a one-line summary of the checks."""
+
         passed = sum(1 for r in self.results if r[0])
         return f"{self.title}: {passed}/{len(self.results)}"
 
 
 def _call_twice(fn, name: str, report: Report) -> bool:
-    """اجرای دوباره‌ی یک تابع bootstrap: بار اول باید سبز، بار دوم بی‌خطا (idempotent)."""
+    """Running a bootstrap function again: the first time should be green, the second time without error (idempotent)."""
     ok = True
     for idx in (1, 2):
         try:
             fn()
-        except Exception as exc:                        # noqa: BLE001 — گزارش، نه کرش
+        except Exception as exc:                        # noqa: BLE001 — report, not crash
             ok = report.check(False, f"{name} (اجرای {idx})",
                               f"{type(exc).__name__}: {str(exc).strip().splitlines()[0][:100]}")
             return ok
@@ -88,8 +109,10 @@ def _call_twice(fn, name: str, report: Report) -> bool:
 # SQLite
 # ─────────────────────────────────────────────────────────────
 def test_sqlite(report: Report) -> None:
+    """Run the DDL bootstrap checks on a temporary SQLite database."""
+
     with tempfile.TemporaryDirectory() as tmp:
-        os.chdir(tmp)                      # logs.db نسبی است ⇒ داخل پوشه‌ی موقت
+        os.chdir(tmp)                      # logs.db is relative ⇒ inside temporary folder
         os.environ["DB_BACKEND"] = "sqlite"
         os.environ.pop("PG_DSN", None)
 
@@ -118,7 +141,7 @@ def test_sqlite(report: Report) -> None:
 # PostgreSQL
 # ─────────────────────────────────────────────────────────────
 def alembic_head() -> str | None:
-    """شناسه‌ی revision سر (بدون import کردن env.py؛ مثل tools/test_pg_connection.py)."""
+    """Header revision ID (without importing env.py; like tools/test_pg_connection.py)."""
     try:
         from alembic.config import Config
         from alembic.script import ScriptDirectory
@@ -130,7 +153,7 @@ def alembic_head() -> str | None:
 
 
 def test_postgres(report: Report, dsn: str) -> int:
-    """(کد خروج این بخش) — روی PG هیچ نوشتنی انجام نمی‌شود؛ فقط تأیید."""
+    """(exit code of this section) — no writing is done on PG; Confirmation only."""
     try:
         import importlib
         importlib.import_module("psycopg")
@@ -148,7 +171,7 @@ def test_postgres(report: Report, dsn: str) -> int:
     from core.db import db_connection
     from core.db.schema import ALEMBIC_TABLE, APP_TABLES, present_tables
 
-    # وضعیت پیش از فراخوانی‌ها (اثبات «هیچ DDLی اجرا نشد»)
+    # State before calls (prove "no DDL executed")
     with db_connection() as conn:
         before = present_tables(conn)
         versions_before = None
@@ -195,6 +218,8 @@ def test_postgres(report: Report, dsn: str) -> int:
 # main
 # ─────────────────────────────────────────────────────────────
 def main(argv=None) -> int:
+    """Command-line entry point of the DDL bootstrap check."""
+
     parser = argparse.ArgumentParser(
         description="آزمون DDL آگاه‌به-backend (فاز E.4.5)")
     parser.add_argument("--backend", choices=("sqlite", "postgresql", "both"),

@@ -1,4 +1,12 @@
 @echo off
+REM ============================================================
+REM @file:         cartridge_test.bat
+REM @brief:        Guided Windows diagnostic for automatic cartridge-change detection.
+REM @details:      Responsibilities: Run three read-only steps against one printer IP and print the findings.
+REM @dependencies: python, tools/cartridge_test_step2.py
+REM @notes:        Usage: cartridge_test.bat printer_ip [brand] [extra_log_file]. Read-only; changes nothing.
+REM ============================================================
+
 setlocal EnableExtensions
 REM ============================================================================
 REM  cartridge_test.bat -- guided diagnostics for automatic cartridge-change

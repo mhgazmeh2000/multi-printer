@@ -2,34 +2,58 @@
 
 Pre-built Grafana dashboard for monitoring printer fleet cartridge status, change events, and chip ID quality across HP, Canon, Brother, and Toshiba printers.
 
-## Quick Start (Docker)
+## Windows Server Setup
+
+The application and the monitoring services have separate ports and roles:
+
+- The printer-monitor Flask application exposes its own `/metrics` endpoint on **5050**.
+- Prometheus scrapes the application and SNMP exporter, and serves the HTTP API on **9090**. Grafana must use this Prometheus API, not the Flask port.
+- `monitoring/prometheus/prometheus.yml` is the supplied scrape configuration. Replace its example printer address (`192.0.2.10`) with the printer's actual IP and set the appropriate `snmp_module` from `monitoring/snmp.yml`.
+
+From separate Windows command prompts (or equivalent Windows services), start the components:
+
+```bat
+python run.py
+snmp_exporter.exe --config.file=monitoring\snmp.yml --web.listen-address=:9116
+prometheus.exe --config.file=monitoring\prometheus\prometheus.yml --web.listen-address=:9090
+```
+
+Set `PROMETHEUS_URL` in the Grafana process environment before Grafana starts. For Grafana and Prometheus on the same host, the default is:
+
+```bat
+set PROMETHEUS_URL=http://localhost:9090
+```
+
+For a Windows service, configure the same variable in that service's environment. If Grafana runs in a container, `localhost` refers to the container; set `PROMETHEUS_URL` to a host address reachable from Grafana instead.
+
+## Docker Quick Start (optional)
+
+Make sure Prometheus and the SNMP exporter are also running and set `PROMETHEUS_URL` for Grafana to a reachable Prometheus HTTP API address.
 
 ```bash
-# 1. Start the printer monitor server
+# Start the printer monitor server (Flask /metrics on port 5050)
 cd multi-printer
-python run.py   # Runs on port 5050
+python run.py
 
-# 2. Start Grafana with pre-loaded config
+# Start Grafana with pre-loaded config
 docker run -d \
   --name grafana \
   -p 3000:3000 \
   -v $(pwd)/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources \
   -v $(pwd)/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards \
   -v $(pwd)/grafana/dashboards:/var/lib/grafana/dashboards \
+  -e PROMETHEUS_URL=http://host.docker.internal:9090 \
   grafana/grafana:latest
-
-# 3. Open Grafana
-#    URL:      http://localhost:3000
-#    Username: admin
-#    Password: admin
 ```
+
+Open `http://localhost:3000` (default credentials: `admin` / `admin`).
 
 ## Manual Setup (Grafana installed)
 
 1. **Add Prometheus datasource:**
    - Go to **Configuration → Data Sources → Add data source**
    - Select **Prometheus**
-   - URL: `http://<printer-server>:5050`
+   - URL: `http://<prometheus-server>:9090` (the Prometheus HTTP API; do not use Flask port 5050)
    - Click **Save & Test**
 
 2. **Import dashboard:**

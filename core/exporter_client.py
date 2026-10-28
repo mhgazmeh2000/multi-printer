@@ -1,37 +1,50 @@
-"""کاربرِ `snmp_exporter` — فاز G، گام G.5.2.
+# =============================================================================
+# @file:         core/exporter_client.py
+# @brief:        HTTP client for snmp_exporter with a circuit breaker and backoff.
+# @details:      Responsibilities: Fetch exporter metrics, parse the exposition text and track
+#                failures per device.
+#                Main API: exporter_enabled(), ExporterError, ExporterCircuitOpen,
+#                delay_for_failures(), DeviceState, parse_prometheus_text(), latest_series(),
+#                metric_value() (+3 more)
+#                Side effects: network I/O, starts threads
+# @dependencies: stdlib only
+# @notes:        None.
+# =============================================================================
 
-یک لایهٔ نازک برای خواندنِ پاسخِ exporter و نرمال‌کردنِ آن:
+"""User `snmp_exporter` — Phase G, Step G.5.2.
+
+A thin layer to read the exporter's response and normalize it:
 
     client = ExporterClient()                       # http://localhost:9116
     metrics = client.query("172.16.0.5", "printer_hp", auth="public_v2")
     # → {"hp_model": [({"hp_model": "HP …"}, 1.0)], "bro_total": [({}, 12345.0)], …}
 
-فرض‌های ساختاری که در همین session از **منبعِ exporter** (نسخهٔ v0.26.0، فایل‌های
-`collector/collector.go` و `main.go`) خوانده شدند و در fixtureهای
-`tests/fixtures/exporter_response_*.txt` هم ثابت شده‌اند:
+structural assumptions that in this session from **source exporter** (version v0.26.0, files
+`collector/collector.go` and `main.go`) were read and in fixtures
+`tests/fixtures/exporter_response_*.txt` are also fixed:
 
-* نامِ متریک دقیقاً فیلدِ `name:` در `monitoring/snmp.yml` است؛ هیچ پیشوندِ ماژولی
-  اضافه نمی‌شود.
-* متریک‌های متنی (`DisplayString`) مقدارِ `1` می‌دهند و متن را در **لیبلی هم‌نامِ خودِ
-  متریک** می‌گذارند. `label_value()` همان را برمی‌دارد.
-* self-metricsِ `snmp_scrape_*` لیبلِ ثابتِ `module="<module>"` دارند.
-* خودِ exporter لیبلِ `instance` اضافه نمی‌کند (جست‌وجوی `instance` در collector.go و
-  main.go: صفر نتیجه)؛ اگر Prometheus یا نسخه‌ای لیبل اضافه کند، این پارسر آن را
-  نادیده می‌گیرد چون فقط لیبل‌های لازم را می‌خواند.
+* The name of the metric is exactly the `name:` field in `monitoring/snmp.yml`; No module prefix
+  It is not added.
+* Text metrics (`DisplayString`) give the value `1` and put the text in a label of the same name.
+  They put metric**. `label_value()` returns the same.
+* self-metrics of `snmp_scrape_*` have fixed label `module="<module>"`.
+* The exporter itself does not add `instance` label (search for `instance` in collector.go and
+  main.go: nil result); If Prometheus or a version adds a label, this parser will
+  It ignores because it only reads necessary labels.
 
-**چه چیزی تأیید نشده:** هیچ تماسِ واقعی با exporter در این sandbox انجام نشد (دانلودنِ
-باینری و اجرای SNMP در فاز G ممنوع بود)؛ parse/normalize در مقابلِ fixtureهای
-دست‌نویس تست شده‌اند و رفتارِ شبکه در مقابلِ transport جعلی. سنجشِ واقعی در سرور مالک
-و در گام G.6 است.
+**What's not verified:** No actual calls to the exporter were made in this sandbox (downloading the
+binaries and SNMP execution were prohibited in phase G); parse/normalize against fixtures
+Manuscripts have been tested and the behavior of the network in front of fake transport. Actual measurement on the owner's server
+And it is in step G.6.
 
-این فایل به‌تنهایی هیچ اثری روی رفتارِ برنامه ندارد: شاخهٔ مصرف‌کننده در
-`core/poller.py` تنها با `USE_SNMP_EXPORTER=1` فعال می‌شود (`exporter_enabled()`).
+This file alone has no effect on the program's behavior: the consumer branch in the
+`core/poller.py` is only enabled with `USE_SNMP_EXPORTER=1` (`exporter_enabled()`).
 
-**گام H.2 — backoff و مدارِ باز:** شمارشِ «چند بار پیاپی نشد؟» در همین کلاینت نگه داشته
-می‌شود (`DeviceState` به‌ازای `(ip, module)`)، چون poller هر ۶۰ ثانیه می‌چرخد و پرینترِ
-خاموش نباید هر بار سه درخواستِ بی‌پاسخ بگیرد. نردبان، `ExporterCircuitOpen` و قاعدهٔ
-«موفقیت ⇒ صفر» پایینِ همین فایل‌اند؛ شرحِ تصمیم و جایگزین‌هایِ ردشده:
-`docs/phase-h-decisions.md` §H.2 (و بدهیِ «state در حافظه» در `docs/tech-debt.md`).
+**Step H.2 — backoff and open circuit:** Count "How many consecutive failures?" kept in the same client
+(`DeviceState` for `(ip, module)`), because the poller rotates every 60 seconds and the printer
+Shutdown should not get three unanswered requests every time. ladder, `ExporterCircuitOpen` and rule
+"Success ⇒ zero" are at the bottom of this file; Description of the decision and rejected alternatives:
+`docs/phase-h-decisions.md` §H.2 (and ``state in memory'' debt in `docs/tech-debt.md`).
 """
 from __future__ import annotations
 
@@ -46,23 +59,23 @@ from dataclasses import dataclass
 
 log = logging.getLogger("PrinterMonitor")
 
-#: نامِ متغیرِ محیطیِ روشن‌کنندهٔ مسیرِ exporter. پیش‌فرض **خاموش** است؛ تا گام G.6 که
-#: مقایسه با مسیرِ SNMPِ مستقیم انجام نشده، روشن‌کردنش توصیه نمی‌شود.
+#: the name of the environment variable clarifying the path of the exporter. The default is **off**; until step G.6 that
+#: Comparison with direct SNMP route is not done, it is not recommended to turn it on.
 ENV_FLAG = "USE_SNMP_EXPORTER"
-#: آدرسِ exporter. فقط برای این خوانده می‌شود که نصبِ exporter روی پورت/ماشینِ دیگری
-#: بدونِ تغییرِ کد ممکن باشد؛ پیش‌فرض localhost است چون مصرف‌کننده روی همان ماشین است.
+#: address of the exporter. It is read only to install the exporter on another port/machine
+#: It is possible without changing the code; The default is localhost because the user is on the same machine.
 ENV_URL = "SNMP_EXPORTER_URL"
 
 DEFAULT_BASE_URL = "http://localhost:9116"
 DEFAULT_TIMEOUT = 5.0
-#: timeoutِ کوتاهِ «آیا exporter هست؟» — این پرس‌وجو در هر poll صدا زده می‌شود.
+#: the short timeout of "is there an exporter?" - This query is called in every poll.
 AVAILABILITY_TIMEOUT = 2.0
 DEFAULT_AUTH = "public_v2"
 
-#: ماژول‌هایی که برای هر برند باید پرسیده شوند تا شکلِ collectorِ همان برند پر شود.
-#: دلیلِ وجودِ `printer_std`: ماژول‌های vendor در spec ما تونر/سینی/در ندارند (برای
-#: مثال `printer_hp` فقط ۱۴ متریک دارد و هیچکدام toner نیست) و آن داده‌ها در MIBِ
-#: استاندارد است.
+#: Modules that must be asked for each brand to fill the collector form of the same brand.
+#: The reason for `printer_std`: vendor modules in our spec do not have toner/tray/door (for
+#: Example `printer_hp` has only 14 metrics and none of them are toner) and those data in MIB
+#: It is standard.
 MODULES_BY_BRAND = {
     "hp": ("printer_hp", "printer_std"),
     "canon": ("printer_canon", "printer_std"),
@@ -70,49 +83,50 @@ MODULES_BY_BRAND = {
 
 
 def exporter_enabled() -> bool:
-    """فقط `USE_SNMP_EXPORTER=1` مسیرِ exporter را روشن می‌کند (پیش‌فرض ۰).
+    """``USE_SNMP_EXPORTER=1'' only turns on the exporter path (default 0).
 
-    عمداً هنگامِ import خوانده نمی‌شود تا تست بتواند با تغییرِ محیط آن را عوض کند.
+    It is intentionally not read during import so that the test can change it by changing the environment.
     """
     return os.environ.get(ENV_FLAG, "0").strip() == "1"
 
 
 class ExporterError(RuntimeError):
-    """خطای خواندن/پارسِ پاسخِ exporter — مصرف‌کننده باید به مسیرِ مستقیم برگردد."""
+    """Error reading/parsing the exporter's response — the consumer must return to the direct path."""
 
 
 
 class ExporterCircuitOpen(ExporterError):
-    """دستگاه در بازهٔ backoff است — این «خطا» نیست، «نوبتِ ما نیست».
+    """The device is in the backoff interval — it's not "error", it's "not our turn".
 
-    زیرکلاسِ `ExporterError` است تا مصرف‌کننده‌هایی که با یک class رفتار می‌کنند
-    (`collect_via_exporter` دقیقاً همین) همان مسیرِ مستقیم را انتخاب کنند؛ ولی نوعِ جدا
-    دارد، چون لاگِ آن مسیر warning است و با پرچمِ روشن یک پرینترِ خاموش هر ۶۰ ثانیه یک
-    هشدارِ تازه می‌ساخت. `retry_in` هم دارد تا عیب‌یابی/تست عددِ باقی‌مانده را ببیند.
+    A subclass of ``ExporterError'' is a consumer that behaves with a class
+    (`collect_via_exporter' is exactly that) choose the same direct path; But a different kind
+    Yes, because the log of that path is a warning, and with the flag on, a printer is turned off every 60 seconds
+    He made a new warning. It also has `retry_in' to debug/test the remaining number.
     """
 
     def __init__(self, message: str, retry_in: float = 0.0):
+        """Create the error with a message and an optional retry delay in seconds."""
         super().__init__(message)
         self.retry_in = float(retry_in)
 
 
-#: ── نردبانِ backoff (گام H.2) ────────────────────────────────────────────────
-#: به‌ازای *شمارِ شکست‌هایِ پیاپی* روی همان `(ip, module)`:
-#:   ۱–۲  ⇒ بی‌درنگ دوباره تلاش کن (خوابِ دستگاه و شلوغیِ لحظه‌ای شبکه زیاد می‌افتد)
-#:   ۳–۵  ⇒ ۵ دقیقه
-#:   ۶–۱۰ ⇒ ۳۰ دقیقه
-#:   >۱۰  ⇒ مدار باز: ۶ ساعت — بعدش دقیقاً **یک** تلاشِ آزمونی، و موفقیت همه‌چیز را صفر می‌کند
+#: ── Backoff ladder (step H.2) ─────────────────────────────────────────────────
+#: for *number of consecutive failures* on the same `(ip, module)`:
+#: 1-2 ⇒ Try again immediately (the device sleeps and the network is temporarily busy)
+#: 3-5 ⇒ 5 minutes
+#: 6-10 ⇒ 30 minutes
+#: >10 ⇒ open circuit: 6 hours — exactly **one** test attempt later, and success resets everything to zero
 #:
-#: تأخیر از *لحظهٔ آخرین شکست* شمرده می‌شود، نه از آخرین تلاشِ ردشده؛ و در زمانِ backoff
-#: هیچ درخواستی نمی‌رود، پس شمارنده هم جلو نمی‌رود — وگرنه سه روزِ قطعیِ یک پرینتر یعنی
-#: ۴۳۲۰ «شکست» و بیرون‌رفتن از هر جدولی.
+#: The delay is counted from *the moment of the last failure*, not from the last failed attempt; And during backoff
+#: No request goes, so the counter doesn't advance either - otherwise three days of downtime for a printer means
+#: 4320 "Failure" and exit from any table.
 BACKOFF_STEPS: tuple[tuple[int, float], ...] = ((2, 0.0), (5, 300.0), (10, 1800.0))
 CIRCUIT_OPEN_AFTER = 10
 CIRCUIT_COOLDOWN = 6 * 60 * 60.0
 
 
 def delay_for_failures(failures: int) -> float:
-    """چند ثانیه باید صبر کرد؟ (تابعِ خالصِ نردبان؛ جدولش در `tests/test_exporter_backoff.py`)."""
+    """How many seconds to wait? (pure ladder function; table in `tests/test_exporter_backoff.py`)."""
     if failures <= 0:
         return 0.0
     for upper, delay in BACKOFF_STEPS:
@@ -123,32 +137,32 @@ def delay_for_failures(failures: int) -> float:
 
 @dataclass
 class DeviceState:
-    """وضعیتِ یک `(ip, module)`.
+    """The status of a `(ip, module)`.
 
-    state در *کلاینت* است نه poller: poller هر چرخه `_exporter_client()` را صدا می‌زند و
-    هیچ تضمینی برایِ عمرِ آن شیء نیست؛ کلاینت تنها جایی است که «پیاپی‌بودن» معنا دارد.
-    فقط دستگاه‌هایِ شکست‌خورده رکورد دارند (موفقیت ⇒ حذفِ رکورد)، پس حافظه با تعدادِ
-    پرینترها رشد نمی‌کند. `next_retry_at` در حافظهٔ زنده است و با reboot می‌پرد — عمدی:
-    بیدار‌شدنِ سرویس نباید یک پرینترِ مرده را ۶ ساعت بلوکه کند.
+    state is in *client*, not poller: poller calls `_exporter_client()` each cycle and
+    There is no guarantee for the life of that object; The client is the only place where "consistency" makes sense.
+    Only failed devices have a record (success ⇒ delete record), so memory with no
+    Printers do not grow. `next_retry_at` is in live memory and jumps on reboot — intentional:
+    Waking up the service should not block a dead printer for 6 hours.
     """
 
     consecutive_failures: int = 0
-    next_retry_at: float = 0.0   # unix ثانیه؛ ۰ = «همین حالا می‌شود تلاش کرد»
+    next_retry_at: float = 0.0   # unix seconds; 0 = "You can try right now"
 
 
 def parse_prometheus_text(text: str) -> dict[str, list[tuple[dict[str, str], float]]]:
-    """متنِ exposition را به `{name: [(labels, value), …]}` تبدیل می‌کند.
+    """Converts exposition text to `{name: [(labels, value), …]}`.
 
-    قوانین (همان چیزی که در `tests/test_exporter_client.py` تست شده):
-      * خطوطِ `#` (HELP/TYPE/…) و خط‌های خالی رد می‌شوند؛
-      * `{name} {value}` و `{name}{labels…} {value}` هر دو پذیرفته می‌شوند؛
-      * مقدار می‌تواند int/float/نمای علمی، `NaN`، `+Inf`/`-Inf` باشد؛
-      * escapingِ داخلِ لیبل (`\\"`, `\\\\`, `\\n`) باز می‌شود؛
-      * سری‌های تکراریِ هم‌نام کنارِ هم می‌مانند (Advisory: ترتیبِ پاسخِ exporter
-        تضمین‌شده نیست؛ برای متریک‌های scalarِ ما آخرین سری خوانده می‌شود —
+    Rules (same as tested in `tests/test_exporter_client.py`):
+      * `#` lines (HELP/TYPE/…) and empty lines are ignored;
+      * `{name} {value}` and `{name}{labels…} {value}` are both accepted;
+      * value can be int/float/scientific representation, `NaN`, `+Inf`/`-Inf`;
+      * escaping inside the label (`\\"`, `\\\\`, `\\n`) is opened;
+      * Repetitive series with the same name stay together (Advisory: the order of the exporter's response
+        Not guaranteed; For our scalar metrics the last series is called —
         `latest_series()`).
-    خطای پارس (سطرِ بی‌شکل یا مقدارِ غیرعددی) `ExporterError` می‌دهد، نه skipِ خاموش:
-    دادهٔ نصفه‌نیمه نباید خودش را به‌جای دادهٔ دستگاه جا بزند.
+    Parse error (shapeless string or non-numeric value) gives `ExporterError', not silent skip:
+    Halfway data should not replace device data.
     """
     out: dict[str, list[tuple[dict[str, str], float]]] = {}
     for lineno, raw in enumerate(text.splitlines(), 1):
@@ -172,6 +186,7 @@ def parse_prometheus_text(text: str) -> dict[str, list[tuple[dict[str, str], flo
 
 
 def _split_name(line: str, lineno: int) -> tuple[str, str]:
+    """Split a metric line into its name part and its value part, honouring label braces."""
     for i, ch in enumerate(line):
         if ch in "{ \t":
             name = line[:i]
@@ -182,8 +197,9 @@ def _split_name(line: str, lineno: int) -> tuple[str, str]:
 
 
 def _parse_value(token: str, lineno: int, name: str) -> float:
-    # خطِ زمانِ Prometheus این سه کلمه را آزاد می‌گذارد؛ ما هم می‌پذیریم و بعداً
-    # مقدارِ غیرمحدود را «دادهٔ نامعتبر» می‌دانیم (finite_value).
+    # The timeline of Prometheus leaves these three words free; We also accept and later
+    # We consider an unlimited value as "invalid data" (finite_value).
+    """Parse a metric value token into a float, accepting NaN and Inf forms."""
     if token in ("NaN", "nan"):
         return float("nan")
     if token in ("+Inf", "Inf", "inf"):
@@ -200,7 +216,7 @@ _ESC_REPL = {"n": "\n", '"': '"', "\\": "\\"}
 
 
 def _parse_labels(blob: str, lineno: int) -> dict[str, str]:
-    """لیبل‌ها را با جداسازیِ «ویرگولِ بیرونِ کوتیشن» می‌شکند."""
+    """Breaks labels by separating them with "comma outside the quotation"."""
     labels: dict[str, str] = {}
     parts: list[str] = []
     buf, in_str, esc = "", False, False
@@ -234,12 +250,14 @@ def _parse_labels(blob: str, lineno: int) -> dict[str, str]:
 
 
 def latest_series(metrics: dict, name: str) -> tuple[dict[str, str], float] | None:
+    """Return the labels and value of the most recent series for a metric name, or None."""
+
     series = metrics.get(name)
     return series[-1] if series else None
 
 
 def metric_value(metrics: dict, name: str, default=None):
-    """مقدارِ scalarِ یک متریک، یا `default`. `NaN`/`Inf` «دادهٔ نامعتبر» است."""
+    """The scalar value of a metric, or `default'. ``NaN''/`Inf' is ``invalid data''."""
     series = latest_series(metrics, name)
     if series is None:
         return default
@@ -250,10 +268,10 @@ def metric_value(metrics: dict, name: str, default=None):
 
 
 def label_value(metrics: dict, name: str, default=None) -> str | None:
-    """متنِ متریک‌های `DisplayString`: مقدارِ لیبلِ هم‌نامِ متریک (collector.go).
+    """Metrics text `DisplayString`: the label value of the same metric name (collector.go).
 
-    fallback: اگر نسخه‌ای متن را در لیبلِ دیگری گذاشت، اولین لیبلِ غیراز‌`instance`/
-    `module` خوانده می‌شود — و اگر هیچ لیبلی نبود `default`.
+    fallback: if a copy of the text is placed in another label, the first label other than `instance`/
+    `module` is called — and `default` if there is no label.
     """
     series = latest_series(metrics, name)
     if series is None:
@@ -268,37 +286,40 @@ def label_value(metrics: dict, name: str, default=None) -> str | None:
 
 
 class ExporterClient:
-    """کوئریِ ماژول‌ها از exporter. هیچ وابستگیِ دیگری به کدِ برنامه ندارد."""
+    """Module query from exporter. It has no other dependencies on the program code."""
 
     def __init__(self, base_url: str = DEFAULT_BASE_URL, timeout: float = DEFAULT_TIMEOUT,
                  open_fn=None, clock=None):
+        """Create the exporter client with its base URL, timeout and retry settings."""
         self.base_url = base_url.rstrip("/")
         self.timeout = float(timeout)
-        # باز‌شدنِ hook برای تست (بدونِ monkeypatchِ global):
+        # Opening the hook for testing (without global monkeypatch):
         self._open = open_fn or urllib.request.urlopen
-        #: ساعتِ inject-پذیر: نردبان با «ثانیه» کار می‌کند و تست نباید ۶ ساعت بخوابد.
+        #: Injectable clock: The ladder works with "seconds" and the test should not sleep for 6 hours.
         self._clock = clock or time.time
-        #: `(ip, module) → DeviceState` — فقط برایِ دستگاه‌هایی که *حداقل یک* شکست دارند.
+        #: `(ip, module) → DeviceState` — only for devices with *at least one* failure.
         self._states: dict[tuple[str, str], DeviceState] = {}
-        # poller هر پرینتر را در thread خودش می‌زند (core/poller.py:384) ⇒ این dict مشترک است.
+        # poller polls each printer in its own thread (core/poller.py:402) ⇒ this dict is shared.
         self._states_lock = threading.Lock()
 
     # ── URL ────────────────────────────────────────────────────────────────
     def url_for(self, ip: str, module: str, auth: str = DEFAULT_AUTH) -> str:
+        """Build the snmp_exporter scrape URL for one printer and SNMP module."""
+
         query = urllib.parse.urlencode({"target": ip, "module": module, "auth": auth})
         return f"{self.base_url}/snmp?{query}"
 
-    # ── خواندن ─────────────────────────────────────────────────────────────
+    # Reading
     def query(self, ip: str, module: str = "printer_std",
               auth: str = DEFAULT_AUTH) -> dict:
-        """یک ماژول را می‌خواند و dictِ `{name: [(labels, value), …]}` برمی‌گرداند.
+        """Reads a module and returns a dict of `{name: [(labels, value), …]}`.
 
-        هر خطای شبکه/HTTP یا پارس → `ExporterError` (مصرف‌کننده باید به مسیرِ
-        مستقیم برگردد؛ دادهٔ نصفه‌نیمه تحویل نمی‌دهیم).
+        Any network/HTTP error or pars → `ExporterError` (the user must go to the path of
+        return straight; We do not deliver half data).
 
-        **گام H.2:** اگر `(ip, module)` در بازهٔ backoff باشد *هیچ درخواستی* نمی‌رود و
-        `ExporterCircuitOpen` بالا می‌آید. هر `ExporterError` (شبکه، HTTP، یا پارس) شمارنده
-        را یکی جلو می‌برد و پاسخِ سالم رکورد را کلاً حذف می‌کند.
+        **Step H.2:** If `(ip, module)` is in the backoff interval, *no request* will be sent and
+        `ExporterCircuitOpen` comes up. Any `ExporterError` (network, HTTP, or Pars) counters
+        advances by one and deletes the record's healthy response altogether.
         """
         wait = self.retry_in(ip, module)
         if wait > 0:
@@ -329,21 +350,21 @@ class ExporterClient:
         return metrics
 
     def query_brand(self, ip: str, brand: str, auth: str = DEFAULT_AUTH) -> dict | None:
-        """ماژول‌های آن برند را خوانده و یکی می‌کند. برندِ ناشناخته → None.
+        """It reads and integrates the modules of that brand. Unknown brand → None.
 
-        اگر همهٔ ماژول‌ها خالی برگشتند، dictِ خالی برمی‌گردد (نه None)؛ تشخیصِ
-        «دادهٔ قابل‌استفاده هست یا نه» با `exporter_adapter.exporter_to_collector_shape`
-        است که در آنجا روی None شدن تصمیم گرفته می‌شود.
+        If all modules return empty, an empty dict is returned (not None); diagnosis
+        "Is the data usable or not" with `exporter_adapter.exporter_to_collector_shape`
+        is where it is decided to become None.
 
-        **گام H.2:** اگر *هر یک* از ماژول‌ها در backoff باشند، `ExporterCircuitOpen` (پیش ازِ
-        هیچ درخواستی).
+        **Step H.2:** If *any* of the modules are in backoff, `ExporterCircuitOpen` (before
+        no request).
         """
         modules = MODULES_BY_BRAND.get((brand or "").strip().lower())
         if not modules:
             return None
-        # H.2: یک ماژولِ در backoff ⇒ کلِ برند رد می‌شود. دلیل: شکلِ collector با نیمی از
-        # ماژول‌ها کامل نمی‌شود (HP = printer_hp + printer_std) و snapshotِ نصفه از نبودِ
-        # snapshot بدتر است — آنگاه poller مسیرِ مستقیم را می‌نویسد که کامل است.
+        # H.2: A module in backoff ⇒ the whole brand is rejected. Reason: the form of collector with half of
+        # The modules are not complete (HP = printer_hp + printer_std) and the snapshot is half missing
+        # snapshot is worse — then the poller writes the direct path, which is complete.
         for module in modules:
             wait = self.retry_in(ip, module)
             if wait > 0:
@@ -355,9 +376,9 @@ class ExporterClient:
             merged.update(self.query(ip, module, auth))
         return merged
 
-    # ── backoff / circuit breaker (گام H.2) ────────────────────────────────
+    # ── backoff / circuit breaker (step H.2)
     def retry_in(self, ip: str, module: str) -> float:
-        """چند ثانیه تا تلاشِ بعدی؟ ۰ یعنی «همین حالا»."""
+        """How many seconds until the next attempt? 0 means "right now"."""
         with self._states_lock:
             st = self._states.get((ip, module))
             if st is None or st.next_retry_at <= 0:
@@ -365,15 +386,15 @@ class ExporterClient:
             return max(0.0, st.next_retry_at - self._clock())
 
     def consecutive_failures(self, ip: str, module: str) -> int:
-        """شمارشِ شکست‌هایِ پیاپی (۰ اگر رکوردی نیست)."""
+        """Count of consecutive failures (0 if no record)."""
         with self._states_lock:
             st = self._states.get((ip, module))
             return st.consecutive_failures if st else 0
 
     def device_states(self) -> dict:
-        """نمایِ خواندنیِ only-ِ‌دستگاه‌هایِ در backoff — برایِ عیب‌یابی/تست (و وبِ آینده).
+        """Read-only view of devices in backoff — for troubleshooting/testing (and future web).
 
-        کلیدِ `"ip|module"` رشته‌ای است نه tuple، تا در JSON هم قابلِ نمایش بماند.
+        The key ``ip|module'' is a string, not a tuple, so that it can be displayed in JSON.
         """
         now = self._clock()
         with self._states_lock:
@@ -386,7 +407,7 @@ class ExporterClient:
                 for (ip, module), st in items}
 
     def reset_backoff(self, ip: str | None = None) -> int:
-        """پاک کردنِ state (دستی/تست). `ip=None` یعنی همه. تعدادِ پاک‌شده را برمی‌گرداند."""
+        """Clear state (manual/test). `ip=None` means all. Returns the cleared number."""
         with self._states_lock:
             keys = [k for k in self._states if ip is None or k[0] == ip]
             for k in keys:
@@ -394,7 +415,7 @@ class ExporterClient:
         return len(keys)
 
     def _note_failure(self, ip: str, module: str, exc: Exception | None = None) -> DeviceState:
-        """یک شکست: شمارنده +۱ و `next_retry_at` از نردبان. snapshot برمی‌گرداند."""
+        """A failure: +1 counter and `next_retry_at' from the ladder. Returns a snapshot."""
         key = (ip, module)
         with self._states_lock:
             st = self._states.setdefault(key, DeviceState())
@@ -403,35 +424,35 @@ class ExporterClient:
             st.next_retry_at = (self._clock() + delay) if delay > 0 else 0.0
             snap = DeviceState(st.consecutive_failures, st.next_retry_at)
         if snap.consecutive_failures == CIRCUIT_OPEN_AFTER + 1:
-            # دقیقاً یک بار، در لحظهٔ باز شدنِ مدار؛ بعد از آن سکوت (لاگِ poll نباید سیلِ
-            # هشدار شود) و بستنِ مدار هم بی‌صداست — دادهٔ تازه در مسیرِ اصلی لاگ دارد.
+            # exactly once, at the moment of opening the circuit; After that silence (the poll log should not flood
+            # be warned) and closing the circuit is also silent - it has new data in the main log path.
             log.warning("exporter: مدارِ %s/%s باز شد — تا %.1f ساعت هیچ کوئری‌ای نمی‌رود و "
                         "مسیرِ مستقیم می‌نویسد (شکستِ آخر: %s)",
                         ip, module, CIRCUIT_COOLDOWN / 3600.0, exc)
         return snap
 
     def _note_success(self, ip: str, module: str) -> None:
-        """موفقیت ⇒ صفر؛ رکورد حذف می‌شود تا `_states` بزرگ نشود."""
+        """success ⇒ zero; The record is deleted so that `_states` is not enlarged."""
         with self._states_lock:
             self._states.pop((ip, module), None)
 
-    # ── در دسترس بودن ──────────────────────────────────────────────────────
+    # Availability
     def is_available(self) -> bool:
-        """`GET /` با timeoutِ کوتاه. هر خطایی → False (هیچ استثنایی بالا نمی‌آید).
+        """`GET /` with short timeout. Any error → False (no exception is raised).
 
-        عمداً پاسخِ HTTP را چک نمی‌کند که «exporter سالم است» را ادعا کند؛ فقط می‌گوید
-        جایی که انتظارش را داریم چیزی گوش می‌دهد.
+        It intentionally does not check the HTTP response that claims "exporter is healthy"; He just says
+        Something is listening where we expect it.
         """
         url = f"{self.base_url}/"
         try:
             with self._open(url, timeout=AVAILABILITY_TIMEOUT) as resp:
                 status = getattr(resp, "status", None) or resp.getcode()
                 return int(status) == 200
-        except Exception as exc:  # timeout/DNS/URLError — هر چیزی
+        except Exception as exc:  # timeout/DNS/URLError — anything
             log.debug("exporter unavailable at %s: %s", url, exc)
             return False
 
 
 def client_from_env() -> ExporterClient:
-    """کلاینتِ ساخته‌شده از محیط؛ هیچ ترافیکی در زمانِ ساخت انجام نمی‌شود."""
+    """Client built from the environment; No traffic is done at build time."""
     return ExporterClient(os.environ.get(ENV_URL, DEFAULT_BASE_URL))

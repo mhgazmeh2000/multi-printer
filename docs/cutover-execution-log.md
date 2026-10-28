@@ -1,4 +1,4 @@
-# لاگ اجرای cutover — SQLite → PostgreSQL (اجرای واقعی، سرور مالک)
+# Cutover execution log — SQLite → PostgreSQL (real run, owner's server)
 
 > افزونهٔ [`docs/cutover-runbook.md`](cutover-runbook.md). این فایل **شاهدِ اجرا** است، نه
 > دستورالعمل: هر ردیف، خروجی واقعیِ همان session است. مبنای مقایسه با سندباکس:
@@ -13,7 +13,7 @@
 > `e682c5989900dc45aa280a94ce37af7b77f72bea90bbf84fdc1605e9fe30bbbc`).
 > گزارش ماشینی چک‌لیست آمادگی: [`caches_readiness.json`](../caches_readiness.json).
 
-## ۱. خلاصهٔ وضعیت
+## 1. Status summary
 
 | گام (runbook) | نتیجه | شاهد |
 |---|---|---|
@@ -30,7 +30,7 @@
 | ۹ — ری‌استارت سرویس | — اجرا نشد | تصمیم مالک (cutover رسمی) |
 | ۱۰ — marker cutover | — نوشته نشد | «وضعیت درست پیش از روز اجرا» |
 
-## ۲. مرحلهٔ ۰ — بکاپ و پیش‌نیازها
+## 2. Step 0 — Backup and prerequisites
 
 ```text
 mkdir -p backups && cp logs.db backups/logs-20261013-081509-pre.db
@@ -58,7 +58,7 @@ python -c "sqlite3 … PRAGMA integrity_check"            ⇒ ok
 2. **۳ ردیف** با timestamp نیازمند تصمیم/بازبینی دستی است (ردیف‌های پیش از cutover).
    تصمیم این ردیف‌ها کار **F.5** است و cutover را متوقف نمی‌کند.
 
-## ۳. مرحلهٔ ۱ — مهاجرت (گام‌های ۴ و ۶)
+## 3. Step 1 — Migration (steps 4 and 6)
 
 ```text
 python tools/migrate_sqlite_to_pg.py --source logs.db --target "host=127.0.0.1 dbname=printguard …" --dry-run
@@ -96,7 +96,7 @@ MAX(timestamp) logs : SQLite=2026-10-12T11:42:26.819226 | PG=…819226Z | ✔
 لاگ‌های ۳۰ روز اخیر  : SQLite=10012 | PG=10012 | ✔
 ```
 
-## ۴. تأیید مستقل (بیرون از ابزار مهاجرت)
+## 4. Independent verification (outside the migration tool)
 
 پس از همهٔ اجراهای تست، مستقیماً از `psycopg` + `sqlite3` (read-only) پرسیده شد:
 
@@ -106,7 +106,7 @@ alembic head = 0005
 public: n_tup_upd = 0 | n_tup_del = 0   (فقط insert مهاجرت)
 ```
 
-## ۵. گیت تست‌ها (گام ۸) — و صادقانه: سبز کامل نشد
+## 5. Test gate (step 8) — and honestly: not fully green
 
 سه حالت اجرا شد. علت هر شکست ریشه‌یابی شد و در پایان، باگ‌های واقعی **اصلاح و بازآزمایی** شدند.
 
@@ -184,7 +184,7 @@ SHA-256 logs.db = e682c598…bbbc  (بدون تغییر از آغاز اجرا)
    و **`tests/test_cutover_rehearsal.py` در یک دیتابیس قرنطینه ⇒ `1 passed` در ۱۷.۷s**
    (dry-run، کپی، `setval`، verify و rollback کامل).
 
-## ۶. حادثهٔ عملیاتی: پر شدن دیسک (ثبت‌شده، پاک‌سازی‌شده)
+## 6. Operational incident: disk full (recorded and cleaned up)
 
 اجرای سوئیت، در `tmp` پایتون **۱۸GB** جمع کرد — چون چند تست `shutil.copyfile("logs.db", …)`
 می‌کنند و `logs.db` این ماشین ۳۹۴MB است (در سندباکس ۱۶۷KB بود). نتیجه:
@@ -204,7 +204,7 @@ C: 100G  100G  0  100%      ⇒  sqlite3.OperationalError: database or disk is f
 - به همین دلیل ۵ شکستِ `test_oid_matrix`/`test_offline_resilience` «آلودگی اجرا» شمرده
   می‌شوند و باید پس از پاک‌سازی دوباره اجرا شوند.
 
-## ۷. گام‌های اجرانشده و ریسک باقی‌مانده
+## 7. Steps not executed and remaining risk
 
 1. **گام ۹ (ری‌استارت سرویس)** و **گام ۱۰ (marker + رشد `public.logs` در یک چرخهٔ polling)**
    اجرا نشده‌اند: تا این لحظه **هیچ نوشتنی از Flask در PG ثبت نشده** (گیت `n_tup_upd/del` و

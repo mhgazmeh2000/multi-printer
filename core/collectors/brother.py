@@ -1,6 +1,18 @@
-"""جمع‌آوری داده از Brother (مونو و رنگی) با fallback کامل"""
+# =============================================================================
+# @file:         core/collectors/brother.py
+# @brief:        Collects status and counters from Brother printers (mono and colour).
+# @details:      Responsibilities: Read Brother SNMP and HTTP data with full fallbacks and map
+#                toner levels.
+#                Main API: collect_brother()
+#                Side effects: none at import time
+# @dependencies: internal: core, core.collectors.base, core.database, core.time_utils
+# @notes:        None.
+# =============================================================================
+
+"""Data collection from Brother (mono and color) with full fallback"""
 import re, time, logging
 from datetime import datetime, timezone
+
 from core.collectors.base import si, ss, _g, _counters_event, fetch_first_web_page
 from core import store
 from core.time_utils import to_utc_z, utc_now_iso
@@ -9,10 +21,10 @@ log = logging.getLogger("PrinterMonitor")
 
 
 def _scrape_brother_toners(ip: str, timeout: float = 4.0):
-    """استخراج درصد تونر/درام از پنل وب Brother (EWS) — fallback برای وقتی SNMP
-    درصد نمی‌دهد (مثل خانواده‌ی NC-8300h که در جدول مصرفی‌ها level=-3 برمی‌گرداند).
+    """Extract Toner/Drum Percentage from Brother Web Panel (EWS) — fallback when SNMP
+    It does not give a percentage (like the NC-8300h family, which returns level=-3 in the consumption table).
 
-    خروجی: دیکشنری {"black": 0-100، اختیاری "drum": 0-100} یا None.
+    Output: dictionary {"black": 0-100, optional "drum": 0-100} or None.
     """
     urls = [
         f"http://{ip}/general/information.html",
@@ -27,17 +39,17 @@ def _scrape_brother_toners(ip: str, timeout: float = 4.0):
         return None
     log.debug(f"Brother scrape {ip}: fetched {used} ({len(page)} chars)")
 
-    # entityها را باز کن — صفحات واقعی Brother (مثل MFC-8510DN با فرم‌ور NC-8300h)
-    # فاصله‌ها را به‌صورت &#32; می‌نویسند: «Remaining&#32;Life»، «Drum&#32;Unit*»
+    # Open entities — Genuine Brother pages (eg MFC-8510DN with NC-8300h form factor)
+    # Intervals are written as: "Remaining Life", "Drum Unit*"
     import html as _html
     text = _html.unescape(page)
 
     result = {}
 
-    # ۱) پارس ساخت‌یافته‌ی جفت‌های <dt>نام</dt><dd>مقدار</dd> در بلوک «Remaining
-    #    Life» (تأییدشده روی MFC-8510DN واقعی). در این مدل‌ها تونر اصلاً در لیست
-    #    نیست (SNMP هم level=-3 می‌دهد) — پس اگر پیدا نشد هیچ عددی جعل نمی‌کنیم.
-    #    بعضی مدل‌ها درصد را در جفت بعدی می‌گذارند: <dt>(% of Life Remaining)</dt>
+    # 1) Structured parsing of <dt>name</dt><dd>value</dd> pairs in the "Remaining" block
+    # Life" (verified on real MFC-8510DN). In these models, the toner is not in the list at all
+    # It is not (SNMP also gives level=-3) — so if it is not found, we will not fake any number.
+    # Some models put the percentage in the next pair: <dt>(% of Life Remaining)</dt>
     pairs = re.findall(r"<dt>\s*([^<]{1,60}?)\s*</dt>\s*<dd>([\s\S]{0,120}?)</dd>", text)
     last_name = None
     for dt_text, dd_text in pairs:
@@ -45,7 +57,7 @@ def _scrape_brother_toners(ip: str, timeout: float = 4.0):
         m = re.search(r"\(?\s*(\d{1,3}(?:\.\d+)?)\s*%", dd_text)
         is_ratio_label = re.search(r"%\s*of\s*life", name, re.IGNORECASE) is not None
         if is_ratio_label and last_name:
-            name = last_name  # درصدِ جفت قبلی: <dt>(% of Life Remaining)</dt>
+            name = last_name  # Percentage of previous pair: <dt>(% of Life Remaining)</dt>
         if not m:
             if not is_ratio_label:
                 last_name = name
@@ -64,8 +76,8 @@ def _scrape_brother_toners(ip: str, timeout: float = 4.0):
             result[key] = int(round(val))
         last_name = name
 
-    # ۲) پترن‌های متنی رایج پنل Brother (قدیمی و جدید) — [\s\S] به‌جای . چون
-    # بین برچسب و عدد معمولاً تگ‌های <td>/<img> قرار می‌گیرد
+    # 2) Common text patterns of Brother panel (old and new) — [\s\S] instead of. because
+    # <td>/<img> tags are usually placed between the tag and the number
     if "black" not in result:
         for pat in (
             r"Toner\s*Remaining[\s\S]{0,80}?(\d{1,3})\s*%",
@@ -86,7 +98,7 @@ def _scrape_brother_toners(ip: str, timeout: float = 4.0):
                 result["drum"] = int(m.group(1))
                 break
 
-    # ۳) صفحات قدیمی: نوار تونر به‌صورت width یا نام فایل تصویر
+    # 3) Old pages: toner strip as width or image file name
     if "black" not in result:
         m = re.search(r"[Tt]oner[\s\S]{0,150}?width\s*[:=]\s*[\"']?\s*(\d{1,3})\s*%", text)
         if m and 0 <= int(m.group(1)) <= 100:
@@ -112,6 +124,7 @@ _BRO_TONER_COLOR_MAP = {
 }
 
 def _bro_toner_key(name: str) -> str:
+    """Map a Brother toner description to its colour key (black, cyan, magenta or yellow)."""
     n = name.lower()
     for kw, key in _BRO_TONER_COLOR_MAP.items():
         if kw in n:
@@ -119,9 +132,12 @@ def _bro_toner_key(name: str) -> str:
     return None
 
 def collect_brother(ip: str, name: str, community: str, start: float) -> dict:
+    """Collect status, counters and toner levels from a Brother printer."""
+
     try:
-        # افزایش تایم‌اوت کلی به ۱۵ ثانیه
+        # Increase the total timeout to 15 seconds
         def g(oid, timeout=1.5):
+            """Read one SNMP OID with a time budget; returns None once the budget is exhausted."""
             if time.time() - start > 15.0: return None
             return _g(ip, oid, community, timeout=timeout)
 
@@ -139,8 +155,8 @@ def collect_brother(ip: str, name: str, community: str, start: float) -> dict:
         if fw == "N/A": fw = ss(g("1.3.6.1.4.1.2435.2.3.9.1.1.1.1.3.0"), "N/A")
 
         total = si(g("1.3.6.1.2.1.43.10.2.1.4.1.1"))
-        
-        # ═══ Retry برای total=0 مشکوک ═══
+
+        # ═══ Retry for total=0 suspicious ═══
         prev_data = store._prev.get(ip) or {}
         prev_total = prev_data.get("print_total") if prev_data else None
         if total == 0 and prev_total is not None and prev_total > 1000:
@@ -151,7 +167,7 @@ def collect_brother(ip: str, name: str, community: str, start: float) -> dict:
                 log.warning(f"Brother {ip}: retry successful → total={retry_total}")
                 total = retry_total
             else:
-                # ✅ باگ: ثبت خطا و نگهداری total=0 (نه prev_total)
+                # ✅ Bug: error registration and maintaining total=0 (not prev_total)
                 log.error(f"Brother {ip}: retry failed, recording SNMP error")
                 from core.database import add_event
                 add_event(ip, "SNMP_ERROR", {
@@ -165,7 +181,7 @@ def collect_brother(ip: str, name: str, community: str, start: float) -> dict:
         toners = {}
         has_color_toner = False
 
-        # ابتدا OID اختصاصی Brother را برای تونر مشکی امتحان کن.
+        # First, try Brother's proprietary OID for black toner.
         brother_black = si(g("1.3.6.1.4.1.2435.2.3.9.4.2.1.5.5.1.1"), -1)
         if 0 <= brother_black <= 100:
             toners["black"] = {

@@ -1,16 +1,27 @@
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tests/test_exporter_adapter.py
+# @brief:        Tests for the snmp_exporter-to-collector adapter (step G.5.3).
+# @details:      Responsibilities: Check metric mapping for each brand.
+#                Main API: _FakeClient, 37 test functions
+#                Side effects: network I/O
+# @dependencies: internal: core, core.collectors, core.collectors.canon, core.collectors.hp,
+#                core.enhanced_collector, core.exporter_client | external: pytest
+# @notes:        None.
+# =============================================================================
+
 """
-تست‌های `core/collectors/exporter_adapter.py` (گام G.5.3).
+`core/collectors/exporter_adapter.py` tests (step G.5.3).
 
-داده، fixtureِ دست‌نویس است (`tests/fixtures/exporter_response_*.txt`) و انتظارها
-عددِ صریح‌اند — نه دوباره‌حسابیِ فرمولِ adapter، وگرنه تست فقط خودش را تأیید می‌کرد.
-همین «عددِ صریح» بودن، آینه‌بودنِ فرمول‌ها را با `collect_hp`/`collect_canon` می‌سنجد:
+The data is the handwritten fixture (`tests/fixtures/exporter_response_*.txt`) and the expectations
+They are explicit numbers — not a recalculation of the adapter formula, otherwise the test would only validate itself.
+The same "explicit number" measures the mirroring of formulas with `collect_hp`/`collect_canon`:
 
-  ۱) کلیدهای خروجی = کلیدهایِ returnِ خودِ collectorها (از AST، نه از حافظه)؛
-  ۲) شمارنده‌ها/تونر/سینی/هشدار با همان آستانه‌ها و همان defaultها؛
-  ۳) `ignore_values` دقیقاً همان ۳۱ متریکِ `monitoring/snmp.yml` و نه یکی بیشتر/کمتر؛
-  ۴) مسیرهای None: برندِ آینه‌سازی‌نشده، پاسخِ خالی، خطای exporter — و اینکه هیچ
-     اثرِ جانبی (رویداد/DB/وب) در adapter نیست.
+  1) output keys = return keys of the collectors themselves (from AST, not from memory);
+  2) counters/toner/tray/warning with the same thresholds and the same defaults;
+  3) `ignore_values` exactly the same 31 metrics as `monitoring/snmp.yml` and not one more/less;
+  4) None routes: unmirrored brand, empty response, exporter error — and none
+     The side effect (event/DB/web) is not in the adapter.
 """
 
 from __future__ import annotations
@@ -29,6 +40,7 @@ SNMP_YML = ROOT / "monitoring" / "snmp.yml"
 
 
 def metrics_for(*names: str) -> dict:
+    """Helper: metrics for."""
     from core.exporter_client import parse_prometheus_text
 
     merged: dict = {}
@@ -39,34 +51,36 @@ def metrics_for(*names: str) -> dict:
 
 @pytest.fixture(autouse=True)
 def no_web_by_default(monkeypatch):
-    """وب‌اسکرپ‌ها در *سراسرِ* این فایل بی‌اثرند، مگر تستی صریحاً جایشان را بگیرد.
+    """Web scraps are useless *throughout* this file, unless a test explicitly replaces them.
 
-    بدونِ این، هر تستِ مسیرِ کامل (collect_via_exporter) به 172.16.0.5 زنگ می‌زد —
-    یعنی سوئیتِ آفلاینِ repo به شبکه وابسته می‌شد.
+    Without this, any full path test (collect_via_exporter) would call 172.16.0.5 —
+    That is, the offline repo suite was dependent on the network.
     """
     originals = {"hp": ea._scrape_hp_toners, "canon": ea._scrape_canon_toners,
-                  "key": ea._hp_toner_key}      # تستِ هویت این‌ها را می‌خواهد
+                  "key": ea._hp_toner_key}      # The identity test requires these
     calls = []
     monkeypatch.setattr(ea, "_scrape_hp_toners", lambda ip, timeout=4.0: calls.append(("hp", ip)) or None)
     monkeypatch.setattr(ea, "_scrape_canon_toners",
                         lambda ip, timeout=3.0: calls.append(("canon", ip)) or None)
-    ea._WARNED_UNSUPPORTED.clear()          # هشدارِ «یک‌بار» بینِ تست‌ها نشت نکند
+    ea._WARNED_UNSUPPORTED.clear()          # A "one time" alert should not leak between tests
     originals["calls"] = calls
     return originals
 
 
 @pytest.fixture()
 def hp_metrics():
+    """Helper: hp metrics."""
     return metrics_for("exporter_response_sample.txt", "exporter_response_std.txt")
 
 
 @pytest.fixture()
 def canon_metrics():
+    """Helper: canon metrics."""
     return metrics_for("exporter_response_canon.txt", "exporter_response_canon_std.txt")
 
 
 def _returned_keys(collector_file: str, func_name: str) -> set[str]:
-    """کلیدهای dictِ returnِ مسیرِ موفقِ یک collector — از AST، بدونِ import."""
+    """return dict keys of a successful path of a collector — from AST, without import."""
     tree = ast.parse((ROOT / "core" / "collectors" / collector_file).read_text(encoding="utf-8"))
     fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == func_name)
     tries = [n for n in ast.walk(fn) if isinstance(n, ast.Try)]
@@ -76,8 +90,9 @@ def _returned_keys(collector_file: str, func_name: str) -> set[str]:
     return {k.value for k in last.value.keys}
 
 
-# ── ۱) شکل ────────────────────────────────────────────────────────────────
+# ── 1) Fig.
 def test_hp_shape_has_exactly_the_collect_hp_keys(hp_metrics):
+    """Verifies hp shape has exactly the collect hp keys."""
     shape = ea.exporter_to_collector_shape("172.16.0.5", "hp", hp_metrics, name="HP-05")
     assert shape is not None
     assert set(shape) == _returned_keys("hp.py", "collect_hp")
@@ -87,30 +102,34 @@ def test_hp_shape_has_exactly_the_collect_hp_keys(hp_metrics):
 
 
 def test_canon_shape_has_exactly_the_collect_canon_keys(canon_metrics):
+    """Verifies canon shape has exactly the collect canon keys."""
     shape = ea.exporter_to_collector_shape("172.16.0.9", "canon", canon_metrics, name="iR")
     assert set(shape) == _returned_keys("canon.py", "collect_canon")
     assert shape["brand"] == "canon"
 
 
 def test_name_falls_back_to_ip_and_poll_ms_is_zero_without_start(hp_metrics):
+    """Verifies name falls back to ip and poll ms is zero without start."""
     shape = ea.exporter_to_collector_shape("172.16.0.5", "hp", hp_metrics)
     assert shape["name"] == "172.16.0.5" and shape["poll_ms"] == 0
-    assert shape["last_poll"].endswith("Z")            # قراردادِ timestamp مخزن
+    assert shape["last_poll"].endswith("Z")            # Repository timestamp contract
 
 
-# ── ۲) اعداد ──────────────────────────────────────────────────────────────
+# ── 2) Numbers
 def test_hp_counters_are_the_fixture_arithmetic(hp_metrics):
+    """Verifies hp counters are the fixture arithmetic."""
     counters = ea.exporter_to_collector_shape("172.16.0.5", "hp", hp_metrics)["counters"]
-    # bro_total 12345 · hp_print_color 1200 → black_white = 12345 - 1200 (فرمولِ hp)
+    # bro_total 12345 · hp_print_color 1200 → black_white = 12345 - 1200 (hp formula)
     assert counters["total"] == 12345
     assert counters["full_color"] == 1200
     assert counters["black_white"] == 11145
     assert counters["printer"] == 12345
     assert counters["copy"] == 930          # hp_copy_mono 900 + hp_copy_color 30
-    assert counters["fax"] is None          # hp_fax در پاسخ نیست ⇒ defaultِ -1 ⇒ None
+    assert counters["fax"] is None          # hp_fax is not responding ⇒ default is -1 ⇒ None
 
 
 def test_hp_device_strings_and_uptime(hp_metrics):
+    """Verifies hp device strings and uptime."""
     device = ea.exporter_to_collector_shape("172.16.0.5", "hp", hp_metrics)["device"]
     assert device == {
         "model": "HP LaserJet Pro M402dn",
@@ -121,6 +140,7 @@ def test_hp_device_strings_and_uptime(hp_metrics):
 
 
 def test_hp_toner_percent_and_status(hp_metrics):
+    """Verifies hp toner percent and status."""
     toners = ea.exporter_to_collector_shape("172.16.0.5", "hp", hp_metrics)["toners"]
     assert toners["black"] == {
         "level": 42, "status": "ok", "name": "Black Toner", "remaining": 1344, "max": 3200,
@@ -128,14 +148,14 @@ def test_hp_toner_percent_and_status(hp_metrics):
 
 
 def test_hp_drum_slot_uses_the_generic_key(hp_metrics):
-    """اسلاتِ ۲ با نامِ «Imaging Drum» هیچ رنگی نمی‌گیرد ⇒ کلیدِ `toner_2`.
+    """Slot 2 named "Imaging Drum" does not receive any color ⇒ `toner_2` key.
 
-    این تست قبلاً رفتارِ باگ‌زده را pin کرده بود (TD-016: تطبیقِ زیررشته، «m» در
-    «iMaging» ⇒ `magenta`). با رفعِ `_hp_toner_key` در `core/collectors/hp.py`، انتظار
-    عوض شد و **خاصیتِ آینه‌بودن** را سنجیده نگه می‌دارد: adapter تابعِ همان collector را
-    import می‌کند، پس هر تغییرِ آن‌جا این‌جا هم بی‌دررو بازتاب دارد و این تست همان را
-    قرمز می‌کند تا دو مسیر جدا از هم حرکت نکنند. `tests/test_hp_toner_key.py` قاعده را
-    در خودِ collector قفل می‌کند.
+    This test previously pinned the buggy behavior (TD-016: substring matching, "m" in
+    "iMaging" ⇒ `magenta'). By fixing `_hp_toner_key` in `core/collectors/hp.py`, expect
+    It was changed and it keeps the **property of being a mirror** considered: the adapter function of the same collector
+    imports, so every change there is immediately reflected here, and this test is the same
+    It turns red so that the two paths do not move separately. `tests/test_hp_toner_key.py` rule
+    It locks in the collector itself.
     """
     toners = ea.exporter_to_collector_shape("172.16.0.5", "hp", hp_metrics)["toners"]
     assert toners["toner_2"] == {
@@ -145,6 +165,7 @@ def test_hp_drum_slot_uses_the_generic_key(hp_metrics):
 
 
 def test_hp_trays_status_thresholds(hp_metrics):
+    """Verifies hp trays status thresholds."""
     trays = ea.exporter_to_collector_shape("172.16.0.5", "hp", hp_metrics)["trays"]
     assert trays == [
         {"name": "Tray 1", "level": 130, "capacity": 250, "status": "medium"},   # 52 %
@@ -153,30 +174,32 @@ def test_hp_trays_status_thresholds(hp_metrics):
 
 
 def test_canon_counters_and_mf_precedence(canon_metrics):
+    """Verifies canon counters and mf precedence."""
     counters = ea.exporter_to_collector_shape("172.16.0.9", "canon", canon_metrics)["counters"]
-    # canon_total (MF) بر bro_total ترجیح دارد؛ copy/printer از شاخهٔ MF
+    # canon_total (MF) is preferred over bro_total; copy/printer from the MF branch
     assert counters["total"] == 12000
     assert counters["printer"] == 9000            # canon_print
     assert counters["copy"] == 2500               # canon_copy
-    assert counters["full_color"] == 4000         # bro_color (< total ⇒ معتبر)
+    assert counters["full_color"] == 4000         # bro_color (< total ⇒ valid)
     assert counters["black_white"] == 8000        # bw_std
-    assert counters["fax"] is None                # canon آن را در legacy ندارد
+    assert counters["fax"] is None                # Canon does not have it in legacy
 
 
 def test_canon_toners_and_open_cover_alert(canon_metrics):
+    """Verifies canon toners and open cover alert."""
     shape = ea.exporter_to_collector_shape("172.16.0.9", "canon", canon_metrics)
     assert shape["toners"]["black"]["level"] == 62 and shape["toners"]["black"]["status"] == "ok"
     assert shape["toners"]["cyan"]["level"] == 18 and shape["toners"]["cyan"]["status"] == "low"
     assert shape["toners"]["magenta"]["source"] == "snmp_unavailable"
     assert shape["toners"]["magenta"]["level"] is None
     assert shape["trays"] == [{"name": "Cassette 1", "level": 500, "capacity": 700,
-                               "status": "medium"}]           # tray2_* نبود ⇒ skip
+                               "status": "medium"}]           # tray2_* was not there ⇒ skip
     assert shape["alerts"] == [{"message": "درب پرینتر باز است", "code": 3}]
     assert shape["device"]["uptime_str"] == "2d 00:00"        # 17280000/100 = 172800
 
 
 def test_canon_lbp_path_when_no_mf_counters(canon_metrics):
-    """بدونِ canon_total/alt_total، شاخهٔ LBP می‌آید: total = canon_lbp_total."""
+    """Without canon_total/alt_total, the LBP branch comes: total = canon_lbp_total."""
     del canon_metrics["canon_total"]
     del canon_metrics["canon_copy"]
     del canon_metrics["canon_print"]
@@ -188,8 +211,9 @@ def test_canon_lbp_path_when_no_mf_counters(canon_metrics):
     assert counters["black_white"] == 8000
 
 
-# ── ۳) ignore_values ──────────────────────────────────────────────────────
+# 3) ignore_values
 def _ignored_names_in_spec() -> set[str]:
+    """Helper: ignored names in spec."""
     lines = SNMP_YML.read_text(encoding="utf-8").split("\n")
     names, current = set(), None
     for line in lines:
@@ -202,6 +226,7 @@ def _ignored_names_in_spec() -> set[str]:
 
 
 def test_ignore_values_set_is_exactly_the_31_spec_metrics():
+    """Verifies ignore values set is exactly the 31 spec metrics."""
     from_spec = _ignored_names_in_spec()
     assert ea.IGNORED_METRICS == from_spec, (
         f"کم: {sorted(from_spec - ea.IGNORED_METRICS)} · اضافه: "
@@ -210,10 +235,11 @@ def test_ignore_values_set_is_exactly_the_31_spec_metrics():
 
 
 def test_ignored_sentinel_falls_back_to_the_collector_default(hp_metrics):
-    # toner_remain_2 = -2 با کامنتِ ignore ⇒ همان defaultِ collect_hp (-2) ⇒ unknown
+    # toner_remain_2 = -2 with ignore comment ⇒ the same default as collect_hp (-2) ⇒ unknown
+    """Verifies ignored sentinel falls back to the collector default."""
     toners = ea.exporter_to_collector_shape("172.16.0.5", "hp", hp_metrics)["toners"]
     assert toners["toner_2"]["status"] == "unknown"
-    # general_oids = -2 ⇒ هیچ‌جا در شکل ظاهر نمی‌شود (نه ۰، نه -۲)
+    # general_oids = -2 ⇒ does not appear anywhere in the figure (not 0, not -2)
     shape = ea.exporter_to_collector_shape("172.16.0.5", "hp", hp_metrics)
     assert "general_oids" not in str(shape["counters"])
 
@@ -227,12 +253,12 @@ def test_sentinel_on_unmarked_metric_is_kept(hp_metrics):
 
 
 def test_documented_divergence_hp_no_sensor_becomes_empty(hp_metrics):
-    """تنها واگراییِ آگاهانه (سند §۹): prtInputCurrent = -2.
+    """The only conscious divergence (doc §9): prtInputCurrent = -2.
 
-    collect_hp از روی OIDِ زنده `no_sensor` می‌گیرد؛ اینجا sentinelِ متریکِ
-    tray*_level (که در spec ignore دارد) دور ریخته می‌شود و defaultِ -9 ⇒ `empty`.
-    اگر این یکی مهم شد، `tray1_level`/`tray2_level` را از IGNORED_METRICS بردارید —
-    و این تست عمداً همین را pin می‌کند تا تغییرِ بی‌صدا ممکن نباشد.
+    collect_hp takes `no_sensor` from live OID; Here is the metric sentinel
+    tray*_level (which is ignored in spec) is discarded and default is -9 ⇒ `empty`.
+    If this one matters, remove `tray1_level`/`tray2_level` from IGNORED_METRICS —
+    And this test intentionally pins the same so that silent change is not possible.
     """
     metrics = dict(hp_metrics)
     metrics["tray1_level"] = [({}, -2.0)]
@@ -240,31 +266,35 @@ def test_documented_divergence_hp_no_sensor_becomes_empty(hp_metrics):
     assert tray["status"] == "empty" and tray["level"] == -9
 
 
-# ── ۴) مسیرهای None ───────────────────────────────────────────────────────
+# 4) None routes
 def test_unsupported_brands_and_empty_answers_yield_none():
+    """Verifies unsupported brands and empty answers yield none."""
     assert ea.exporter_to_collector_shape("1.1.1.1", "toshiba", {"tsh_total": [({}, 5.0)]}) is None
     assert ea.exporter_to_collector_shape("1.1.1.1", "brother", {}) is None
     assert ea.exporter_to_collector_shape("1.1.1.1", "sensor", {"sys_uptime": [({}, 1.0)]}) is None
-    assert ea.exporter_to_collector_shape("1.1.1.1", "hp", {}) is None          # پاسخِ خالی
+    assert ea.exporter_to_collector_shape("1.1.1.1", "hp", {}) is None          # Blank answer
     assert ea.exporter_to_collector_shape("1.1.1.1", "hp", {"unrelated": [({}, 1.0)]}) is None
     assert ea.exporter_to_collector_shape("1.1.1.1", "", {"bro_total": [({}, 1.0)]}) is None
     assert ea.SUPPORTED_BRANDS == ("hp", "canon")
 
 
 def test_poll_ms_is_measured_when_start_given(hp_metrics):
+    """Verifies poll ms is measured when start given."""
     import time
     shape = ea.exporter_to_collector_shape("1.1.1.1", "hp", hp_metrics, start=time.time() - 0.2)
     assert 0 < shape["poll_ms"] < 5000
 
 
 class _FakeClient:
-    """کلاینتِ جعلی: فقط query_brand را implements می‌کند (قراردادِ adapter)."""
+    """Fake client: only implements query_brand (adapter contract)."""
 
     def __init__(self, metrics=None, exc=None):
+        """Initialize the instance."""
         self._metrics, self._exc = metrics, exc
         self.calls: list[tuple] = []
 
     def query_brand(self, ip, brand, auth="public_v2"):
+        """Helper: query brand."""
         self.calls.append((ip, brand, auth))
         if self._exc is not None:
             raise self._exc
@@ -273,18 +303,21 @@ class _FakeClient:
 
 @pytest.mark.parametrize("exc", [ExporterError("target unreachable"), TimeoutError("slow")])
 def test_collect_via_exporter_turns_every_error_into_none(exc, hp_metrics):
+    """Verifies collect via exporter turns every error into none."""
     client = _FakeClient(exc=exc)
     assert ea.collect_via_exporter(client, "1.1.1.1", "x", "hp") is None
-    assert len(client.calls) == 1        # یک تلاش، بدونِ حلقهٔ retry
+    assert len(client.calls) == 1        # One attempt, without a retry loop
 
 
 def test_collect_via_exporter_skips_unsupported_brand_without_network(hp_metrics):
+    """Verifies collect via exporter skips unsupported brand without network."""
     client = _FakeClient(hp_metrics)
     assert ea.collect_via_exporter(client, "1.1.1.1", "x", "toshiba") is None
-    assert client.calls == []                       # هیچ کوئری‌ای نرفته
+    assert client.calls == []                       # No query has been sent
 
 
 def test_collect_via_exporter_success_and_missing_signal(hp_metrics):
+    """Verifies collect via exporter success and missing signal."""
     client = _FakeClient(hp_metrics)
     shape = ea.collect_via_exporter(client, "172.16.0.5", "HP-05", "HP")
     assert shape["counters"]["total"] == 12345 and client.calls == [
@@ -292,13 +325,13 @@ def test_collect_via_exporter_success_and_missing_signal(hp_metrics):
     assert ea.collect_via_exporter(_FakeClient({}), "172.16.0.5", "HP-05", "hp") is None
 
 
-# ── ۸) گام H.1 — وب‌اسکرپِ تونر در مسیرِ exporter ────────────────────────────
+# ── 8) Step H.1 — Toner web scrap in the path of the exporter
 def _hp_without_toner_numbers(hp_metrics):
-    """SNMPِ «هست ولی عدد نمی‌دهد»: `toner_remain_1 = -2` همان sentinelِ `ignore_values` است.
+    """SNMP "is present but does not give a number": `toner_remain_1 = -2` is the sentinel of `ignore_values`.
 
-    عمداً رکوردِ اسلاتِ ۱ را *حذف* نمی‌کنیم: آن‌وقت `collect_hp` کلاً کلیدِ `black` را
-    نمی‌سازد و شاخهٔ «ساختِ تونرِ تازه» تست می‌شود، نه شاخهٔ «پرکردنِ levelِ خالی» که
-    قاعدهٔ legacy روی آن حساس‌تر است (آستانه‌هایِ status آن‌جا جاری می‌شود).
+    We don't *remove* the record for slot 1 on purpose: then `collect_hp' will completely replace the `black' key.
+    doesn't build and the branch of "creating new toner" is tested, not the branch of "filling empty level" which
+    The legacy rule is more sensitive on it (status thresholds flow there).
     """
     m = dict(hp_metrics)
     m["toner_remain_1"] = [({}, -2.0)]
@@ -306,48 +339,48 @@ def _hp_without_toner_numbers(hp_metrics):
 
 
 def test_adapter_uses_the_real_scrapers_not_copies(no_web_by_default):
-    """«reuse» یعنی همان تابع، نه کپیِ دوم — تصمیمِ مالک برایِ H.1: **صفر کپیِ اسکرپرها**.
+    """"reuse" means the same function, not a second copy — owner's decision for H.1: **zero copies of scrapers**.
 
-    این پینِ هویت، کلِ تصمیمِ H.1 را نگه می‌دارد: تا وقتی `_scrape_hp_toners`ِ ما *خودِ*
-    `core.collectors.hp` باشد، هر اصلاحِ اسکرپرِ EWS در collector به‌طورِ خودکار به مسیرِ
-    exporter هم می‌رسد. (برعکسش هم درست است: اگر روزی کسی اینجا کپیِ مستقل بگذارد،
-    تست می‌شکند.) قاعدهٔ merge/trigger را نمی‌شود این‌طور بست — آن‌ها در
-    `core/enhanced_collector.py` هستند که importش یعنی کشیدنِ `core.store`/`core.database`
-    به مسیرِ exporter؛ پس برایِ آن‌ها پینِ *متن* داریم (`test_merge_functions_are_faithful_copies`، الگوی TD-016)
-    + پینِ *رفتاری* (`test_merge_and_missing_rules_match_enhanced_collector`). دو سبکِ قفل برای
-    دو نوع بازتولید: قفلِ *هویت* برایِ چیزی که import شده (اسکریپرها)، قفلِ *متن* برایِ چیزی که
-    کپی شده (دو قاعده). چرا اسکریپرها import‌اند و نه کپی؟ `_scrape_canon_toners` داخلِ بدنه‌اش
-    `import requests` + `urllib.request.urlopen` دارد و دروازهٔ G.5 هر دو اسم را در adapter
-    ممنوع کرده است؛ کپیِ «وفادار» آن یعنی شکستنِ دروازه، پس یا import (انتخابِ این گام) یا
-    بازنویسیِ transport که دیگر وفادار نیست. **تصمیمِ نهاییِ مالک (گام H.1): همان import** —
-    جدولِ دامنه، دلیلِ «deleg» و ردِ گزینه‌هایِ دیگر: `docs/phase-h-decisions.md` §H.1.
+    This identity pin holds the entire H.1 decision: until our `_scrape_hp_toners` *own*
+    is `core.collectors.hp', any EWS scraper modifications to the collector will automatically go to the path
+    Exporter also arrives. (The opposite is also true: if one day someone posts an independent copy here,
+    It breaks the test.) You can't close the merge/trigger rule like this - they are in
+    are `core/enhanced_collector.py`, whose import means pulling `core.store`/`core.database`
+    to the exporter path; So we have a *text* pin for them (`test_merge_functions_are_faithful_copies', template TD-016)
+    + *behavior* pin (`test_merge_and_missing_rules_match_enhanced_collector`). Two styles of locks for
+    Two types of reproduction: *identity* lock for what is imported (scrapers), *text* lock for what
+    Copied (two rules). Why are scrapers import and not copy? `_scrape_canon_toners` inside its body
+    has `import requests` + `urllib.request.urlopen` and the G.5 gateway includes both names in the adapter
+    has prohibited; Its "faithful" copy means breaking the gate, so either import (choose this step) or
+    Rewrite transport that is no longer faithful. **Owner's final decision (step H.1): the same as import** —
+    Domain table, reason for "deleg" and rejection of other options: `docs/phase-h-decisions.md` §H.1.
     """
     from core.collectors.canon import _scrape_canon_toners as real_canon
     from core.collectors.hp import _hp_toner_key, _scrape_hp_toners as real_hp
 
-    # «اصلِ bind‌شده» قبلِ patch شدنِ fixture خوانده شده
+    # "Binded origin" is read before the fixture is patched
     orig = no_web_by_default
     assert orig["hp"] is real_hp
     assert orig["canon"] is real_canon
-    assert orig["key"] is _hp_toner_key       # کلیدِ رنگ‌ها هم همان، نه نسخهٔ دوم
+    assert orig["key"] is _hp_toner_key       # The color key is the same, not the second version
 
 
 def test_merge_functions_are_faithful_copies():
-    """«کپیِ وفادار» یعنی متن — همان الگوی TD-016 (`test_rule_matches_the_web_helper`).
+    """"Faithful copy" means text — same as pattern TD-016 (`test_rule_matches_the_web_helper`).
 
-    دو جایگزینی که برایِ مقایسه لازم است، هر دو *شمرده* و مستندند؛ به‌جز آن‌ها متن باید
-    عیناً یکی باشد — و هدفِ تست همین «شمرده‌بودنِ تفاوت» است، نه تلورانسِ کلی:
+    The two alternatives required for comparison are both *counted* and documented; Except for them, the text should be
+    be exactly the same - and the purpose of the test is the "countability of the difference", not the overall tolerance:
 
-    1. `raw_level`: شکلِ `collect_hp`/`collect_canon` این کلید را ندارد (مالِ
-       `collect_enhanced` است). خط‌هایی که *فقط* آن را می‌خوانند/می‌نویسند حذف می‌شوند و
-       `.get("raw_level")` به `.get("level")` تبدیل — همان تطبیقی که در داکسِ
-       `_toner_level_missing`/`_merge_scraped_toners` این فایل نوشته شده.
-    2. annotation: آن‌جا `typing.Dict`، این‌جا `dict` — چون `from typing import Dict` یعنی
-       importِ تازه و دروازهٔ importِ G.5 عمداً بسته است.
+    1. `raw_level`: The `collect_hp`/`collect_canon` format does not have this key (the
+       is `collect_enhanced'). Lines that *only* read/write it are removed and
+       Convert `.get("raw_level")` to `.get("level")` — the same match as in dox
+       `_toner_level_missing`/`_merge_scraped_toners` This file is written.
+    2. annotation: there `typing.Dict`, here `dict` - because `from typing import Dict` means
+       The new import and G.5 import gateway is intentionally closed.
 
-    اگر روزی کسی یکی از دو قاعده را در یک طرف عوض کند، این تست می‌شکند؛ تست‌هایِ رفتاری
-    (`test_merge_and_missing_rules_match_enhanced_collector`) هم همان را از راهِ ورودی/خروجی
-    می‌گیرند — یکی برای «متن دوقلو ماند»، یکی برای «رفتار دوقلو ماند».
+    If one day someone changes one of the two rules on one side, this test breaks; Behavioral tests
+    (`test_merge_and_missing_rules_match_enhanced_collector`) the same through input/output
+    They get - one for "twin text", one for "twin behavior".
     """
     import inspect
     import re as _re
@@ -357,13 +390,14 @@ def test_merge_functions_are_faithful_copies():
     RAW_BLOCK = 'if t.get("raw_level") is None:\n            t["raw_level"] = pct\n'
 
     def norm(fn):
+        """Helper: norm."""
         src = inspect.getsource(fn)
-        src = src.replace(RAW_BLOCK, "")                       # بلوکِ raw_level در merge
-        src = src.replace('"raw_level": pct, ', "")            # کلیدِ raw_level در دیکشنریِ تازه
-        src = src.replace('t["raw_level"] = pct\n', "")       # اگر کسی جدا از if نوشته باشد
-        src = src.replace('"raw_level"', '"level"')           # شرطِ «عدد داریم؟» روی فیلدِ هر شکل
+        src = src.replace(RAW_BLOCK, "")                       # raw_level block in merge
+        src = src.replace('"raw_level": pct, ', "")            # The raw_level key in the new dictionary
+        src = src.replace('t["raw_level"] = pct\n', "")       # If someone has written separately from if
+        src = src.replace('"raw_level"', '"level"')           # The condition "Do we have a number?" On the field of any shape
         src = _re.sub(r'""".*?"""', "", src, flags=_re.S)      # docstring
-        src = _re.sub(r"(?m)^\s*#.*$", "", src)                # کامنت
+        src = _re.sub(r"(?m)^\s*#.*$", "", src)                # comment
         src = _re.sub(r"\bDict\b", "dict", src)                # annotation
         lines = [_re.sub(r"\s+", " ", ln).rstrip() for ln in src.split("\n")]
         return "\n".join(ln for ln in lines if ln.strip())
@@ -373,11 +407,11 @@ def test_merge_functions_are_faithful_copies():
         if mine != theirs:
             diff = [f"  ours={a!r}\n  legacy={b!r}" for a, b in zip(mine.split("\n"), theirs.split("\n")) if a != b]
             raise AssertionError(f"{fname} دیگر کپیِ وفادار نیست:\n" + "\n".join(diff))
-    # و این‌ها دو تابعِ *جدا* هستند (نه alias) — وگرنه مقایسهٔ متن بی‌معنی است
+    # And these are two *separate* functions (not aliases) — otherwise the text comparison is pointless
     assert ea._toner_level_missing is not ec._toner_level_missing
     assert ea._merge_scraped_toners is not ec._merge_scraped_toners
-    # merge در آینه *واقعاً* مصرف می‌شود (نه کپیِ بیکار) — و فقط از تک‌درِ `_merge_scraped`:
-    # مسیرِ runtime نباید خودش شاخه‌به‌شاخه قاعده‌ها را صدا بزند (تصمیمِ بندِ ۱-۳: dispatcher).
+    # merge is *really* consumed in the mirror (not an idle copy) — and only from the single `_merge_scraped`:
+    # The runtime route should not itself call the rules branch by branch (decision of clause 1-3: dispatcher).
     run = inspect.getsource(ea.apply_toner_http_fallback)
     disp = inspect.getsource(ea._merge_scraped)
     assert "_merge_scraped(toners, brand, scraped)" in run, run
@@ -386,12 +420,13 @@ def test_merge_functions_are_faithful_copies():
 
 
 def test_hp_http_fallback_when_snmp_incomplete(monkeypatch, hp_metrics):
-    """SNMP عددی برای تونر ندارد ⇒ وب‌اسکرپ، با قاعدهٔ merge خودِ legacy."""
+    """SNMP does not have a number for toner ⇒ Web Scrap, with its legacy merge rule."""
     seen = []
 
     def fake_scrape(ip, timeout=4.0):
+        """Helper: fake scrape."""
         seen.append((ip, timeout))
-        return {"black": 61, "cyan": 5, "_used": ["black"]}     # «_used» فراداده است
+        return {"black": 61, "cyan": 5, "_used": ["black"]}     # "_used" is metadata
 
     monkeypatch.setattr(ea, "_scrape_hp_toners", fake_scrape)
     metrics = _hp_without_toner_numbers(hp_metrics)
@@ -405,19 +440,20 @@ def test_hp_http_fallback_when_snmp_incomplete(monkeypatch, hp_metrics):
     assert t["black"]["source"] == "hp_web"
     assert t["black"]["name"] == "Black Toner", "کلیدِ موجود نامِ خودش را نگه می‌دارد"
     assert t["black"]["remaining"] == -2 and t["black"]["max"] == 3200, "فیلدهایِ SNMP دست‌نخورده"
-    # شاخهٔ «تونرِ تازه» عیناً enhanced_collector: status هنوز unknown و remaining/max پیش‌فرض
+    # "Fresh toner" branch is exactly enhanced_collector: status still unknown and default remaining/max
     assert t["cyan"] == {"level": 5, "status": "unknown", "name": "cyan toner",
                          "remaining": -1, "max": -1, "source": "hp_web"}
     assert "_used" not in t and all("_used" not in v for v in t.values())
-    # و هیچ کلیدِ تازه‌ای به شکلِ خروجی اضافه نشده (قراردادِ «۱۲ کلیدِ collect_hp»)
+    # And no new keys are added to the output form (contract "12 collect_hp keys").
     assert set(shape) == _returned_keys("hp.py", "collect_hp")
     assert not any("raw_level" in v for v in t.values()), "raw_level مالِ شکلِ enhanced است"
-    assert shape["counters"]["total"] == 12345             # اعدادِ SNMP سرِ جایشان
+    assert shape["counters"]["total"] == 12345             # SNMP numbers in place
 
 
 def test_hp_no_http_call_when_snmp_has_numbers(monkeypatch, hp_metrics):
-    """تونر عدد دارد ⇒ هیچ درخواستِ وبی نباید برود (هزینهٔ اضافه روی دستگاه سالم)."""
+    """The toner has a number ⇒ no web request should go (extra cost on healthy device)."""
     def boom(ip, timeout=4.0):
+        """Helper: boom."""
         raise AssertionError("وب‌اسکرپ نباید صدا زده شود")
 
     monkeypatch.setattr(ea, "_scrape_hp_toners", boom)
@@ -428,36 +464,38 @@ def test_hp_no_http_call_when_snmp_has_numbers(monkeypatch, hp_metrics):
 
 
 def test_hp_drum_number_blocks_fallback_like_the_rule(monkeypatch, hp_metrics):
-    """رگرسیونِ آگاهانه: `_toner_level_missing` فقط `drum`/`opc` را معاف می‌کند؛
+    """Aware regression: `_toner_level_missing` only exempts `drum`/`opc`;
 
-    در مسیرِ HP عددِ درام روی کلیدِ `toner_2` می‌نشیند (نه `drum`)، پس «درامِ سالم» مثلِ
-    خودِ قاعدهٔ legacy مانعِ fallback می‌شود. این تست همین رفتار را قفل می‌کند تا اگر
-    روزی خواستیم `toner_2` را هم معاف کنیم، *تصمیم* باشد نه فراموشی — سند:
-    `docs/phase-h-decisions.md` §H.1 «محدودیت‌هایِ شناخته‌شده».
+    In the HP path, the drum number sits on the `toner_2' key (not `drum'), so "healthy drum" is like
+    The legacy rule itself prevents fallback. This test locks the same behavior as if
+    One day we wanted to exempt `toner_2', it should be *decision* not forgetting - Document:
+    `docs/phase-h-decisions.md` §H.1 "Known Limitations".
     """
     def boom(ip, timeout=4.0):
+        """Helper: boom."""
         raise AssertionError("با عددِ درام (toner_2=90) قاعدهٔ فعلی fallback نمی‌کند")
 
     monkeypatch.setattr(ea, "_scrape_hp_toners", boom)
-    m = dict(hp_metrics)                     # در fixtureِ واقعی: اسلاتِ ۲ = درام با ۹۰٪ نیست،
-    m["toner_max_2"] = [({}, 100.0)]         # پس همان را عدددار می‌کنیم و اسلاتِ ۱ را
-    m["toner_remain_2"] = [({}, 90.0)]       # sentinel (بی‌عدد) نگه می‌داریم
+    m = dict(hp_metrics)                     # In real fixture: slot 2 = not drum with 90%,
+    m["toner_max_2"] = [({}, 100.0)]         # So we number the same and slot 1
+    m["toner_remain_2"] = [({}, 90.0)]       # We keep sentinel (unnumbered).
     m["toner_remain_1"] = [({}, -2.0)]
     shape = ea.collect_via_exporter(_FakeClient(m), "172.16.0.5", "x", "hp")
     assert shape["toners"]["toner_2"]["level"] == 90
-    assert shape["toners"]["black"]["level"] is None      # و تونرِ واقعی همچنان unknown
+    assert shape["toners"]["black"]["level"] is None      # And the real toner is still unknown
 
 
 def test_canon_http_fallback_when_snmp_absent(monkeypatch, canon_metrics, caplog):
-    """canon با SNMPِ بی‌تونر: هر چهار کلید `snmp_unavailable` می‌مانند، مگر وب عدد بدهد."""
+    """canon with tonerless SNMP: all four keys remain `snmp_unavailable' unless web gives a number."""
     import logging
 
     caplog.set_level(logging.DEBUG, logger="PrinterMonitor")
     seen = []
 
     def fake_scrape(ip, timeout=3.0):
+        """Helper: fake scrape."""
         seen.append((ip, timeout))
-        return {"black": 55, "cyan": 12, "magenta": None}   # «None» یعنی وب هم عددی ندارد
+        return {"black": 55, "cyan": 12, "magenta": None}   # "None" means that the web does not have a number
 
     monkeypatch.setattr(ea, "_scrape_canon_toners", fake_scrape)
     m = dict(canon_metrics)
@@ -467,8 +505,8 @@ def test_canon_http_fallback_when_snmp_absent(monkeypatch, canon_metrics, caplog
     shape = ea.collect_via_exporter(_FakeClient(m), "10.0.20.12", "C-12", "canon")
 
     assert seen == [("10.0.20.12", 3.0)], "collect_canon صریح timeout=3.0 می‌دهد"
-    # «موفق شد» باید بی‌صدا باشد، نه با `except`ِ فراگیر پوشانده‌شده: اگر روزی اولویتِ HTTP
-    # با TypeError نصفه‌کاره تمام شود، همین لاگِ debug می‌گوید.
+    # "Succeeded" should be silent, not masked with an overarching `except': if ever the HTTP preference
+    # Finish with a TypeError, the same debug log says.
     import logging
 
     assert caplog.records == [] or not [r for r in caplog.records if "انجام نشد" in r.getMessage()]
@@ -482,15 +520,15 @@ def test_canon_http_fallback_when_snmp_absent(monkeypatch, canon_metrics, caplog
 
 
 def test_canon_divergence_from_the_collector_is_pinned(monkeypatch, canon_metrics):
-    """واگراییِ *انتخاب‌شده*: آینه canon را مثلِ HP گارد می‌کند، `collect_canon` نه.
+    """*Selected* Divergence Guards canon mirror like HP, `collect_canon' does not.
 
-    برنامهٔ گام H.1 قاعدهٔ یکنواخت خواست («فقط وقتی SNMP داده ندارد یا ناقص است»)، پس روی
-    canonِ سالم — که SNMP عدد دارد و Remote UI هم دارد — آینه اصلاً وب نمی‌زند و اعدادِ SNMP
-    می‌مانند؛ ولی `core/collectors/canon.py:325` همان‌جا اسکریپ را می‌زند و HTTP را ترجیح
-    می‌دهد. این تفاوتِ رفتاری عمداً تست می‌شود تا «کمبود» به باگِ بی‌صدا تبدیل نشود، و تا
-    برگشتنش یک‌خطی بماند (گاردِ `_toner_level_missing` از شاخهٔ canon در
-    `apply_toner_http_fallback` برداشته می‌شود). شکلِ رکورد وقتی وب *اجرا می‌شود* همچنان
-    عینِ `collect_canon` است: `test_canon_http_fallback_when_snmp_absent`.
+    The program of step H.1 asked for the uniform rule ("Only when SNMP has no data or is incomplete"), so on
+    healthy canon - which has SNMP numbers and Remote UI - the mirror does not web at all and SNMP numbers
+    they stay; But `core/collectors/canon.py:337` hits the script there and prefers HTTP
+    gives This behavioral difference is deliberately tested so that the "deficiency" does not turn into a silent bug, and until
+    The return should be one line (`_toner_level_missing` guard from the canon branch in
+    `apply_toner_http_fallback` is removed). Record format when the web *runs* still
+    Same as `collect_canon`: `test_canon_http_fallback_when_snmp_absent`.
     """
     import inspect
 
@@ -502,7 +540,7 @@ def test_canon_divergence_from_the_collector_is_pinned(monkeypatch, canon_metric
     assert shape["toners"]["black"]["source"] == "snmp"
     assert shape["toners"]["black"]["level"] == 62, "عددِ SNMPِ fixture دست‌نخورده می‌ماند"
 
-    # شاهدِ collector از *متنِ* خودش (نه ادعایِ ما): collect_canon هیچ گاردی ندارد
+    # Witness collector from its own *text* (not our claim): collect_canon has no guard
     from core.collectors.canon import collect_canon
 
     src = inspect.getsource(collect_canon)
@@ -511,11 +549,11 @@ def test_canon_divergence_from_the_collector_is_pinned(monkeypatch, canon_metric
 
 
 def test_fallback_keys_off_the_normalized_brand(monkeypatch, canon_metrics):
-    """رگرسیونِ باگی که *همین گام* تولید کرد و گیت‌ها نگرفتند: `shape["brand"]` نه آرگومانِ خام.
+    """Regression of a bug that produced *the same step* and the gates didn't get: `shape["brand"]` not the raw argument.
 
-    poller برند را از ستونِ DB می‌دهد و در مخزن واقعاً `"HP-05"`/`"CANON"` دیده می‌شود؛ اگر
-    fallback با همان رشته مقایسه کند، `"CANON" != "canon"` و وب‌اسکرپِ canon بی‌صدا خاموش
-    می‌ماند (SNMP هم ناقص باشد، هیچ‌کس نمی‌فهمد).
+    poller gives the brand from the DB column, and in the repository it is really ``HP-05''/``CANON''; If
+    fallback compares with the same string, `"CANON"!= "canon"` and the canon web scraper silently shuts down
+    It remains (SNMP is also incomplete, no one understands).
     """
     hits = []
     monkeypatch.setattr(ea, "_scrape_canon_toners",
@@ -529,8 +567,9 @@ def test_fallback_keys_off_the_normalized_brand(monkeypatch, canon_metrics):
 
 
 def test_fallback_never_raises_and_keeps_snmp_numbers(monkeypatch, hp_metrics):
-    """وب هر بلایی کرد (connect refused، timeout، HTML عجیب) ⇒ snapshot نمی‌میرد."""
+    """The web did something wrong (connect refused, timeout, weird HTML) ⇒ snapshot doesn't die."""
     def explode(ip, timeout=4.0):
+        """Helper: explode."""
         raise OSError("connection refused")
 
     monkeypatch.setattr(ea, "_scrape_hp_toners", explode)
@@ -543,8 +582,8 @@ def test_fallback_never_raises_and_keeps_snmp_numbers(monkeypatch, hp_metrics):
 
 
 def test_hp_sentinel_only_device_still_creates_missing_rows(monkeypatch, hp_metrics):
-    """حذفِ کاملِ اسلاتِ ۱ ⇒ `black` اصلاً ساخته نمی‌شود (رفتارِ collect_hp) و merge آن را
-    *می‌سازد* — با status=unknownِ خودِ قاعده، نه آستانه‌ها (کپیِ وفادارِ همان شاخه)."""
+    """Complete deletion of slot 1 ⇒ `black` is not created at all (behavior of collect_hp) and merge it
+    *builds* — with status=unknown of the rule itself, not the thresholds (faithful copy of the same branch)."""
     monkeypatch.setattr(ea, "_scrape_hp_toners", lambda ip, timeout=4.0: {"black": 44})
     m = dict(hp_metrics)
     for name in ("toner_name_1", "toner_max_1", "toner_remain_1"):
@@ -555,24 +594,25 @@ def test_hp_sentinel_only_device_still_creates_missing_rows(monkeypatch, hp_metr
 
 
 def test_pure_shape_function_stays_offline(monkeypatch, hp_metrics):
-    """`exporter_to_collector_shape` بی‌شبکه می‌ماند — `tools/compare_snmp_sources.py`
-    همین تابع را آفلاین مصرف می‌کند؛ اگر fallback داخلش می‌رفت، مقایسهٔ G.6 شبکه می‌زد."""
+    """`exporter_to_collector_shape` remains offline — `tools/compare_snmp_sources.py`
+    It uses the same function offline; If the fallback was included, the comparison of G.6 would be networked."""
     def boom(*a, **k):
+        """Helper: boom."""
         raise AssertionError("تابعِ خالص نباید وب بزند")
 
     monkeypatch.setattr(ea, "_scrape_hp_toners", boom)
     monkeypatch.setattr(ea, "_scrape_canon_toners", boom)
     shape = ea.exporter_to_collector_shape("172.16.0.5", "hp", _hp_without_toner_numbers(hp_metrics))
-    assert shape["toners"]["black"]["level"] is None      # بدونِ وب، همان اعدادِ SNMP
+    assert shape["toners"]["black"]["level"] is None      # No web, same SNMP numbers
     assert shape["toners"]["black"]["status"] == "unknown"
 
 
 def _assert_does_not_enter_exporter_path(brand, monkeypatch, caplog):
-    """بدنهٔ مشترکِ سه گارد: نه کوئری، نه وب‌اسکرپ؛ یک هشدارِ صریح (و نه سیلِ لاگ).
+    """Common body of three guards: no query, no web scrap; An explicit warning (and not a flood of logs).
 
-    این سه تست عمداً *successِ ساختگی* نیستند: دامنهٔ H.1 دو برند است و `_toners()`/`_trays()`
-    برایِ برندهایِ دیگر شکلِ خروجیِ دیگری دارد، پس تنها ادعایِ صادقانه همین است که «واردِ
-    مسیرِ exporter نمی‌شود». مرزِ ثبت‌شده: TD-018.
+    These three tests are not intentionally *fake success*: the H.1 domain is two brands and `_toners()`/`_trays()`
+    For other brands, it has a different output shape, so the only honest claim is that "input."
+    It does not become the exporter route. Registered border: TD-018.
     """
     import logging
 
@@ -587,7 +627,7 @@ def _assert_does_not_enter_exporter_path(brand, monkeypatch, caplog):
     assert web_calls == [], "نباید حتی وب‌اسکرپ هم اجرا شود"
     warns = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
     assert len(warns) == 1 and "آینه‌سازی نشده" in warns[0] and "TD-018" in warns[0]
-    # چرخهٔ دوم برای همان (brand, ip): هشدارِ تکراری نه (کوئری هم نه)
+    # The second cycle for the same (brand, ip): no duplicate warning (no query either)
     caplog.clear()
     with caplog.at_level(logging.WARNING, logger="PrinterMonitor"):
         assert ea.collect_via_exporter(client, "10.0.20.9", "X-09", brand) is None
@@ -595,27 +635,27 @@ def _assert_does_not_enter_exporter_path(brand, monkeypatch, caplog):
 
 
 def test_toshiba_does_not_enter_exporter_path(monkeypatch, caplog):
-    """Toshiba: ۶۳ ردیفِ `oid:` در `monitoring/snmp.yml` آینه نشده ⇒ مسیرِ legacy."""
+    """Toshiba: 63 lines of `oid:' in `monitoring/snmp.yml' are not mirrored ⇒ legacy path."""
     _assert_does_not_enter_exporter_path("toshiba", monkeypatch, caplog)
 
 
 def test_brother_does_not_enter_exporter_path(monkeypatch, caplog):
-    """Brother: ۹ ردیفِ `oid:` + EWS آینه نشده ⇒ مسیرِ legacy."""
+    """Brother: 9 rows of `oid:` + EWS not mirrored ⇒ legacy path."""
     _assert_does_not_enter_exporter_path("brother", monkeypatch, caplog)
 
 
 def test_sensor_does_not_enter_exporter_path(monkeypatch, caplog):
-    """`sensor` اصلاً `toners` ندارد؛ با این‌همه گارد *پیش ازِ هر کوئری* می‌بندد."""
+    """``sensor'' has no `toners' at all; Even so, he closes the guard *before every query*."""
     _assert_does_not_enter_exporter_path("sensor", monkeypatch, caplog)
 
 
 def test_merge_scraped_delegates_per_brand():
-    """`_merge_scraped` تنها درِ merge است و *فقط* انتخاب می‌کند (بندِ ۱-۳ برنامه).
+    """`_merge_scraped` is only in merge and selects *only* (paragraphs 1-3 of the program).
 
-    - `hp` → پرکردنِ فیلدهایِ خالی + برچسبِ `hp_web` (و عددِ SNMPِ بی‌اعتبار نمی‌پرد)
-    - `canon` → جاگذاریِ رکوردِ HTTP با `remaining=None`/`max=100`
-    - برندِ دیگر → همان قاعدهٔ HP؛ در `collect_via_exporter` هرگز به اینجا نمی‌رسد چون
-      گاردِ `SUPPORTED_BRANDS` زودتر `None` می‌دهد (سه گاردِ نام‌دار همین را می‌گیرند)
+    - `hp` → filling in empty fields + tag `hp_web` (and invalid SNMP number does not skip)
+    - `canon` → embed HTTP record with `remaining=None`/`max=100`
+    - Other brand → the same rule as HP; In `collect_via_exporter` it never gets here because
+      `SUPPORTED_BRANDS' guard gives ``None'' earlier (three named guards get the same)
     """
     blank = {"level": None, "status": "unknown", "name": "Black Toner",
              "remaining": -1, "max": -1, "source": "snmp"}
@@ -637,10 +677,10 @@ def test_merge_scraped_delegates_per_brand():
 
 
 def test_merge_and_missing_rules_match_enhanced_collector():
-    """قاعدهٔ merge/trigger نباید از `core/enhanced_collector.py` جدا بیفتد.
+    """The merge/trigger rule must not be separated from `core/enhanced_collector.py`.
 
-    به‌جای مقایسهٔ متنِ سورس، *رفتار* دو نسخه روی ورودی‌هایِ یکسان سنجیده می‌شود —
-    با تنها تفاوتِ مجاز: شکلِ ما `raw_level` ندارد.
+    Instead of comparing the source text, the *behavior* of the two versions is measured on the same inputs —
+    With the only allowed difference: our shape does not have a `raw_level'.
     """
     from core.enhanced_collector import _merge_scraped_toners as legacy_merge
     from core.enhanced_collector import _toner_level_missing as legacy_missing
@@ -665,21 +705,21 @@ def test_merge_and_missing_rules_match_enhanced_collector():
         for k in mine:
             for field in ("level", "status", "name", "remaining", "max", "source"):
                 assert mine[k].get(field) == theirs[k].get(field), (ours_keys, k, field)
-        # شرطِ «عدد داریم؟» روی فیلدِ هر شکل
+        # The condition "Do we have a number?" On the field of any shape
         assert ea._toner_level_missing(mine) == legacy_missing(theirs), ours_keys
 
 
 def test_adapter_has_no_side_effects():
-    """رویداد/DB در *کدِ* این فایل نیست؛ وب فقط از دو اسکریپرِ import‌شده.
+    """Event/DB is not in the *code* of this file; The web is only imported from two scrapers.
 
-    بررسی روی AST انجام می‌شود (نه متنِ خاموش)، چون docstring عمداً اسمِ
-    `_counters_event` را می‌آورد و توضیح می‌دهد چرا صدا زده نمی‌شود.
+    The check is performed on the AST (not the silent text), because the docstring is intentionally named
+    Returns `_counters_event` and explains why it is not called.
 
-    گام H.1 یک چیز را عوض کرد و همان را این‌جا می‌بندیم: آینه حالا *مجاز* است
-    وب‌اسکرپِ خودِ دستگاه را صدا بزند، ولی فقط از راهِ دو تابعِ import‌شده از
-    collectorهایِ خودش (`_scrape_hp_toners`/`_scrape_canon_toners`). یعنی نه
-    `urlopen`/`requests` در این فایل، نه DB، نه رویداد — همان سه «نباید»ِ G.5 سرِ
-    جایشان‌اند و لیستِ importها فقط یک ماژولِ collectorِ دیگر جا باز کرده است.
+    Step H.1 changed one thing and we close it here: mirroring is now *allowed*
+    WebScrap calls the device itself, but only through two functions imported from
+    own collectors (`_scrape_hp_toners`/`_scrape_canon_toners`). That means no
+    `urlopen`/`requests` in this file, no DB, no events — the same three G.5 "don'ts"
+    They are in their place and the list of imports has only made room for one more collector module.
     """
     tree = ast.parse((ROOT / "core" / "collectors" / "exporter_adapter.py").read_text(encoding="utf-8"))
     called, imported, touched = set(), set(), set()
@@ -706,7 +746,7 @@ def test_adapter_has_no_side_effects():
     assert imported <= {"__future__", "logging", "re", "time", "core.collectors.base",
                         "core.collectors.hp", "core.collectors.canon",
                         "core.exporter_client", "core.time_utils"}, imported
-    # H.1: دروازهٔ وب *باز* شده، ولی فقط از این دو درب؛ و هر دو باید واقعاً صدا زده شوند
-    # (اگر روزی fallback بی‌صدا حذف شود، این همان چیزی است که می‌گوید).
+    # H.1: The web portal is *opened*, but only from these two doors; And both should really be called
+    # (If fallback is ever silently removed, this is what it says).
     assert {"_scrape_hp_toners", "_scrape_canon_toners"} <= called, called
     assert not (called & {"fetch_first_web_page", "Request"}), called

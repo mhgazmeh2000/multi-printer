@@ -1,19 +1,32 @@
 #!/usr/bin/env python3
+# =============================================================================
+# @file:         run.py
+# @brief:        Entry point of the monitoring application (starts the web server and the poller).
+# @details:      Responsibilities: Initialise the app, start background loops and handle shutdown
+#                signals.
+#                Main API: signal_handler(), cleanup_loop(), clear_terminal_loop(), main()
+#                Side effects: network I/O, starts threads
+# @dependencies: internal: config, core, core.database, core.oid.scanner, core.poller, web
+# @notes:        Stop with Ctrl+C; the signal handler stops the background loops. Reads
+#                environment variables: FLASK_DEBUG, FLASK_PORT, LOG_LEVEL. Can be run directly as
+#                a script.
+# =============================================================================
+
 """
-نقطه ورود برنامه Multi Printer Monitoring
-اجرا: python run.py   (از داخل پوشه pm2/)
+Entry point of the Multi Printer Monitoring program
+Run: python run.py (from inside the pm2/ folder)
 """
 
-import os
-import sys
-import socket
 import logging
-import threading
-import signal
-import time
+import os
 import platform
+import signal
+import socket
+import sys
+import threading
+import time
 
-# اطمینان از اینکه ریشه پروژه در sys.path است
+# Ensure that the root of the project is in sys.path
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
@@ -28,71 +41,73 @@ except Exception:
     DEFAULT_FLASK_PORT = 5053
 
 FLASK_PORT = int(os.getenv("FLASK_PORT", DEFAULT_FLASK_PORT))
-from core.database import init_db, prune_old_print_logs
+from core.database import init_db
 from core import store
 from core.poller import poll_all, polling_loop
 from core.oid.scanner import startup_scan_all, weekly_scan_loop
 from web import create_app
 
-# تنظیم اولیه لاگینگ برای نقطه ورود
+# Initial logging settings for the entry point
 log_level_name = os.getenv("LOG_LEVEL", "INFO").upper()
 log_level = getattr(logging, log_level_name, logging.INFO)
 logging.basicConfig(level=log_level, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 log = logging.getLogger("PrinterMonitor")
 
-# ─── رویداد توقف نرم (graceful shutdown) ───
+# ─── graceful shutdown event ───
 stop_event = threading.Event()
 shutdown_in_progress = False
 
 def signal_handler(sig, frame):
+    """Handle SIGINT and SIGTERM by starting an orderly shutdown."""
+
     global shutdown_in_progress
     if shutdown_in_progress:
-        return  # اگر shutdown در حال اجرا است، دوباره صدا نزن
+        return  # If shutdown is running, do not call again
     shutdown_in_progress = True
     log.info("\n🛑 دریافت سیگنال توقف – در حال بستن نرم برنامه...")
     stop_event.set()
-    # خروج تمیز: SystemExit باعث unwind شدن Flask و بسته شدن daemon threadها می‌شود.
-    # os._exit(0) قبلی cleanup/flush را دور می‌زد.
+    # Clean exit: SystemExit causes Flask to unwind and daemon threads to close.
+    # Previous os._exit(0) bypassed cleanup/flush.
     raise SystemExit(0)
 
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
-# ─── تابع پاکسازی خودکار لاگ‌های قدیمی (هر 24 ساعت) ───
+# ─── Automatic cleaning function of old logs (every 24 hours) ───
 def cleanup_loop():
     """
-    حلقه‌ای که هر 24 ساعت یک بار اجرا می‌شود.
-    با توجه به درخواست کاربر، لاگ‌های PRINT هرگز پاک نمی‌شوند (مادام‌العمر).
-    این حلقه فقط برای حفظ ساختار قبلی وجود دارد و عملیات پاکسازی انجام نمی‌دهد.
+    A loop that runs once every 24 hours.
+    According to user request, PRINT logs are never deleted (lifetime).
+    This loop exists only to preserve the previous structure and does not perform cleanup operations.
     """
     while not stop_event.is_set():
         try:
-            # درخواست: لاگ‌های PRINT مادام‌العمر باشند → بدون پاکسازی
-            # در صورت نیاز به پاکسازی انواع دیگر در آینده می‌توان اینجا اضافه کرد
+            # Requirement: PRINT logs to be lifetime → no purge
+            # Other types can be added here if needed to be cleared in the future
             pass
         except Exception as e:
             log.exception("Cleanup loop error: %s", e)
-        # منتظر 24 ساعت یا تا زمان دریافت سیگنال توقف
+        # Wait 24 hours or until you receive a stop signal
         for _ in range(86400):
             if stop_event.is_set():
                 break
             time.sleep(1)
 
-# ─── تابع پاکسازی خودکار ترمینال (هر 24 ساعت) ───
+# ─── automatic terminal cleaning function (every 24 hours) ───
 def clear_terminal_loop():
     """
-    هر 24 ساعت یک بار صفحه ترمینال را پاک می‌کند.
-    فقط خروجی کنسول را پاک می‌کند و تأثیری بر فایل‌های لاگ ندارد.
+    It clears the terminal screen every 24 hours.
+    It only clears the console output and does not affect the log files.
     """
-    # تشخیص سیستم عامل برای انتخاب دستور مناسب
+    # Operating system detection to select the appropriate command
     if platform.system() == "Windows":
         clear_cmd = "cls"
     else:
         clear_cmd = "clear"
-    
+
     while not stop_event.is_set():
         try:
-            # صبر 24 ساعت
+            # Wait 24 hours
             for _ in range(86400):
                 if stop_event.is_set():
                     break
@@ -104,26 +119,22 @@ def clear_terminal_loop():
             log.exception("Terminal clear loop error: %s", e)
 
 def main():
-    # راه‌اندازی DB
+    # DB setup
+    """Start the web server and the background loops of the application."""
+
     try:
         init_db()
     except Exception as exc:
-        # قفل موقت SQLite روی share نباید مانع بالا آمدن رابط وب شود.
-        # عملیات دیتابیسی بعدی با timeout/retry خطای مناسب خود را ثبت می‌کند.
+        # Temporarily locking SQLite on the share should not prevent the web interface from coming up.
+        # Subsequent database operations will log their appropriate error with timeout/retry.
         log.exception("Database initialization deferred because the database is unavailable: %s", exc)
-
-    # راه‌اندازی زمان‌بند دوره‌ای سیاست نگهداری و خلاصه‌سازی داده‌ها (فاز I.4)
-    try:
-        from core.scheduler import start_scheduler
-        start_scheduler()
-    except Exception as exc:
-        log.warning("Could not start background scheduler: %s", exc)
 
     # Flask app
     app = create_app()
 
-    # نمایش وضعیت اولیه
+    # Display the initial state
     def _get_local_ip():
+        """Return the local IP address used for outbound traffic, or localhost on failure."""
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.connect(("8.8.8.8", 80))
@@ -155,21 +166,21 @@ def main():
         daemon=True, name="startup-scan",
     ).start()
 
-    # Polling (حلقه‌های بی‌نهایت با پشتیبانی از stop_event)
+    # Polling (infinite loops with stop_event support)
     threading.Thread(target=poll_all,     daemon=True, name="poll-init").start()
     threading.Thread(target=polling_loop, daemon=True, name="poll-loop").start()
 
-    # اسکن هفتگی
+    # Weekly scan
     threading.Thread(
         target=weekly_scan_loop,
         args=(lambda: list(store.PRINTERS),),
         daemon=True, name="weekly-scan",
     ).start()
 
-    # پاکسازی خودکار لاگ‌های PRINT قدیمی (هر 24 ساعت) - بدون حذف PRINTها
+    # Automatic cleaning of old PRINT logs (every 24 hours) - without deleting PRINTs
     threading.Thread(target=cleanup_loop, daemon=True, name="cleanup-loop").start()
 
-    # پاکسازی خودکار ترمینال هر 24 ساعت
+    # Automatic cleaning of the terminal every 24 hours
     threading.Thread(target=clear_terminal_loop, daemon=True, name="clear-terminal").start()
 
     # Flask server

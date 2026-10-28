@@ -3,7 +3,7 @@
 # Python version: 3.8+ (recommended 3.10+)
 # =====================================================
 #
-# ایجاد و فعال‌سازی محیط مجازی (venv):
+# Creating and activating the virtual environment (venv):
 #
 #   Windows:
 #       python -m venv venv
@@ -13,7 +13,7 @@
 #       python3 -m venv venv
 #       source venv/bin/activate
 #
-# سپس نصب وابستگی‌ها:
+# Then install dependencies:
 #       pip install -r requirements.txt
 #
 # =====================================================
@@ -30,22 +30,22 @@ requests>=2.31.0
 python-dotenv>=1.0.0
 
 # =====================================================
-# فاز E — مهاجرت به PostgreSQL
+# Phase E — Migration to PostgreSQL
 # =====================================================
-# توجه: این دو وابستگی در فاز E.1 فقط **نصب** می‌شوند؛ تا پایان فاز E.2 هیچ
-# مسیری در برنامه از آن‌ها استفاده نمی‌کند (DB_BACKEND همچنان sqlite است).
+# Note: these two dependencies are only **installed** in phase E.1; Until the end of phase E.2 none
+# No path in the application uses them (DB_BACKEND is still sqlite).
 #
-#   psycopg[binary]  درایور PostgreSQL (نسخه ۳؛ همان چیزی که tools/export_from_pg.py
-#                    هم می‌شناسد). فرم [binary] نسخه‌ی ازپیش‌کامپایل‌شده را می‌آورد تا
-#                    روی ویندوزسرور به کامپایلر/ابزار بیلد نیاز نباشد.
-#   alembic          ابزار migration؛ migration پایه در alembic/versions/.
-#   SQLAlchemy به‌عنوان وابستگی خودِ alembic نصب می‌شود (نسخه‌ی حل‌شده در گزارش فاز ثبت شد).
+#   psycopg[binary] PostgreSQL driver (version 3; same as tools/export_from_pg.py
+#                    also knows). The [binary] form returns the precompiled version to
+#                    Compiler/build tool is not needed on Windows server.
+#   alembic migration tool; Basic migration in alembic/versions/.
+#   SQLAlchemy is installed as alembic's own dependency (the resolved version was logged in the phase log).
 psycopg[binary]>=3.1,<4
 alembic>=1.13,<2
 
-# tzdata — فاز E.3: `core/time_utils.py` و مسیرهای گروه‌بندی روزانه از
-# `zoneinfo.ZoneInfo("Asia/Tehran")` استفاده می‌کنند. روی لینوکس دیتابیس tz سیستمی
-# هست، ولی روی **ویندوز** پایتون دیتابیس منطقهٔ زمانی ندارد و `zoneinfo` بی‌این پکیج
-# `ZoneInfoNotFoundError` می‌دهد. بند ۲ سند docs/timezone-contract.md همین را الزام
-# کرده بود (offset ثابت +03:30 جای‌گزین نمی‌شود، چون داده‌های دورهٔ DST را جابه‌جا می‌کند).
+# tzdata — Phase E.3: `core/time_utils.py' and daily grouping paths from
+# They use `zoneinfo.ZoneInfo("Asia/Tehran")`. On Linux database tz system
+# Yes, but on **Windows** Python database does not have time zone and ``zoneinfo'' does not have this package
+# Returns `ZoneInfoNotFoundError`. Clause 2 of the document docs/timezone-contract.md requires the same
+# (fixed offset +03:30 is not replaced, because it moves the data of the DST period).
 tzdata>=2024.1

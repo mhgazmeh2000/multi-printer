@@ -1,34 +1,45 @@
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         tests/test_smoke_routes.py
+# @brief:        Smoke tests for routes that use raw SQL (phase D).
+# @details:      Responsibilities: Check that the routes respond correctly against seeded data.
+#                Main API: SmokeRoutesTests
+#                Side effects: database access, file I/O
+# @dependencies: internal: core.database, core.security_audit, core.time_utils, models, web |
+#                external: pytest
+# @notes:        Can be run directly as a script.
+# =============================================================================
+
 """
-Smoke test مسیرهای دارای SQL خام (فاز D — کار D.3).
+Smoke test routes with raw SQL (Phase D — Task D.3).
 
-چرا این فایل؟
-    چهار مسیر زیر در فاز E باید روی PostgreSQL هم کار کنند. این تست‌ها یک تور
-    ایمنیِ سریع‌اند تا اگر روزی اتصال/SQL این مسیرها بشکند، همان‌جا لو برود
-    (نه در تست‌های عمیق دامنه).
+Why this file?
+    The following four paths in Phase E should also work on PostgreSQL. These tests are a tour
+    They are quick safety so that if one day the connection/SQL of these routes breaks, it will be exposed right there
+    (not in deep domain tests).
 
-مسیرها:
-    POST /api/import/analyze     → اتصال به فایل DB موقت آپلودی (مسیر غیرِ پیش‌فرض)
-    GET  /api/export/logs        → SELECT روی logs
-    GET  /api/stats/daily        → SELECT/GROUP BY روی logs
-    GET  /api/security/events    → SELECT روی security_events
+Routes:
+    POST /api/import/analyze → Connect to upload temporary DB file (non-default path)
+    GET /api/export/logs → SELECT ON logs
+    GET /api/stats/daily → SELECT/GROUP BY on logs
+    GET /api/security/events → SELECT ON security_events
 
-هر تست سه ادعا دارد (کار E.0.6 سخت‌گیرش کرد):
-    ۱) بدون ورود ⇒ **دقیقاً ۴۰۱** (پیش‌تر «۲۰۰ یا ۴۰۱» بود؛ اگر روزی مسیری
-       ناخواسته باز شود، تستِ قدیمی سبز می‌ماند و کسی نمی‌فهمید)؛
-    ۲) با ورود ادمین ⇒ ۲۰۰ **و نتیجه‌ی SQL واقعی** (نه فقط کد وضعیت). ارزش
-       اصلی این تور این است که کوئری‌ها واقعاً اجرا شوند؛ چون پاسخ ناشناس ۴۰۱
-       است و هیچ SQLی نمی‌بیند؛
-    ۳) بدنه‌ی ۴۰۱ هیچ داده‌ی واقعی (IP، نام پرینتر، نوع رویداد) نشت نمی‌دهد.
+Each test has three assertions (E.0.6 made it difficult):
+    1) No entry ⇒ **exactly 401** (previously it was "200 or 401"; if one day a route
+       accidentally opened, the old test remains green and no one understands);
+    2) By entering admin ⇒ 200 **and the actual SQL result** (not just the status code). value
+       The main point of this tour is that the queries are really executed; Because the anonymous response is 401
+       and does not see any SQL;
+    3) The 401 body does not leak any real data (IP, printer name, event type).
 
-نکته‌ی E.0.6: ``SEED_DAY`` دینامیک است (روز جاری)؛ پیش‌تر ``2026-10-01`` ثابت
-بود و پس از ۳۰ روز، ادعای «۳ صفحه در آن روز» بی‌اثر می‌شد.
+Note E.0.6: ``SEED_DAY'' is dynamic (current day); Fixed before ``2026-10-01''
+and after 30 days, the claim of "3 pages in that day" would become invalid.
 
-نکته‌ی E.3.7: از فاز E.3 داده‌ی ذخیره‌شده UTC/Z است (طول ثابت ۲۷) و سبد روزانه در
-``/api/stats/daily`` روزِ **محلی** است ⇒ ``seed_ts()`` رشته را از ساعت محلی می‌سازد
-تا mean «روز» و «لحظه» یکی باشد.
+Note E.3.7: From phase E.3, the stored data is UTC/Z (fixed length 27) and the daily basket in
+``/api/stats/daily'' is **local** day ⇒ ``seed_ts()'' creates string from local time
+so that mean "day" and "moment" are the same.
 
-اجرا:
+Execution:
     python -m pytest tests/test_smoke_routes.py -q
     python -m unittest tests.test_smoke_routes -v
 """
@@ -53,33 +64,33 @@ from models import User
 from web import create_app
 
 SEED_IP = "192.0.2.42"
-# روز seed دینامیک است (E.0.6): همیشه «امروز» ⇒ هم داخل پنجرهٔ آماری ۳۰ روزه
-# می‌ماند، هم تست پس از گذشت زمان بی‌اثر نمی‌شود. یک مقدار واحد برای هر سه
-# مصرف‌کننده (add_event، DB آپلودی، ادعای تجمیع روزانه) استفاده می‌شود.
+# The seed day is dynamic (E.0.6): always "today" ⇒ also within the 30-day statistical window
+# It remains, the test does not become ineffective after the passage of time. A single value for all three
+# consumer (add_event, DB upload, daily aggregation claim) is used.
 #
-# فاز E.3: داده‌ی DB استاندارد UTC/Z است و سبدِ آمار روزانه «روزِ محلی
-# (Asia/Tehran)» است ⇒ روزِ seed و رشته‌ی زمانش باید از همان مبدأ ساخته شوند،
-# وگرنه بین ساعت ۲۰:۳۰ تا ۲۴:۰۰ تهران (که روز UTC با روز محلی فرق دارد) تست
-# ناپایدار می‌شد.
+# Phase E.3: The standard DB data is UTC/Z and the basket of daily statistics is "local day."
+# (Asia/Tehran)" ⇒ The seed day and its time string must be made from the same origin.
+# Otherwise, test between 20:30 and 24:00 in Tehran (UTC day is different from local day).
+# It was unstable.
 SEED_LOCAL_TZ = local_tz()
 SEED_DAY = datetime.now(SEED_LOCAL_TZ).date().isoformat()
 
 
 def seed_ts(hour: int = 10, minute: int = 5) -> str:
-    """timestamp استاندارد (UTC/Z) برای ساعتِ محلیِ داده‌شده در «امروزِ محلی»."""
+    """Standard timestamp (UTC/Z) for the local time given in "local today"."""
     day = datetime.now(SEED_LOCAL_TZ).date()
     return to_utc_z(datetime.combine(day, time(hour, minute), tzinfo=SEED_LOCAL_TZ))
 SEED_PAGES = 3
-# عبارت‌هایی که هرگز نباید در پاسخ ناشناس دیده شوند (تست عدم نشت)
+# Phrases that should never appear in an anonymous response (leakage test)
 LEAK_MARKERS = (SEED_IP, "Smoke Printer", "PRINT", "REFILL")
 
 
 def _uploaded_db_bytes() -> bytes:
     """
-    یک فایل ``.db`` واقعی (ساخته‌شده در فایل موقت، نه حافظه) با جدول logs.
+    An actual ``.db'' file (created in temporary file, not memory) with the logs table.
 
-    چرا فایل: مسیر ``/api/import/analyze`` با ``sqlite3.connect(path)`` روی
-    فایلِ ذخیره‌شده کار می‌کند؛ با DB حافظه‌ای این مسیر قابل آزمودن نیست.
+    Why file: path ``/api/import/analyze'' with ``sqlite3.connect(path)'' on
+    The saved file works; This route cannot be tested with a memory DB.
     """
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
@@ -104,8 +115,10 @@ def _uploaded_db_bytes() -> bytes:
 
 class SmokeRoutesTests(unittest.TestCase):
 
+    """Tests for smoke routes."""
     def setUp(self):
-        # DB_PATH نسبی است ⇒ با chdir، هر تست DB موقت خودش را دارد.
+        # DB_PATH is relative ⇒ with chdir, each test has its own temporary DB.
+        """Prepare the fixtures that each test in this class uses."""
         self.tmp = tempfile.TemporaryDirectory()
         self.old_cwd = os.getcwd()
         os.chdir(self.tmp.name)
@@ -122,14 +135,15 @@ class SmokeRoutesTests(unittest.TestCase):
                                  password="secret123", role="admin", is_verified=True)
 
     def tearDown(self):
+        """Release the resources that each test in this class created."""
         os.chdir(self.old_cwd)
         self.tmp.cleanup()
 
     def _assert_anonymous_denied(self, resp, endpoint: str):
-        """بدون ورود ⇒ **دقیقاً ۴۰۱** (نه ۲۰۰ و نه هیچ کد دیگری).
+        """No login ⇒ **exactly 401** (not 200 and not any other code).
 
-        اگر پاسخ ۲۰۰ باشد اول با پیام صریح fail می‌کند تا علت پیدا باشد؛
-        سپس برابری دقیق با ۴۰۱ بررسی می‌شود.
+        If the answer is 200, it will first fail with an explicit message to find the cause;
+        Then the exact equality with 401 is checked.
         """
         if resp.status_code == 200:
             self.fail(f"نشت دسترسی: endpoint {endpoint} بدون auth پاسخ ۲۰۰ داد")
@@ -137,15 +151,17 @@ class SmokeRoutesTests(unittest.TestCase):
                          f"{endpoint} بدون auth باید ۴۰۱ بدهد، داد {resp.status_code}")
 
     def _login_admin(self):
+        """Helper: login admin."""
         with self.client.session_transaction() as sess:
             sess["_user_id"] = str(self.admin.id)
             sess["_fresh"] = True
 
-    # ── ۱) POST /api/import/analyze ─────────────────────────────────
-    # E.6.1: analyze فقط *فایل مبدأ* را می‌خواند و آن فایل همیشه SQLite است
-    # (core.db.connect_to بک‌اند را قفل می‌کند) ⇒ این تست زیر PG هم اجرا می‌شود؛
-    # نوشتن (confirm) روی PG بازنشسته است و پوششش در test_import_db_guard.py هست.
+    # 1) POST /api/import/analyze
+    # E.6.1: analyze only reads the *source file* and that file is always SQLite
+    # (core.db.connect_to locks the backend) ⇒ This test is also executed under PG;
+    # Write (confirm) is deprecated on PG and is covered in test_import_db_guard.py.
     def test_import_analyze_route(self):
+        """Verifies import analyze route."""
         anon = self.client.post("/api/import/analyze")
         self._assert_anonymous_denied(anon, "POST /api/import/analyze")
 
@@ -157,16 +173,17 @@ class SmokeRoutesTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         body = resp.get_json()
 
-        # SQL واقعی روی فایل DB آپلودی اجرا شده است
+        # The actual SQL is executed on the uploaded DB file
         self.assertEqual(body["status"], "ok")
         self.assertIn("logs", body["summary"]["importable_tables"])
         self.assertEqual(body["summary"]["logs_count"], 1)
         self.assertIn(SEED_IP, [p["ip"] for p in body["summary"]["all_printers"]])
-        # اتصال به مسیر درست (فایل موقت همین دایرکتوری) انجام شده است
+        # The connection to the correct path (the temporary file of this directory) has been made
         self.assertTrue([f for f in os.listdir(".") if f.startswith("temp_import_")])
 
-    # ── ۲) GET /api/export/logs ─────────────────────────────────────
+    # 2) GET /api/export/logs
     def test_export_logs_route(self):
+        """Verifies export logs route."""
         anon = self.client.get("/api/export/logs")
         self._assert_anonymous_denied(anon, "GET /api/export/logs")
 
@@ -174,15 +191,16 @@ class SmokeRoutesTests(unittest.TestCase):
         resp = self.client.get("/api/export/logs?format=csv")
         self.assertEqual(resp.status_code, 200)
         text = resp.get_data(as_text=True)
-        # ردیف seed‌شده در خروجی CSV هست ⇒ SELECT واقعی روی logs اجرا شده
+        # The seeded row is in the CSV output ⇒ the actual SELECT is executed on the logs
         self.assertIn(SEED_IP, text)
         self.assertIn("PRINT", text)
 
-    # ── ۳) GET /api/stats/daily ─────────────────────────────────────
-    # «آمار روزانه» روی DB خالیِ هر chdir تعریف شده؛ روی PG همهٔ تست‌ها یک
-    # اسکیمای جلسه‌ای را می‌بینند ⇒ sqlite_only (docs/phase-e-plan.md §۵.۳).
+    # 3) GET /api/stats/daily
+    # "daily statistics" defined on the empty DB of each chdir; On PG, all tests are one
+    # See the session schema ⇒ sqlite_only (docs/phase-e-plan.md §5.3).
     @pytest.mark.sqlite_only
     def test_stats_daily_route(self):
+        """Verifies stats daily route."""
         anon = self.client.get("/api/stats/daily")
         self._assert_anonymous_denied(anon, "GET /api/stats/daily")
 
@@ -192,24 +210,24 @@ class SmokeRoutesTests(unittest.TestCase):
         body = resp.get_json()
         self.assertEqual(body["printer_ip"], SEED_IP)
         self.assertEqual(body["days"], 30)
-        self.assertEqual(len(body["dates"]), 31)       # days + 1 روز
+        self.assertEqual(len(body["dates"]), 31)       # days + 1 day
         self.assertEqual(len(body["totals"]), 31)
         self.assertEqual(body["dates"], sorted(body["dates"]))
 
-        # SEED_DAY دینامیک («امروز») است ⇒ همیشه داخل پنجره‌ی ۳۰ روزه ⇒ ادعای
-        # قطعی: ۳ صفحه‌ی seed‌شده باید در سبد همان روز بیفتد (بدون راه فرار).
+        # SEED_DAY is dynamic ("today") ⇒ always within a 30-day window ⇒ claim
+        # Definitive: 3 seeded pages must fall into the basket on the same day (no escape).
         self.assertIn(SEED_DAY, body["dates"],
                       "روز seed باید داخل پنجرهٔ آماری باشد (SEED_DAY دینامیک است)")
         self.assertEqual(body["totals"][body["dates"].index(SEED_DAY)], SEED_PAGES,
                          "تجمیع روزانهٔ SQL باید ۳ صفحهٔ seed را در روز جاری ببیند")
 
-    # ── ۳ب) فیلتر بازه‌ی زمانی روی /api/logs/all (E.3.7) ───────────
+    # ── 3b) time interval filter on /api/logs/all (E.3.7) ───────────
     def test_logs_all_accepts_local_date_filter(self):
-        """فیلتر تاریخِ محلی باید هم‌فرمت داده‌ی UTC/Z شود و ردیف امروز را بگیرد.
+        """The local date filter should also be UTC/Z data format and take today's row.
 
-        قاعده‌ی ``core.time_utils.to_filter_bound``: ``2026-10-04`` = نیمه‌شبِ
-        **محلی** همان روز و ``2026-10-05`` = نیمه‌شبِ محلیِ روز بعد ⇒ بازه‌ی
-        ``[امروز، فردا)`` دقیقاً «همهٔ امروزِ محلی» است.
+        ``core.time_utils.to_filter_bound'' rule: ``2026-10-04'' = midnight
+        **local** the same day and ``2026-10-05'' = local midnight of the next day ⇒ interval
+        ``[today, tomorrow)'' is exactly ``all local today''.
         """
         self._login_admin()
         tomorrow = (datetime.now(SEED_LOCAL_TZ).date() + timedelta(days=1)).isoformat()
@@ -218,22 +236,22 @@ class SmokeRoutesTests(unittest.TestCase):
         events = resp.get_json()["events"]
         self.assertEqual(len(events), 1, f"ردیف امروز باید در بازه بیفتد: {events}")
         self.assertEqual(events[0]["type"], "PRINT")
-        # timestamp خروجی همان فرمت استاندارد است (نه naive محلی)
+        # output timestamp is the standard format (not local naive)
         self.assertTrue(events[0]["timestamp"].endswith("Z"))
 
-        # بازه‌ای که روز قبل تمام می‌شود ⇒ هیچ ردیفی نباید در آن بیفتد
+        # The range that ends the previous day ⇒ no row should fall in it
         resp_past = self.client.get(f"/api/logs/all?ip={SEED_IP}&end={SEED_DAY}")
         self.assertEqual(resp_past.status_code, 200)
         self.assertEqual(resp_past.get_json()["events"], [],
                          "پایانِ بازه = نیمه‌شبِ محلیِ همان روز ⇒ ردیف امروز نباید داخل بیفتد")
 
-    # ── ۳پ) ردیف مهاجرت‌نشده سبد آمار را خراب نمی‌کند (E.3.7) ───────
-    # «آمار روزانه» روی DB خالیِ هر chdir تعریف شده؛ روی PG همهٔ تست‌ها یک
-    # اسکیمای جلسه‌ای را می‌بینند ⇒ sqlite_only (docs/phase-e-plan.md §۵.۳).
+    # ── 3p) The unmigrated row does not destroy the statistics basket (E.3.7) ───────
+    # "daily statistics" defined on the empty DB of each chdir; On PG, all tests are one
+    # See the session schema ⇒ sqlite_only (docs/phase-e-plan.md §5.3).
     @pytest.mark.sqlite_only
     def test_stats_daily_skips_unmigrated_rows(self):
-        """timestamp naive (مهاجرت‌نشده) باید skip + هشدار شود، نه ۵۰۰ یا عدد جعلی."""
-        naive_ts = f"{SEED_DAY}T23:59:00"          # فرمت قدیمی: naive محلی
+        """Naive timestamp should be skip + warning, not 500 or fake number."""
+        naive_ts = f"{SEED_DAY}T23:59:00"          # Old format: local naive
         with sqlite3.connect(os.path.join(os.getcwd(), "logs.db")) as raw:
             raw.execute("INSERT INTO logs (printer_ip, printer_name, timestamp, type, pages, details)"
                         " VALUES (?, ?, ?, 'PRINT', ?, '{}')",
@@ -250,8 +268,9 @@ class SmokeRoutesTests(unittest.TestCase):
         self.assertTrue(any("نامعتبر" in line for line in ctx.output),
                         f"هشدار ردیف مهاجرت‌نشده لاگ نشد: {ctx.output}")
 
-    # ── ۴) GET /api/security/events ─────────────────────────────────
+    # ── 4) GET /api/security/events ───────────────────────────────────
     def test_security_events_route(self):
+        """Verifies security events route."""
         anon = self.client.get("/api/security/events")
         self._assert_anonymous_denied(anon, "GET /api/security/events")
 
@@ -265,24 +284,24 @@ class SmokeRoutesTests(unittest.TestCase):
         self.assertTrue(body["available_types"])
 
 
-    # ── ۵) عدم نشت داده در پاسخ ۴۰۱ (تست اضافی E.0.6) ──────────────
+    # ── 5) No data leakage in 401 response (additional test E.0.6) ──────────────
     def test_401_does_not_leak_printer_info(self):
-        """پاسخ ۴۰۱ نباید داده‌ی سمت‌سرور را لو بدهد.
+        """A 401 response should not expose server side data.
 
-        هر مسیر **دو بار** آزموده می‌شود:
-          ۱) بدون پارامتر — ساده‌ترین حالت؛
-          ۲) با یک IP جعلی بیرون از DB (``203.0.113.99``، محدوده‌ی TEST-NET-3)
-             — اگر پاسخ هر داده‌ی *واقعی* را برگرداند (IP seed‌شده، نام پرینتر،
-             نوع رویداد)، همین‌جا لو می‌رود.
+        Each path is tested **twice**:
+          1) without parameters — the simplest case;
+          2) with a fake IP outside the DB (``203.0.113.99'', TEST-NET-3 range)
+             — if the response returns any *real* data (seeded IP, printer name,
+             event type), is exposed here.
 
-        نکته‌ی مهم (کشف‌شده در همین گام): پاسخ ۴۰۱ روبه‌روی ``login_url`` یک
-        پارامتر ``next`` دارد که **همان درخواستِ خودِ فراخوان** را بازتاب می‌دهد
-        (ورودی کاربر، نه داده‌ی سرور) — پس در حالت پارامتردار، IP جعلی خودش
-        برمی‌گردد و این *نشت نیست*. برای همین، آزمون پارامتردار روی «نبودِ داده‌ی
-        سرور» و «ساختار ثابتِ پاسخ» تمرکز می‌کند، و بازتاب ورودی جداگانه در
-        ``docs/tech-debt.md`` (TD-002) ثبت شده است.
+        Important point (discovered in this step): 401 response to ``login_url'' is one
+        It has a ``next'' parameter that echoes **the same request as the call itself**
+        (user input, not server data) — so in parameterized mode, its own fake IP
+        It comes back and it's *not a leak*. Therefore, the parameterized test on "absence of data".
+        server" and "fixed response structure" focus, and separate input reflection in
+        ``docs/tech-debt.md'' (TD-002) is registered.
         """
-        decoy_ip = "203.0.113.99"          # بیرون از DB ⇒ هر دیده‌شدنی، نشت است
+        decoy_ip = "203.0.113.99"          # Outside the DB ⇒ anything visible is a leak
         endpoints = (
             ("POST /api/import/analyze", "post", "/api/import/analyze"),
             ("GET /api/export/logs", "get", "/api/export/logs"),
@@ -298,8 +317,8 @@ class SmokeRoutesTests(unittest.TestCase):
                     self.assertNotIn(marker.lower(), lowered,
                                      f"{endpoint}{suffix}: پاسخ ۴۰۱ عبارت "
                                      f"«{marker}» را نشت داد")
-                # ساختار پاسخ باید ثابت و حداقلی باشد: فقط error + login_url.
-                # (چیزی جز این دو کلید یعنی مسیر ناشناس شروع کرده به توضیح دادن.)
+                # The response structure should be consistent and minimal: just error + login_url.
+                # (Anything other than these two keys means the unknown path has started to explain.)
                 self.assertEqual(anon.headers.get("Content-Type", "").split(";")[0],
                                  "application/json",
                                  f"{endpoint}{suffix}: پاسخ ۴۰۱ باید JSON باشد")

@@ -1,35 +1,46 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""اسکن PII در fixtureهای طلایی (و منابعشان) — گام E.0.7.
+# =============================================================================
+# @file:         tools/scan_golden_for_pii.py
+# @brief:        Scans golden fixtures and their sources for personal data (step E.0.7).
+# @details:      Responsibilities: Report any PII found in the fixtures.
+#                Main API: key_of(), scan_fixtures(), scan_sources(), dedupe(), print_report(),
+#                to_markdown(), main()
+#                Side effects: file I/O
+# @dependencies: stdlib only
+# @notes:        Can be run directly as a script.
+# =============================================================================
 
-چرا؟ مخزن عمومی است و `tests/fixtures/golden/*.json` عیناً داده‌ی دستگاه‌های
-واقعیِ زمان توسعه را نگه می‌دارد: IP، سریال چاپگر، نام/نامک، نام کاربری. اگر
-یکی از آن‌ها واقعی باشد، در GitHub منتشر شده است. این ابزار همان‌ها را فهرست
-می‌کند و برای هر مورد حکم می‌دهد: «مصنوعی/مستند (بی‌خطر)» یا «باید mock شود».
+"""Scan PII on gold fixtures (and their sources) — Step E.0.7.
 
-منابع اسکن (به ترتیب اهمیت):
-  ۱. ``tests/fixtures/golden/*.json`` — خروجی ضبط‌شده (چیزی که منتشر می‌شود).
-  ۲. ``tests/golden_profiles.py`` و ``tests/golden_scenarios.py`` — **سرچشمه**ی
-     همان مقادیر (اصلاح باید این‌جا انجام و سپس fixture بازضبط شود).
+why The repository is public and `tests/fixtures/golden/*.json` is the data of devices
+Keeps real time development: IP, printer serial, name/name, username. If
+One of them, to be real, is published on GitHub. This tool lists the same
+and decides for each case: "artificial/documented (safe)" or "must be mocked".
 
-قواعد تشخیص:
-  • IP: با حذف قطعه‌های OID («1.3.6.1.4.1.47206.110.1.2.0» و مانند آن)، بقیه
-    با محدوده‌های RFC 5737 (192.0.2.0/24، 198.51.100.0/24، 203.0.113.0/24)،
-    RFC 1918 (10/8، 172.16/12، 192.168/16)، loopback/link-local طبقه‌بندی
-    می‌شوند؛ هر IP دیگر ⇒ «احتمال واقعی».
-  • سریال: الگوهای [A-Z]{2,4}[A-Z0-9]{6,}؛ اگر نشانه‌ی مصنوعی داشته باشد
-    (MOCK/TEST/SAMPLE یا رشتهٔ 123456/0000) ⇒ بی‌خطر، وگرنه ⇒ «قالب واقعی».
-  • MAC، ایمیل، FQDN: مطابق الگوی متعارف؛ همه باید در محدودهٔ نمونه باشند.
-  • نام: فیلدهای هویتی (name/nickname/username/technician/user_identifier/…)
-    فقط اگر از allowlist «برچسب توصیفی/محصول» بیرون باشند بازبینی می‌شوند.
+Scan sources (in order of importance):
+  1. ``tests/fixtures/golden/*.json'' — Captured output (what is emitted).
+  2. ``tests/golden_profiles.py'' and ``tests/golden_scenarios.py'' — **source**
+     The same values (correction should be done here and then the fixture should be re-recorded).
 
-اجرا:
+Recognition rules:
+  • IP: By removing the OID parts ("1.3.6.1.4.1.47206.110.1.2.0" and the like), the rest
+    with RFC 5737 ranges (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24),
+    RFC 1918 (10/8, 172.16/12, 192.168/16), loopback/link-local classification
+    are; Any other IP ⇒ "Real Probability".
+  • Serial: Patterns [A-Z]{2,4}[A-Z0-9]{6,}; If it has an artificial sign
+    (MOCK/TEST/SAMPLE or string 123456/0000) ⇒ safe, otherwise ⇒ "true template".
+  • MAC, email, FQDN: according to the conventional pattern; All should be within the sample range.
+  • Name: identity fields (name/nickname/username/technician/user_identifier/…)
+    They are reviewed only if they are outside the "Descriptive Tag/Product" allowlist.
+
+Execution:
 
     python tools/scan_golden_for_pii.py
     python tools/scan_golden_for_pii.py --md /tmp/pii.md --json /tmp/pii.json
-    python tools/scan_golden_for_pii.py --all-ips        # نمایش IPهای بی‌خطر هم
+    python tools/scan_golden_for_pii.py --all-ips # Show safe IPs too
 
-کدهای خروج: 0 = بی‌خطر، 2 = مورد نیازمند mock/بازبینی هست، 1 = خطای اجرایی.
+Exit codes: 0 = safe, 2 = item needs mock/revision, 1 = execution error.
 """
 
 from __future__ import annotations
@@ -53,14 +64,14 @@ IP_RE = re.compile(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b")
 
 
 def key_of(path: str) -> str:
-    """نام آخرین کلید یک مسیر JSON (``$.a.b[0].name`` ⇒ ``name``)."""
+    """The name of the last key of a JSON path (``$.a.b[0].name`` ⇒ ``name``)."""
     return path.rsplit(".", 1)[-1].split("[")[0].lower()
 OID_HINT_RE = re.compile(r"(1\.3\.6\.1|\bget:|\bset:|\bgetnext:|\boctetstring:|\bint:|"
                          r"\bipaddress:|\bgauge:|\btimeticks:)")
-LONG_DOTTED_RE = re.compile(r"\d+(?:\.\d+){5,}")     # ۶+ جزء ⇒ OID، نه IP
-# سریال‌ها: یا ۲ تا ۴ حرف + ۶+ کاراکتر (مثل «CNXXXXXXXX») یا یک حرف + ۸+
-# کاراکتر (مثل «UXXXXXXXXXXXXX»). مثال‌ها عمداً ساختگی‌اند تا خودِ این فایل
-# حامل مقدار واقعی نباشد. الگو فقط در «بافتِ سریال» سنجیده می‌شود.
+LONG_DOTTED_RE = re.compile(r"\d+(?:\.\d+){5,}")     # 6+ components ⇒ OID, not IP
+# Serials: either 2 to 4 letters + 6+ characters (such as "CNXXXXXXXX") or one letter + 8+
+# character (like "UXXXXXXXXXXXXX"). The examples are intentionally fictitious rather than the file itself
+# not carry a real value. The pattern is only measured in "serial texture".
 SERIAL_RE = re.compile(r"\b(?:[A-Z]{2,4}[-]?[A-Z0-9]{6,}|[A-Z][A-Z0-9]{8,})\b")
 MAC_RE = re.compile(r"\b(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b")
 EMAIL_RE = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.]+\b")
@@ -69,33 +80,33 @@ FQDN_RE = re.compile(r"\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\.(?:local|lan|
 
 MOCK_MARKERS = ("MOCK", "TEST", "DUMMY", "SAMPLE", "FAKE", "123456", "0000")
 
-# OIDهایی که مقدارشان *سریال* است (Printer-MIB 43.5.1.1.17.1 و معادل‌های برندها)
+# OIDs whose value is *serial* (Printer-MIB 43.5.1.1.17.1 and brand equivalents)
 SERIAL_OIDS = ("1.3.6.1.2.1.43.5.1.1.17.1", "1.3.6.1.4.1.2435.2.4.3.99.3.1.6.1.2.3",
                "1.3.6.1.4.1.1129.2.3.50.1.2.4.1.8.1.1")
 SYSNAME_OIDS = ("1.3.6.1.2.1.1.5.0",)
-# الگوهای توصیفی که «نام» تلقی می‌شوند ولی مصنوعی‌اند
+# Descriptive patterns that are considered "names" but are artificial
 DESCRIPTIVE_RE = (
-    re.compile(r"^tray\s*\d+$", re.I),                 # سینی‌ها
+    re.compile(r"^tray\s*\d+$", re.I),                 # trays
     re.compile(r"^[a-z]+ toner$", re.I),                  # «black toner»
-    re.compile(r"^(counters|enhanced)_\d\d_", re.I),     # نام fixture
+    re.compile(r"^(counters|enhanced)_\d\d_", re.I),     # fixture name
 )
 
-# فیلدهای هویتی که مقدارشان باید «برچسب توصیفی/محصول» باشد
+# Identity fields whose value must be "Product/Descriptive Tag".
 IDENTITY_KEYS = ("name", "nickname", "username", "technician", "user_identifier",
                  "printer_name", "hostname", "user", "owner", "contact", "email")
-# برچسب‌های توصیفیِ مصنوعی که عمداً در سناریوها به‌کار رفته‌اند
+# Artificial descriptive tags that are intentionally used in scenarios
 NAME_ALLOWLIST = (
     "hp m577 print room", "hp m577 empty", "brother hl-l2350 office",
     "toshiba e-studio3515ac", "ecs100g rack", "print-room", "smoke_admin",
     "hp-رنگی", "hp-خالی", "توشیبا", "سیستم", "اسکن",
 )
-# مدل/محصول‌نمای ASCII: حرف+رقم مثل CF287A، M577، HL-L2350، e-STUDIO3515AC
+# ASCII display model/product: letter+number like CF287A, M577, HL-L2350, e-STUDIO3515AC
 PRODUCT_LIKE_RE = re.compile(
     r"\b(?:[a-z]{1,3}[- ]?\d{2,}[a-z0-9-]*|\d{3,}[a-z]{1,3})\b", re.I)
 
 
 def _ip_verdict(value: str, ctx: str) -> tuple:
-    """(حکم, توضیح) برای یک IP نامزد."""
+    """(order, explanation) for a candidate IP."""
     if LONG_DOTTED_RE.search(ctx) or OID_HINT_RE.search(ctx):
         return ("ok_oid", "قطعه‌ی OID (نه IP)")
     try:
@@ -114,6 +125,7 @@ def _ip_verdict(value: str, ctx: str) -> tuple:
 
 
 def _serial_verdict(value: str) -> tuple:
+    """Classify a serial value as a mock or a real value for the PII scan."""
     up = value.upper()
     if any(m in up for m in MOCK_MARKERS):
         return ("ok_mock", "نشانه‌ی مصنوعی دارد")
@@ -121,12 +133,13 @@ def _serial_verdict(value: str) -> tuple:
 
 
 def _name_verdict(value: str) -> tuple:
+    """Classify a name value as a mock or a real value for the PII scan."""
     v = value.strip()
     if not v:
         return ("ok_empty", "خالی")
     if v.lower() in NAME_ALLOWLIST:
         return ("ok_label", "برچسب توصیفی سناریو")
-    if PRODUCT_LIKE_RE.search(v):          # نام محصول/مدل یا برچسب دستگاه
+    if PRODUCT_LIKE_RE.search(v):          # Product/model name or device label
         return ("ok_product", "نام محصول/مدل کالا")
     if v.startswith("<") and v.endswith(">"):
         return ("ok_norm", "برچسب نرمال‌سازی‌شده")
@@ -135,8 +148,9 @@ def _name_verdict(value: str) -> tuple:
     return ("review", "مقدار هویتی نامشخص — بازبینی دستی")
 
 
-# ─────────────────────────────── اسکن JSON ──────────────────────────────────
+# JSON scan JSON scan
 def _walk(obj, path="$"):
+    """Walk a JSON-like object and yield its values with their paths."""
     if isinstance(obj, dict):
         for k, v in obj.items():
             yield from _walk(v, f"{path}.{k}")
@@ -148,6 +162,8 @@ def _walk(obj, path="$"):
 
 
 def scan_fixtures(fixtures_dir: str, show_all_ips=False) -> list:
+    """Scan the golden fixtures for personal data."""
+
     findings = []
     for name in sorted(os.listdir(fixtures_dir)):
         if not name.endswith(".json"):
@@ -164,7 +180,7 @@ def scan_fixtures(fixtures_dir: str, show_all_ips=False) -> list:
 
 def _scan_text(value: str, where: str, path: str, show_all_ips=False,
                line_ctx: str = "") -> list:
-    """اسکن یک رشته؛ ``line_ctx`` متن خط در فایل‌های منبع است (برای تشخیص سریال)."""
+    """scan a string; ``line_ctx'' is the line text in source files (for serial recognition)."""
     out = []
     for m in IP_RE.finditer(value):
         verdict, note = _ip_verdict(m.group(0), value)
@@ -172,8 +188,8 @@ def _scan_text(value: str, where: str, path: str, show_all_ips=False,
             continue
         out.append({"where": where, "path": path, "kind": "ip",
                     "value": m.group(0), "verdict": verdict, "note": note})
-    # سریال‌ها فقط در بافت سریال سنجیده می‌شوند (وگرنه نام مدل مثل HL-L2350DW
-    # یا e-STUDIO3515AC اشتباهاً سریال شمرده می‌شود).
+    # Serials are only measured in serial context (otherwise model name like HL-L2350DW
+    # or e-STUDIO3515AC is incorrectly serialized).
     serial_ctx = ("serial" in path.lower()
                   or any(o in path for o in SERIAL_OIDS)
                   or "SERIAL" in (line_ctx or "").upper())
@@ -221,9 +237,9 @@ def _scan_text(value: str, where: str, path: str, show_all_ips=False,
     return out
 
 
-# ─────────────────────────────── اسکن منابع ─────────────────────────────────
+# Source scanning
 def scan_sources(files=SOURCES) -> list:
-    """استخراج رشته‌های ثابت از فایل‌های پایتون منبع (AST)."""
+    """Extract constant strings from Python source (AST) files."""
     findings = []
     for full in files:
         if not os.path.exists(full):
@@ -242,9 +258,9 @@ def scan_sources(files=SOURCES) -> list:
     return findings
 
 
-# ─────────────────────────────── گزارش ─────────────────────────────────────
+# Report
 def dedupe(findings: list) -> list:
-    """یکتا‌سازی بر پایه (فایل، نوع، مقدار) — با حفظ اولین مسیر."""
+    """Uniqueness based on (file, type, value) — preserving the first path."""
     seen, out = set(), []
     for f in findings:
         key = (f["where"], f["kind"], f["value"])
@@ -256,6 +272,8 @@ def dedupe(findings: list) -> list:
 
 
 def print_report(findings: list) -> int:
+    """Print the PII findings and return an exit code."""
+
     print("=" * 82)
     print("اسکن PII در fixtureهای طلایی — فاز E.0.7 (فقط خواندن)")
     print("=" * 82)
@@ -299,6 +317,8 @@ def print_report(findings: list) -> int:
 
 
 def to_markdown(findings: list) -> str:
+    """Render the PII findings as Markdown."""
+
     lines = ["| فایل | مسیر | نوع | مقدار | حکم | توضیح |", "|---|---|---|---|---|---|"]
     for f in findings:
         lines.append(f"| `{f['where']}` | `{f['path']}` | {f['kind']} | "
@@ -307,6 +327,8 @@ def to_markdown(findings: list) -> str:
 
 
 def main(argv=None) -> int:
+    """Command-line entry point of the PII scan."""
+
     ap = argparse.ArgumentParser(description="اسکن PII در golden — E.0.7")
     ap.add_argument("--fixtures", default=DEFAULT_FIXTURES)
     ap.add_argument("--md", default="")

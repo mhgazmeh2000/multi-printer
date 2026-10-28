@@ -1,8 +1,18 @@
+# =============================================================================
+# @file:         utils.py
+# @brief:        Utility helpers for authentication: serialisers, reset tokens and token hashing.
+# @details:      Responsibilities: Generate and verify password-reset tokens and hash tokens.
+#                Main API: make_serializer(), generate_reset_token(), verify_reset_token(),
+#                hash_token(), verify_recaptcha(), send_email()
+#                Side effects: network I/O, sends e-mail
+# @dependencies: internal: config | external: itsdangerous, requests
+# @notes:        None.
+# =============================================================================
+
 """Utility helpers for auth, email, and captcha verification."""
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import logging
 import smtplib
@@ -19,14 +29,20 @@ log = logging.getLogger("PrinterMonitor")
 
 
 def make_serializer() -> URLSafeTimedSerializer:
+    """Return the signer used for password-reset tokens."""
+
     return URLSafeTimedSerializer(settings.SECRET_KEY, salt="password-reset")
 
 
 def generate_reset_token(user_id: int, email: str) -> str:
+    """Create a signed password-reset token for a user."""
+
     return make_serializer().dumps({"user_id": user_id, "email": email})
 
 
 def verify_reset_token(token: str, max_age_seconds: int = 3600) -> Optional[dict]:
+    """Verify a password-reset token and return its payload, or None if it is invalid or expired."""
+
     try:
         return make_serializer().loads(token, max_age=max_age_seconds)
     except Exception:
@@ -34,28 +50,30 @@ def verify_reset_token(token: str, max_age_seconds: int = 3600) -> Optional[dict
 
 
 def hash_token(token: str) -> str:
+    """Return the SHA-256 hex digest of a token."""
+
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 def verify_recaptcha(token: str, remote_ip: str = None) -> bool:
     """
-    تأیید توکن reCAPTCHA.
+    reCAPTCHA token verification.
 
-    رفتار:
-    - اگر RECAPTCHA_SECRET_KEY در production تنظیم نشده باشد → خطا (راه نمی‌اندازیم
-      چون captcha نباید بی‌سروصدا غیرفعال شود).
-    - اگر در development تنظیم نشده باشد → True (با هشدار) — برای راحتی توسعه.
-    - اگر تنظیم شده باشد → تأیید واقعی با Google API.
+    Behavior:
+    - If RECAPTCHA_SECRET_KEY is not set in production → error (we will not launch
+      because captcha should not be disabled silently).
+    - If not set in development → True (with warning) — for ease of development.
+    - If set → True authentication with Google API.
     """
     if not settings.RECAPTCHA_SECRET_KEY:
         if settings.ENVIRONMENT == "production":
-            # در production هرگز bypass نکنیم؛ این یک حفره امنیتی است.
+            # never bypass in production; This is a security hole.
             log.error(
                 "❌ reCAPTCHA verification skipped in PRODUCTION because "
                 "RECAPTCHA_SECRET_KEY is not set! Treating as failed."
             )
             return False
-        # development: بدون captcha (با هشدار یکباره)
+        # development: without captcha (with one-time warning)
         if not getattr(verify_recaptcha, "_warned", False):
             log.warning(
                 "⚠  reCAPTCHA is DISABLED (no RECAPTCHA_SECRET_KEY). "
@@ -85,7 +103,7 @@ def verify_recaptcha(token: str, remote_ip: str = None) -> bool:
         return success
     except Exception as exc:
         log.exception("reCAPTCHA verification error: %s", exc)
-        # در production fail-closed: اگر سرویس Google در دسترس نباشد، کاربر رد می‌شود
+        # In production fail-closed: If the Google service is not available, the user is rejected
         return settings.ENVIRONMENT != "production"
 
 
@@ -136,6 +154,8 @@ def _get_oauth_access_token() -> Optional[str]:
 
 
 def send_email(subject: str, recipient: str, text_body: str, html_body: str = None) -> bool:
+    """Send an e-mail with a text body and an optional HTML body; returns True on success."""
+
     if not settings.MAIL_SERVER or not recipient:
         log.warning("Email not sent because MAIL_SERVER or recipient is missing")
         return False

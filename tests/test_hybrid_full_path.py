@@ -1,35 +1,47 @@
 # -*- coding: utf-8 -*-
-"""تست‌های مسیر کامل USE_SNMP_EXPORTER=1 در برابر fixtureهای طلایی (گام H.3).
+# =============================================================================
+# @file:         tests/test_hybrid_full_path.py
+# @brief:        Full-path tests with USE_SNMP_EXPORTER=1 against golden fixtures (step H.3).
+# @details:      Responsibilities: Check the exporter-enabled path end to end.
+#                Main API: _FakeResp, FakeExporterHttp, 7 test functions
+#                Side effects: network I/O
+# @dependencies: internal: core, core.collectors.exporter_adapter, core.exporter_client,
+#                core.poller, tests.golden_harness, tests.golden_profiles,
+#                tools.compare_snmp_sources | external: pytest, yaml
+# @notes:        None.
+# =============================================================================
 
-این تست پیمانِ برگ‌های قابل‌استخراج (Extractable Leaves Contract) را در دو سطح می‌سنجد:
+"""Full path tests USE_SNMP_EXPORTER=1 against golden fixtures (step H.3).
 
-  سطح ۱ — `collect_via_exporter` در برابر fixtureهای طلایی:
-    • ۳۰ برگِ قابل‌استخراجِ SNMP برای HP color (تفاضل صفر در هر دو حالت پر و خالی).
-    • ۲ برگِ volatile (last_poll, poll_ms) که پویا هستند.
-    • ۲ برگِ fixture gap (counters.full_color, counters.black_white) که OIDهای شمارندهٔ
-      اختصاصی اچ‌پی (11.2.3.9.6.1.1.*) در fixture وجود ندارند (ثبت در TD-020).
-    • ۱۲۶ برگِ غنای legacy برای حالت پر (و ۱۳۴ برگ برای خالی با احتساب ۸ کلید هشدارهای سنتز‌شده).
-    • صفر برگ طبقه‌بندی‌نشده (Unclassified) در هر دو ساختار.
-    • اثبات عدم ورود (non-entry) برای برندهای پشتیبانی‌نشده (Brother، Toshiba، ECS100G)
-      با صفر کوئری exporter و ثبت دقیقاً یک warning به ازای هر برند.
+This test measures the Extractable Leaves Contract at two levels:
 
-  سطح ۲ — `poller.collect()` با پرچمِ `USE_SNMP_EXPORTER=1`:
-    • برای HP، بعد از پاسخ موفق exporter هیچ OID collector خوانده نمی‌شود
-      (توالی فراخوانی transport فقط شامل health probe اولیه است).
-    • مقادیر `nickname` و `device_type` توسط poller به خروجی الحاق می‌شوند.
-    • خروجی در `store.printer_data` ذخیره می‌شود.
-    • طبق طراحی G.5، مسیر exporter عمداً هیچ رویداد شمارنده‌ای ثبت نمی‌کند و صفر ردیف در DB می‌نویسد.
-    • برای برندهای پشتیبانی‌نشده، poller با خاموش ماندن مسیر exporter، به شکل خودکار
-      به مسیر legacy برمی‌گردد.
+  Level 1 — `collect_via_exporter' against golden fixtures:
+    • 30 extractable pages of SNMP for HP color (zero difference in both full and empty states).
+    • 2 volatile leaves (last_poll, poll_ms) that are dynamic.
+    • 2 sheets of fixture gap (counters.full_color, counters.black_white) which OIDs of counters
+      HP exclusives (11.2.3.9.6.1.1.*) are not present in the fixture (registered in TD-020).
+    • 126 sheets of legacy richness for full mode (and 134 sheets for empty, including 8 synthesized warning keys).
+    • Zero unclassified leaves (Unclassified) in both structures.
+    Non-entry proof for unsupported brands (Brother, Toshiba, ECS100G)
+      With zero exporter queries and registering exactly one warning for each brand.
+
+  Level 2 — `poller.collect()` with flag `USE_SNMP_EXPORTER=1`:
+    • For HP, no collector OID is read after a successful exporter response
+      (The transport call sequence only includes the initial health probe).
+    • `nickname' and `device_type' values ​​are appended to the output by the poller.
+    • The output is stored in `store.printer_data`.
+    • According to the G.5 design, the exporter route intentionally records no counter events and writes zero rows to the DB.
+    • For unsupported brands, poller automatically by leaving the exporter path off
+      It goes back to the legacy path.
 """
 from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
 import re
 import tempfile
 import unittest
+from pathlib import Path
 
 import pytest
 import yaml
@@ -52,7 +64,7 @@ pytestmark = [pytest.mark.pytest_only, pytest.mark.sqlite_only]
 
 
 def load_tests(loader, tests, pattern):  # noqa: ARG001
-    """پروتکل unittest: این فایل با unittest کشف/اجرا نمی‌شود."""
+    """Unittest Protocol: This file is not detected/executed by unittest."""
     return unittest.TestSuite()
 
 
@@ -60,10 +72,10 @@ ROOT = Path(__file__).resolve().parents[1]
 MODS = yaml.safe_load((ROOT / "monitoring" / "snmp.yml").read_text(encoding="utf-8"))["modules"]
 
 
-# ── ۱) پیمان برگ‌ها (Leaf Classification Contracts) ─────────────────────────
+# ── 1) leaf classification contracts
 
-#: ۳۰ برگِ قابل‌استخراجِ مستقیم از MIBهای استاندارد SNMP برای HP color.
-#: این برگ‌ها در هر دو سناریوی پر (enhanced_01) و خالی (enhanced_02) با golden تفاضل-صفر دارند.
+#: 30 sheets that can be extracted directly from standard SNMP MIBs for HP color.
+#: These leaves have zero difference in both full (enhanced_01) and empty (enhanced_02) scenarios with golden.
 EXTRACTABLE_SNMP_LEAVES_HP_COLOR = frozenset({
     "brand",
     "counters.copy",
@@ -97,21 +109,21 @@ EXTRACTABLE_SNMP_LEAVES_HP_COLOR = frozenset({
     "trays.1.status",
 })
 
-#: ۲ برگِ پویا که زمان و تأخیر اجرای poll را نشان می‌دهند (معادل VOLATILE_PATHS ابزار G.6).
+#: 2 dynamic leaves that show poll execution time and delay (equivalent to VOLATILE_PATHS of G.6 tool).
 VOLATILE_PATHS = frozenset({
     "last_poll",
     "poll_ms",
 })
 
-#: ۲ برگِ شمارنده‌های اختصاصی اچ‌پی که OIDهای آن‌ها (1.3.6.1.4.1.11.2.3.9.6.1.1.*)
-#: در fixtureهای فعلی وجود ندارند و در نتیجه در خروجی exporter برابر None هستند (TD-020).
+#: 2 pages of exclusive HP counters whose OIDs are (1.3.6.1.4.1.11.2.3.9.6.1.1.*)
+#: They do not exist in the current fixtures and as a result they are equal to None in the output of the exporter (TD-020).
 FIXTURE_GAPS = frozenset({
     "counters.full_color",
     "counters.black_white",
 })
 
-#: ۱۲۶ برگِ غنای legacy برای HP color در وضعیت عادی/پر (enhanced_01).
-#: این داده‌ها از catalog، موتور yield_engine و PrevStore تولید می‌شوند و در MIB خام نیستند.
+#: 126 pages of legacy richness for HP color in normal/full state (enhanced_01).
+#: This data is generated from catalog, yield_engine and PrevStore and is not raw in MIB.
 LEGACY_ENRICHMENT_PATHS = frozenset({
     "cartridge_id_source",
     "cartridge_identity_type.black",
@@ -241,7 +253,7 @@ LEGACY_ENRICHMENT_PATHS = frozenset({
     "trays.2.status",
 })
 
-#: ۸ برگِ هشدارهای مصنوعی که در سناریوی کارتریج خالی (enhanced_02) توسط legacy ساخته می‌شوند.
+#: 8 sheets of artificial warnings generated by legacy in empty cartridge scenario (enhanced_02).
 SYNTHESIZED_ALERT_PATHS = frozenset({
     "alerts.0.code",
     "alerts.0.message",
@@ -254,14 +266,15 @@ SYNTHESIZED_ALERT_PATHS = frozenset({
 })
 
 
-# ── ۲) توابع کمکی hermetic (Exposition Generator + Fake HTTP) ─────────────
+# ── 2) hermetic auxiliary functions (Exposure Generator + Fake HTTP) ─────────────
 
 def _esc_prom(s: str) -> str:
+    """Helper: esc prom."""
     return str(s).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
 
 def make_exposition_from_spec(module: str, oids: dict) -> str:
-    """تولید خروجی متن Prometheus بر اساس ساختار واقعی `monitoring/snmp.yml`."""
+    """Generating Prometheus text output based on the actual monitoring/snmp.yml structure."""
     lines = []
     module_spec = MODS.get(module, {})
     for met in module_spec.get("metrics", []):
@@ -282,31 +295,39 @@ def make_exposition_from_spec(module: str, oids: dict) -> str:
 
 
 class _FakeResp:
+    """Helper class: fake resp."""
     def __init__(self, body: str):
+        """Initialize the instance."""
         self._body = body.encode("utf-8")
         self.status = 200
 
     def getcode(self):
+        """Helper: getcode."""
         return self.status
 
     def read(self):
+        """Helper: read."""
         return self._body
 
     def __enter__(self):
+        """Enter the context and return the object."""
         return self
 
     def __exit__(self, *args):
+        """Leave the context and release what was acquired."""
         return False
 
 
 class FakeExporterHttp:
-    """`open_fn` ایزوله برای شبیه‌سازی snmp_exporter بر اساس داده‌های fixture."""
+    """Isolated `open_fn` to simulate snmp_exporter based on fixture data."""
 
     def __init__(self, per_module: dict[str, str]):
+        """Initialize the instance."""
         self.per_module = per_module
         self.calls: list[str] = []
 
     def __call__(self, url: str, timeout: float | None = None):
+        """Call the object like a function."""
         self.calls.append(url)
         m = re.search(r"[?&]module=([^&]+)", url)
         if m is None:
@@ -315,11 +336,13 @@ class FakeExporterHttp:
 
 
 def _load_fixture(name: str) -> dict:
+    """Helper: load fixture."""
     path = FIXTURE_DIR / f"{name}.json"
     return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _run_exporter_for_fixture(fixture: dict) -> tuple[dict | None, FakeExporterHttp]:
+    """Helper: run exporter for fixture."""
     printer = fixture["input"]["printer"]
     phase = fixture["input"]["phases"][0]
     dev_map = phase.get("devices") or {}
@@ -335,17 +358,17 @@ def _run_exporter_for_fixture(fixture: dict) -> tuple[dict | None, FakeExporterH
     return res, fake_http
 
 
-# ── ۳) تست‌های سطح ۱: تطابق برگ‌های قابل‌استخراج و طبقه‌بندی ──────────────────
+# ── 3) Level 1 tests: matching of extractable and classified leaves ──────────────────
 
 def test_leaf_classification_inventory_is_consistent():
-    """بررسی جامعیت و عدم هم‌پوشانی دسته‌های ۵‌گانه برگ‌ها."""
+    """Examining the comprehensiveness and non-overlapping of the 5 categories of leaves."""
     assert len(EXTRACTABLE_SNMP_LEAVES_HP_COLOR) == 30
     assert len(VOLATILE_PATHS) == 2
     assert len(FIXTURE_GAPS) == 2
     assert len(LEGACY_ENRICHMENT_PATHS) == 126
     assert len(SYNTHESIZED_ALERT_PATHS) == 8
 
-    # هیچ دو دسته‌ای نباید اشتراک داشته باشند
+    # No two categories should share
     categories = [
         EXTRACTABLE_SNMP_LEAVES_HP_COLOR,
         VOLATILE_PATHS,
@@ -364,7 +387,7 @@ def test_leaf_classification_inventory_is_consistent():
     "enhanced_02_hp_color_toner_empty",
 ])
 def test_exporter_path_matches_extractable_golden_leaves(fx_name):
-    """هر ۳۰ برگِ قابل‌استخراج در مسیر exporter دقیقاً و بدونِ تفاضل برابر با golden است."""
+    """Every 30 extractable leaves in the exporter path is exactly equal to golden without any difference."""
     fixture = _load_fixture(fx_name)
     exporter_result, _ = _run_exporter_for_fixture(fixture)
     assert exporter_result is not None
@@ -394,7 +417,7 @@ def test_exporter_path_matches_extractable_golden_leaves(fx_name):
     ("enhanced_02_hp_color_toner_empty", LEGACY_ENRICHMENT_PATHS | SYNTHESIZED_ALERT_PATHS),
 ])
 def test_unclassified_leaves_do_not_exist(fx_name, expected_legacy_set):
-    """هیچ برگِ طبقه‌بندی‌نشده‌ای در golden یا خروجی exporter نباید وجود داشته باشد."""
+    """There should be no unsorted leaves in the golden or exporter output."""
     fixture = _load_fixture(fx_name)
     exporter_result, _ = _run_exporter_for_fixture(fixture)
     assert exporter_result is not None
@@ -420,7 +443,7 @@ def test_unclassified_leaves_do_not_exist(fx_name, expected_legacy_set):
     unclassified_exporter = set(exporter_flat.keys()) - all_classified_exporter
     assert not unclassified_exporter, f"برگ‌های طبقه‌بندی‌نشده در exporter: {unclassified_exporter}"
 
-    # هیچ کلید اضافه‌ای در خروجی exporter بیرون از مجموعه کلیدهای golden وجود ندارد
+    # There are no additional keys in the output of the exporter outside of the set of golden keys
     extra_exporter_leaves = set(exporter_flat.keys()) - set(golden_flat.keys())
     assert not extra_exporter_leaves, f"کلیدهای پیش‌بینی‌نشده در exporter: {extra_exporter_leaves}"
 
@@ -430,7 +453,7 @@ def test_unclassified_leaves_do_not_exist(fx_name, expected_legacy_set):
     "enhanced_02_hp_color_toner_empty",
 ])
 def test_fixture_gaps_are_documented_and_evaluated(fx_name):
-    """اثبات این‌که ۲ اختلاف شمارنده دقیقاً ناشی از نبود OIDهای اختصاصی HP در fixture هستند (TD-020)."""
+    """Proof that the 2 counter differences are precisely due to missing HP specific OIDs in the fixture (TD-020)."""
     fixture = _load_fixture(fx_name)
     exporter_result, _ = _run_exporter_for_fixture(fixture)
     assert exporter_result is not None
@@ -451,13 +474,13 @@ def test_fixture_gaps_are_documented_and_evaluated(fx_name):
     ("enhanced_05_ecs100g_sensor", "sensor"),
 ])
 def test_unsupported_brands_non_entry(fx_name, brand, caplog):
-    """برای برندهای پشتیبانی‌نشده هیچ درخواستی به exporter ارسال نمی‌شود و هشدار مستند ثبت می‌شود."""
+    """For unsupported brands, no request is sent to the exporter and a document warning is recorded."""
     fixture = _load_fixture(fx_name)
     with caplog.at_level(logging.WARNING, logger="PrinterMonitor"):
         exporter_result, fake_http = _run_exporter_for_fixture(fixture)
 
     assert exporter_result is None
-    assert fake_http.calls == []  # هیچ درخواست HTTP به exporter ارسال نشد
+    assert fake_http.calls == []  # No HTTP request was sent to the exporter
 
     warning_msgs = [r.message for r in caplog.records if r.name == "PrinterMonitor"]
     assert any(f"برندِ «{brand}» آینه‌سازی نشده" in msg for msg in warning_msgs), (
@@ -465,10 +488,10 @@ def test_unsupported_brands_non_entry(fx_name, brand, caplog):
     )
 
 
-# ── ۴) تست‌های سطح ۲: مسیر کامل با Poller و پرچم USE_SNMP_EXPORTER=1 ─────────
+# ── 4) Level 2 tests: full path with Poller and flag USE_SNMP_EXPORTER=1 ─────────
 
 def test_poller_collect_with_flag_on_uses_exporter_and_bypasses_snmp_sweep(monkeypatch):
-    """در سطح Poller با پرچم روشن: مسیر exporter موفق شده و OID sweep کلس کلکتور کاملاً bypass می‌شود."""
+    """At the poller level with the flag on: the exporter path is successful and the OID sweep of the collector class is completely bypassed."""
     monkeypatch.setenv("USE_SNMP_EXPORTER", "1")
     monkeypatch.setattr(poller, "_exporter_client_cache", None, raising=False)
 
@@ -488,10 +511,10 @@ def test_poller_collect_with_flag_on_uses_exporter_and_bypasses_snmp_sweep(monke
     printer = dict(fixture["input"]["printer"])
 
     with tempfile.TemporaryDirectory() as tmpdir, isolated_db(tmpdir), frozen_time(), transport.installed() as t:
-        # اجرای poll_one پرینتر با پرچم فعال
+        # Run printer poll_one with enabled flag
         poller.poll_one(dict(printer))
 
-        # ۱) اعتبارسنجی فراخوانی‌های transport: فقط health probe اولیه اجرا شده (بدون OID sweep کلکتور)
+        # 1) Validation of transport calls: only initial health probe is executed (no OID sweep collector)
         assert len(t.calls) <= 3, f"فراخوانی‌های بیش از حد health probe: {t.calls}"
         for call in t.calls:
             assert call["oid"] in (
@@ -500,7 +523,7 @@ def test_poller_collect_with_flag_on_uses_exporter_and_bypasses_snmp_sweep(monke
                 "1.3.6.1.2.1.1.5.0",
             ), f"فراخوانی غیرمجاز SNMP sweep: {call}"
 
-        # ۲) بررسی ذخیره‌سازی در store.printer_data و الحاق فیلدهای nickname و device_type
+        # 2) Checking storage in store.printer_data and appending nickname and device_type fields
         stored = store.printer_data.get(printer["ip"])
         assert stored is not None
         assert stored["nickname"] == "HP-رنگی"
@@ -508,7 +531,7 @@ def test_poller_collect_with_flag_on_uses_exporter_and_bypasses_snmp_sweep(monke
         assert stored["counters"]["total"] == 84210
         assert stored["toners"]["black"]["level"] == 78
 
-        # ۳) اعتبارسنجی رفتار مورد انتظار در دیتابیس: صفر ردیف در printer_counters (طراحی G.5)
+        # 3) validation of the expected behavior in the database: zero rows in printer_counters (design G.5)
         db_state = snapshot_db()
         assert db_state.get("printer_counters") == []
         assert db_state.get("toner_snapshots_v2") == []
@@ -516,7 +539,7 @@ def test_poller_collect_with_flag_on_uses_exporter_and_bypasses_snmp_sweep(monke
 
 
 def test_poller_collect_with_flag_on_falls_back_for_unsupported_brands(monkeypatch):
-    """با پرچم روشن، برای برندهای غیرپشتیبانی poller بی‌صدا و بدون خطا به مسیر legacy برمی‌گردد."""
+    """With the flag on, the poller silently and error-free reverts to the legacy path for unsupported brands."""
     monkeypatch.setenv("USE_SNMP_EXPORTER", "1")
     monkeypatch.setattr(poller, "_exporter_client_cache", None, raising=False)
 
@@ -530,5 +553,5 @@ def test_poller_collect_with_flag_on_falls_back_for_unsupported_brands(monkeypat
         assert res is not None
         assert res["brand"] == "brother"
         assert res["counters"]["total"] == 25431
-        # در fallback به legacy، فراخوانی‌های SNMP کامل انجام می‌شوند
+        # In fallback to legacy, full SNMP calls are made
         assert len(t.calls) > 20

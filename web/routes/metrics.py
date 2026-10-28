@@ -1,4 +1,14 @@
 # -*- coding: utf-8 -*-
+# =============================================================================
+# @file:         web/routes/metrics.py
+# @brief:        Prometheus-compatible /metrics endpoint for Grafana dashboards.
+# @details:      Responsibilities: Render the metrics text and check the bearer token.
+#                Main API: prometheus_metrics()
+#                Side effects: database access, defines HTTP routes
+# @dependencies: internal: core, core.db | external: flask
+# @notes:        Reads environment variables: METRICS_TOKEN.
+# =============================================================================
+
 """
 Prometheus-compatible /metrics endpoint for Grafana dashboards.
 
@@ -10,34 +20,36 @@ Exposes:
   - printer_cartridge_chip_id_known: 1 if genuine chip ID exists (by printer, color)
   - printer_supply_name: current supply name (by printer, color) — informational label
 
-حفاظت: اگر متغیر محیطی ``METRICS_TOKEN`` تنظیم شده باشد، درخواست باید هدر
-``Authorization: Bearer <token>`` را بفرستد؛ در غیر این صورت ۴۰۱ برمی‌گردد.
-اگر تنظیم نشده باشد، endpoint مثل قبل باز است (با هشدار در لاگ).
+Protection: If the environment variable ``METRICS_TOKEN'' is set, the request must be header
+send ``Authorization: Bearer <token>''; Otherwise, 401 is returned.
+If not set, the endpoint is open as before (with a warning in the log).
 
 No external dependencies required — generates Prometheus exposition text directly.
 """
 
+import logging
 import os
 import secrets
-import logging
 from datetime import datetime
+
 from flask import Blueprint, Response, request
+
 from core.db import get_connection
 from core import store
 
 bp = Blueprint("metrics", __name__)
 log = logging.getLogger("PrinterMonitor")
 
-# هشدار «بدون توکن» فقط یک‌بار در طول عمر پروسه ثبت می‌شود.
+# The "no token" warning is logged only once during the lifetime of the process.
 _METRICS_TOKEN_WARNED = False
 
 
 def _check_metrics_token():
-    """بررسی هدر Bearer در برابر ``METRICS_TOKEN``.
+    """Check Bearer header against ``METRICS_TOKEN''.
 
-    خروجی: ``(ok, required)``
-      • توکن تنظیم نشده  → (True, False)  → رفتار قبلی حفظ می‌شود (با هشدار یک‌باره)
-      • توکن تنظیم شده   → مقایسه‌ی ثابت‌زمان هدر با مقدار محیطی
+    Output: ``(ok, required)''
+      • Token not set → (True, False) → previous behavior is preserved (with one-time warning)
+      • Set token → time constant comparison of the header with the environment value
     """
     global _METRICS_TOKEN_WARNED
     expected = (os.getenv("METRICS_TOKEN") or "").strip()
@@ -85,7 +97,7 @@ def prometheus_metrics():
     """
     Prometheus exposition format endpoint.
     Grafana Prometheus datasource: http://<host>:<port>/metrics
-    (در صورت تنظیم METRICS_TOKEN: با هدر Authorization: Bearer <token>)
+    (If METRICS_TOKEN is set: with the Authorization header: Bearer <token>)
     """
     token_ok, _token_required = _check_metrics_token()
     if not token_ok:
@@ -99,30 +111,32 @@ def prometheus_metrics():
     help_seen = set()
 
     def _help(name, text):
+        """Write the Prometheus HELP line for a metric, once."""
         if name not in help_seen:
             lines.append(f"# HELP {name} {text}")
             help_seen.add(name)
 
     def _type(name, t):
+        """Write the Prometheus TYPE line for a metric."""
         lines.append(f"# TYPE {name} {t}")
 
     try:
-        # فاز D: اتصال از لایه‌ی adapter (core.db)؛ همان timeout قبلی.
+        # Phase D: connection from the adapter layer (core.db); The same timeout as before.
         conn = get_connection(timeout=10.0)
 
         # ─── 1. cartridge_changes_total ─────────────────────────────────
         _help("cartridge_changes_total", "Total number of CARTRIDGE_CHANGED events detected")
         _type("cartridge_changes_total", "counter")
-        # فاز E.4.6: cursor خام حذف شد ⇒ ``conn.execute`` (همان قرارداد بقیه‌ی کوئری‌ها).
-        # فاز E.4.9: ``json_extract`` تابع SQLite است ⇒ قطعهٔ SQL از هِلپر adapter.
+        # Phase E.4.6: raw cursor was removed ⇒ ``conn.execute'' (same convention as other queries).
+        # Phase E.4.9: ``json_extract'' is a SQLite function ⇒ SQL fragment from adapter helper.
         detection_sql = conn.json_extract("details", "detection")
-        # فاز E.4.9b: ``printer_name`` در فهرست ``GROUP BY`` نیست؛ SQLite این را
-        # می‌پذیرد، PostgreSQL نه — خطای 42803 «column logs.printer_name must
+        # Phase E.4.9b: ``printer_name'' is not in the ``GROUP BY'' list; SQLite does this
+        # Accepts, PostgreSQL does not — error 42803 "column logs.printer_name must
         # appear in the GROUP BY clause or be used in an aggregate function»
-        # (سنجیده‌شده، E.4.9). تصمیم مالک: ``MAX(printer_name)`` انتخاب شد تا
-        # **تعداد سری امروز ثابت بماند** (افزودن ستون به GROUP BY اگر پرینتری
-        # تغییر نام داده باشد سری اضافه می‌کند). مزیت جانبی: مقدار برچسب دیگر
-        # به ترتیب تصادفی ردیف‌ها وابسته نیست.
+        # (measured, E.4.9). Owner Decision: ``MAX(printer_name)'' was chosen to
+        # **The number of today's series remains the same** (add column to GROUP BY if printer
+        # if it has been renamed, it adds a series). Side benefit: more sticker value
+        # It does not depend on the random order of the rows.
         c = conn.execute(f"""
             SELECT printer_ip, MAX(printer_name) AS printer_name,
                    {detection_sql} as detection,
@@ -158,8 +172,8 @@ def prometheus_metrics():
                         if p.get("ip") == ip:
                             printer_name = p.get("name", "")
                             break
-                # شکل واقعی collect_enhanced: {"black": {"level": …, "name": …}, …}
-                # (شیء قدیمی لیستی بود؛ هر دو پشتیبانی می‌شوند.)
+                # actual form of collect_enhanced: {"black": {"level": …, "name": …}, …}
+                # (The old object was a list; both are supported.)
                 toners = data.get("toners") or {}
                 if isinstance(toners, dict):
                     toner_items = list(toners.items())
@@ -197,7 +211,7 @@ def prometheus_metrics():
                         if p.get("ip") == ip:
                             printer_name = p.get("name", "")
                             break
-                # شکل واقعی: counters.total (با fallback به print_total قدیمی)
+                # Actual form: counters.total (with fallback to old print_total)
                 counters = data.get("counters")
                 total = None
                 if isinstance(counters, dict):
@@ -223,7 +237,7 @@ def prometheus_metrics():
                         if p.get("ip") == ip:
                             printer_name = p.get("name", "")
                             break
-                # شکل واقعی: کلید بولی online (fallback: status == "online")
+                # Actual form: boolean key online (fallback: status == "online")
                 if data and "online" in data:
                     online = 1 if data.get("online") else 0
                 else:
