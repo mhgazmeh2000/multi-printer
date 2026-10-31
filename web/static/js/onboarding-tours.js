@@ -9,6 +9,12 @@
 (function (global) {
   "use strict";
 
+  // Public pages where no user is logged in. Requesting the status there only produces a 401
+  // in the browser console, so the request is skipped on these pages.
+  const PUBLIC_PATH_PREFIXES = [
+    "/login", "/register", "/forgot-password", "/reset-password/", "/contact",
+  ];
+
   class OnboardingManager {
     constructor() {
       this.status = null;
@@ -19,6 +25,11 @@
     async init() {
       if (this.initialized) return;
       this.initialized = true;
+
+      const path = window.location.pathname;
+      if (PUBLIC_PATH_PREFIXES.some((prefix) => path === prefix || path.startsWith(prefix))) {
+        return;
+      }
 
       try {
         const res = await fetch("/api/onboarding/status");
