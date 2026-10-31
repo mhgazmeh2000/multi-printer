@@ -3,9 +3,9 @@
 # @brief:        Utility helpers for authentication: serialisers, reset tokens and token hashing.
 # @details:      Responsibilities: Generate and verify password-reset tokens and hash tokens.
 #                Main API: make_serializer(), generate_reset_token(), verify_reset_token(),
-#                hash_token(), verify_recaptcha(), send_email()
+#                hash_token(), send_email()
 #                Side effects: network I/O, sends e-mail
-# @dependencies: internal: config | external: itsdangerous, requests
+# @dependencies: internal: config | external: itsdangerous
 # @notes:        None.
 # =============================================================================
 
@@ -20,7 +20,6 @@ import time
 from email.message import EmailMessage
 from typing import Optional
 
-import requests
 from itsdangerous import URLSafeTimedSerializer
 
 from config import settings
@@ -53,58 +52,6 @@ def hash_token(token: str) -> str:
     """Return the SHA-256 hex digest of a token."""
 
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
-
-
-def verify_recaptcha(token: str, remote_ip: str = None) -> bool:
-    """
-    reCAPTCHA token verification.
-
-    Behavior:
-    - If RECAPTCHA_SECRET_KEY is not set in production → error (we will not launch
-      because captcha should not be disabled silently).
-    - If not set in development → True (with warning) — for ease of development.
-    - If set → True authentication with Google API.
-    """
-    if not settings.RECAPTCHA_SECRET_KEY:
-        if settings.ENVIRONMENT == "production":
-            # never bypass in production; This is a security hole.
-            log.error(
-                "❌ reCAPTCHA verification skipped in PRODUCTION because "
-                "RECAPTCHA_SECRET_KEY is not set! Treating as failed."
-            )
-            return False
-        # development: without captcha (with one-time warning)
-        if not getattr(verify_recaptcha, "_warned", False):
-            log.warning(
-                "⚠  reCAPTCHA is DISABLED (no RECAPTCHA_SECRET_KEY). "
-                "Set the env variable to enable. Acceptable for development only."
-            )
-            verify_recaptcha._warned = True
-        return True
-
-    if not token:
-        return False
-    try:
-        payload = {
-            "secret": settings.RECAPTCHA_SECRET_KEY,
-            "response": token,
-        }
-        if remote_ip:
-            payload["remoteip"] = remote_ip
-        response = requests.post(
-            "https://www.google.com/recaptcha/api/siteverify",
-            data=payload,
-            timeout=10,
-        )
-        data = response.json()
-        success = bool(data.get("success"))
-        if not success:
-            log.warning("reCAPTCHA verification failed: %s", data.get("error-codes"))
-        return success
-    except Exception as exc:
-        log.exception("reCAPTCHA verification error: %s", exc)
-        # In production fail-closed: If the Google service is not available, the user is rejected
-        return settings.ENVIRONMENT != "production"
 
 
 _oauth_token_cache = {"token": None, "expires_at": 0}

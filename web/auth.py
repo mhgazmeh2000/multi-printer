@@ -31,7 +31,8 @@ from flask_login import LoginManager
 
 from config import settings
 from models import User
-from utils import generate_reset_token, hash_token, send_email, verify_recaptcha, verify_reset_token
+from utils import generate_reset_token, hash_token, send_email, verify_reset_token
+from web.captcha import PROVIDER_ALTCHA, active_provider, captcha_enabled, create_challenge, verify_captcha
 from web.security import limiter
 log = logging.getLogger("PrinterMonitor")
 
@@ -80,8 +81,6 @@ def init_auth(app):
     app.config.setdefault("MAIL_OAUTH_REFRESH_TOKEN", settings.MAIL_OAUTH_REFRESH_TOKEN)
     app.config.setdefault("GOOGLE_CLIENT_ID", settings.GOOGLE_CLIENT_ID)
     app.config.setdefault("GOOGLE_CLIENT_SECRET", settings.GOOGLE_CLIENT_SECRET)
-    app.config.setdefault("RECAPTCHA_SITE_KEY", settings.RECAPTCHA_SITE_KEY)
-    app.config.setdefault("RECAPTCHA_SECRET_KEY", settings.RECAPTCHA_SECRET_KEY)
 
     login_manager.init_app(app)
     login_manager.login_view = "auth.login"
@@ -347,6 +346,19 @@ def _unique_username(base_name: str) -> str:
 USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]{3,32}$")
 
 
+@auth_bp.route("/api/altcha/challenge", methods=["GET"])
+@limiter.limit("60 per minute")
+def altcha_challenge():
+    """Return a fresh ALTCHA challenge for the login, register and contact widgets."""
+    if active_provider() != PROVIDER_ALTCHA:
+        abort(404)
+    try:
+        return jsonify(create_challenge())
+    except RuntimeError:
+        log.error("ALTCHA challenge requested but ALTCHA_HMAC_SECRET is not set")
+        return jsonify({"error": "captcha_not_configured"}), 503
+
+
 @auth_bp.route("/login", methods=["GET", "POST"])
 @limiter.limit("10 per minute; 30 per 5 minutes", methods=["POST"])
 def login():
@@ -379,11 +391,11 @@ def login():
                 "تعداد تلاش‌های ناموفق از حد مجاز گذشته است. "
                 f"لطفاً پس از {FAILED_ATTEMPT_WINDOW_MINUTES} دقیقه دوباره تلاش کنید."
             )
-        elif not verify_recaptcha(request.form.get("g-recaptcha-response", ""), ctx["ip_address"]):
+        elif not verify_captcha(request.form, request.remote_addr):
             log_security_event(
                 SecurityEvent.SUSPICIOUS_ACTIVITY, severity=Severity.WARNING,
                 user_identifier=identifier, success=False,
-                details="reCAPTCHA verification failed", **ctx,
+                details="CAPTCHA verification failed", **ctx,
             )
             error = "کپچا معتبر نیست"
         else:
@@ -418,7 +430,7 @@ def login():
         "login.html",
         error=error,
         google_enabled=bool(current_app.config.get("GOOGLE_CLIENT_ID") and current_app.config.get("GOOGLE_CLIENT_SECRET")),
-        recaptcha_site_key=current_app.config.get("RECAPTCHA_SITE_KEY", ""),
+        captcha_enabled=captcha_enabled(),
         load_dashboard_scripts=False,
     )
 
@@ -436,7 +448,7 @@ def register():
     # (The same condition applied in POST for the first user).
     admin_setup_token_required = bool((os.getenv("ADMIN_SETUP_TOKEN") or "").strip())
     if request.method == "POST":
-        if not verify_recaptcha(request.form.get("g-recaptcha-response", ""), request.remote_addr):
+        if not verify_captcha(request.form, request.remote_addr):
             error = "کپچا معتبر نیست"
         else:
             username = (request.form.get("username") or "").strip()
@@ -476,7 +488,7 @@ def register():
                         return render_template(
                             "register.html",
                             error="توکن راه‌اندازی ادمین نامعتبر است",
-                            recaptcha_site_key=current_app.config.get("RECAPTCHA_SITE_KEY", ""),
+                            captcha_enabled=captcha_enabled(),
                             admin_setup_token_required=admin_setup_token_required,
                             load_dashboard_scripts=False,
                         ), 403
@@ -507,7 +519,7 @@ def register():
     return render_template(
         "register.html",
         error=error,
-        recaptcha_site_key=current_app.config.get("RECAPTCHA_SITE_KEY", ""),
+        captcha_enabled=captcha_enabled(),
         admin_setup_token_required=admin_setup_token_required,
         load_dashboard_scripts=False,
     )

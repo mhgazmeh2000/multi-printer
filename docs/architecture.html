@@ -223,7 +223,7 @@
   <h3>🔄 Data flow view</h3>
   <p>It explains the complete information-receiving cycle in <b>13 numbered steps</b> . Press "▶ Play" to light up the steps in order; each step explanation is shown in the side panel. Three "sub-flows" (sensor, OID scan, user actions) are at the bottom of the page.</p>
   <h3>🧩 File dependency view</h3>
-  <p><b>60 nodes</b> (all project files + runtime data files + external/test nodes), arranged in columns by folder. An arrow <code>A ─▶ B</code> means "A uses B (import)". <b>Blue dashed lines</b> are HTTP calls from the front end; <b>dotted purple lines</b> are file reads/writes; <b>grey dashed lines</b> are tests.</p>
+  <p><b>65 nodes</b> (all project files + runtime data files + external/test nodes), arranged in columns by folder. An arrow <code>A ─▶ B</code> means "A uses B (import)". <b>Blue dashed lines</b> are HTTP calls from the front end; <b>dotted purple lines</b> are file reads/writes; <b>grey dashed lines</b> are tests.</p>
   <h3>⬇️ XML export (draw.io)</h3>
   <ul>
     <li>The "XML export" button creates a file <code>multi-printer-architecture.xml</code> that holds <b>all three views</b> on three separate pages.</li>
@@ -275,8 +275,8 @@ const NODES = [
  {id:'models',cat:'web', title:'models.py', sub:'User model + bcrypt', file:'models.py',
   desc:'User model (Flask-Login). Password hashing and checking with bcrypt, and reading each user role (admin/manager/viewer), permitted offices and modules from the database.',
   arch:[640,900,140,78], depCol:0},
- {id:'utils', cat:'web', title:'utils.py', sub:'Email · token · reCAPTCHA', file:'utils.py',
-  desc:'Web helper tools: sending email through SMTP, creating and validating the password-reset token (itsdangerous), and checking reCAPTCHA with the Google service.',
+ {id:'utils', cat:'web', title:'utils.py', sub:'Email · token', file:'utils.py',
+  desc:'Web helper tools: sending email through SMTP, creating and validating the password-reset token (itsdangerous).',
   arch:[800,900,140,78], depCol:0},
  {id:'wapp',  cat:'web', title:'web/__init__.py', sub:'create_app + blueprints', file:'web/__init__.py',
   desc:'The Flask app factory: registers all 14 route blueprints, connects the authentication system, applies the security middleware and sets up CORS.',
@@ -325,8 +325,8 @@ const NODES = [
  {id:'svc_google',cat:'external',title:'Google OAuth',sub:'Sign in with Google',file:null,
   desc:'Sign-in with a Google account (authlib) instead of a local password.',
   arch:[1330,55,130,62], depCol:10},
- {id:'svc_recap',cat:'external',title:'reCAPTCHA',sub:'Anti-bot for forms',file:null,
-  desc:'Google reCAPTCHA to prevent bot attacks on the sign-in/sign-up form.',
+ {id:'svc_recap',cat:'external',title:'reCAPTCHA (optional)',sub:'Google anti-bot, off by default',file:null,
+  desc:'Optional CAPTCHA provider chosen in the admin panel. Not used with the default ALTCHA provider; when selected, the browser loads Google and the server calls siteverify.',
   arch:[1480,55,120,62], depCol:10},
  {id:'svc_smtp',cat:'external',title:'SMTP',sub:'Send email',file:null,
   desc:'Email server (SMTP) for sending the password-reset link.',
@@ -486,8 +486,8 @@ const EDGES_ARCH = [
  ['auth','models',''],
  ['auth','utils',''],
  ['utils','svc_smtp',''],
- ['utils','svc_recap','bot check'],
  ['auth','svc_google',''],
+ ['auth','svc_recap','optional bot check'],
  ['wapp','r_api','blueprint'],
  ['wapp','r_adm','blueprint'],
  ['wapp','r_rep','blueprint'],
@@ -541,7 +541,7 @@ const EDGES_DEP = [
  E('wapp','rsys','render'),E('wapp','rusers','render'),E('wapp','rsec','render'),E('wapp','rgroups','render'),
  E('wapp','rimport','render'),E('wapp','ryield','render'),E('wapp','auth'),E('wapp','wsec'),
  E('auth','cfg'),E('auth','models'),E('auth','utils'),E('auth','wsec'),E('auth','audit'),
- E('auth','svc_google','http'),E('utils','svc_smtp','http'),E('utils','svc_recap','http'),
+ E('auth','svc_google','http'),E('auth','svc_recap','http'),E('utils','svc_smtp','http'),
  E('wsec','cfg'),
  /* routes */
  E('rdash','cfg'),E('rdash','tpl','render'),
@@ -625,11 +625,11 @@ const CODE_CONTENT = {
   '<code>signal_handler()</code> — clean shutdown with Ctrl+C (stop_event)', '<code>cleanup_loop()</code> — periodic deletion of old PRINT logs with <code>prune_old_print_logs()</code>'],
  cadmin:['<code>main()</code> — reads username/email/password from standard input, creates a new user or promotes an existing user to <code>admin</code>; it uses <code>models.User</code> and <code>init_db()</code> '],
  cfg:['No function — only constants and reading ENV: <code>PRINTERS_FILE</code>, <code>DB_PATH</code>, <code>OID_PROFILES_FILE</code>, <code>POLL_INTERVAL=60</code>, <code>FLASK_PORT=5053</code>, <code>SNMP_PORT=161</code>',
-  '<code>TONER_ALERT_THRESHOLDS</code>, <code>OFFICE_SUBNETS</code> (can be overridden with ENV), <code>SECRET_KEY</code> and the email/OAuth/reCAPTCHA keys, and preventing an insecure default key in production'],
+  '<code>TONER_ALERT_THRESHOLDS</code>, <code>OFFICE_SUBNETS</code> (can be overridden with ENV), <code>SECRET_KEY</code> and the email/OAuth/CAPTCHA keys, and preventing an insecure default key in production'],
  models:['class <code>User(UserMixin)</code> — fields: id, username, email, role, verified, allowed_offices, allowed_modules',
   '<code>set_password()</code> with <code>bcrypt.hashpw()</code> and <code>verify_password()</code> with <code>bcrypt.checkpw()</code>; reading and writing the user record with core.database functions'],
  utils:['<code>make_serializer()</code> and <code>generate/verify_reset_token()</code> — password-reset token (signed with itsdangerous) with a one-hour expiry',
-  '<code>hash_token()</code> — SHA-256 for secure token storage; <code>verify_recaptcha()</code> — POST to the Google siteverify endpoint; <code>send_email()</code> — SMTP with TLS'],
+  '<code>hash_token()</code> — SHA-256 for secure token storage; <code>send_email()</code> — SMTP with TLS'],
  db:['<code>db_connection()</code> — SQLite context manager with timeout; <code>init_db()</code> — creation of all tables: logs, users, printer_counters, toner_history, reset_history, sensor_readings, security_events and the yield tables',
   '<code>add_event()</code> — the single point for recording an event (PRINT/STATUS/ALERT/REFILL/SERVICE/SENSOR_CHANGE) with details as JSON; log-reading functions: <code>get_log</code>, <code>get_all_logs</code>, <code>clear_logs</code>, <code>prune_old_print_logs</code>',
   'Full user management: <code>create_user</code>, <code>list_users</code>, <code>update_user_role/verified/access</code>, <code>delete_user</code>; helpers <code>_dump_json_list</code>/<code>_load_json_list</code> for the JSON columns'],
@@ -675,7 +675,8 @@ const CODE_CONTENT = {
  wapp:['<code>create_app()</code> — builds Flask with SECRET_KEY from settings, calls <code>init_security(app)</code> and <code>init_auth(app)</code>, registers 14 blueprints (dashboard through yield_status) and sets CORS from ENV',
   'template filters and a context processor for ASSET_VERSION (cache busting) and user access'],
  auth:['<code>auth_bp</code> — routes <code>/login</code>, <code>/register</code>, <code>/logout</code>, <code>/forgot-password</code>, <code>/reset-password/&lt;token&gt;</code>, <code>/auth/google[/callback]</code>; the first user is automatically made admin and verified',
-  '<code>init_auth()</code>/<code>load_user()</code> — Flask-Login connection; decorators <code>admin_required</code> and access functions: <code>office_for_ip()</code>, <code>user_allowed_offices()/modules()</code>, <code>user_can_access_office()/module()</code>; <code>_is_safe_next_url()</code> — prevents open redirect; records a security event on every sign-in or error'],
+  '<code>init_auth()</code>/<code>load_user()</code> — Flask-Login connection; decorators <code>admin_required</code> and access functions: <code>office_for_ip()</code>, <code>user_allowed_offices()/modules()</code>, <code>user_can_access_office()/module()</code>; <code>_is_safe_next_url()</code> — prevents open redirect; records a security event on every sign-in or error',
+  '<code>web/captcha.py</code> (used by auth) — checks the CAPTCHA on login and register: self-hosted ALTCHA by default, or reCAPTCHA when selected in the admin panel; the <code>CAPTCHA_ENABLED=false</code> switch turns it off (Fail-Open)'],
  wsec:['<code>limiter</code> — Flask-Limiter with limits on sensitive endpoints (sign-in/sign-up); <code>init_security()</code> — enables CSRF (Flask-WTF) and the limiter',
   '<code>_security_headers()</code> — adds security headers (X-Frame-Options, nosniff, Referrer-Policy etc.) to each response'],
  r_api:['<code>printers.py</code>: <code>/api/printers</code>, <code>/api/printer/&lt;ip&gt;</code>, add/bulk-add/remove, <code>/update</code>, <code>/toner_reset</code>, discover/auto-add and internal debug endpoints, all restricted by office',
@@ -717,7 +718,7 @@ const CODE_CONTENT = {
  dev_printers:['no local code — it is a network entity; interaction via SNMP (UDP/161, community) and, for the toner of some models, via HTTP on the device own web interface'],
  dev_sensor:['no local code — the ECS100G provides temperature/humidity over SNMP v1 on its own port OIDs'],
  svc_google:['external Google service; the project handles the OAuth flow with <code>authlib</code> (web/auth.py → <code>/auth/google</code>)'],
- svc_recap:['external Google service (reCAPTCHA); utils.py sends a POST to <code>siteverify</code> to validate the form token'],
+ svc_recap:['optional external Google service (reCAPTCHA); <code>web/captcha.py</code> posts the token to <code>siteverify</code> only when reCAPTCHA is the selected provider; if Google cannot be reached the submission is allowed (Fail-Open)'],
  svc_smtp:['external email server (TLS); utils.py function <code>send_email()</code> sends the password-reset link'],
  browser:['client-side code: static/js files (especially dashboard.js) that run in the browser and talk to the Flask APIs'],
  http_scrape:['logic in project code: <code>_scrape_toshiba_toners()</code> (toshiba.py) and <code>_scrape_canon_toners()</code> (canon.py) — GET of device status pages and extraction of the percentage with regexes such as <code>(toner|cartridge|black)[^0-9%]{0,40}(\d{1,3})%</code>'],
@@ -903,7 +904,7 @@ if (typeof document !== 'undefined' && document.getElementById){
     const notes = {
       arch:'🏗️ Data-flow path from top to bottom: devices ← network ← collection ← processing ← storage ← web ← browser. Click any node.',
       flow:'🔄 The complete information-receiving cycle in 13 steps; follow the steps with ▶ Play.',
-      dep:'🧩 60 nodes: all project files + data files + external/test nodes, grouped by folder. A ─▶ B means A uses B. Blue dashed = HTTP, purple dotted = file, grey dashed = test.'
+      dep:'🧩 65 nodes: all project files + data files + external/test nodes, grouped by folder. A ─▶ B means A uses B. Blue dashed = HTTP, purple dotted = file, grey dashed = test.'
     };
     document.getElementById('viewNote').textContent = notes[VIEW];
     document.getElementById('flowBar').classList.toggle('show', VIEW==='flow');

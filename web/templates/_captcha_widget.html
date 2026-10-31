@@ -1,0 +1,13 @@
+{#
+  @file:         web/templates/_captcha_widget.html
+  @brief:        Renders the CAPTCHA widget of the active provider.
+  @details:      Includes the ALTCHA widget (self-hosted) or the Google reCAPTCHA widget,
+                 depending on the captcha_provider template variable.
+  @dependencies: templates: _altcha_widget.html, _recaptcha_widget.html
+  @notes:        Render this include only when captcha_enabled is true.
+#}
+{% if captcha_provider == 'recaptcha' %}
+  {% include "_recaptcha_widget.html" %}
+{% else %}
+  {% include "_altcha_widget.html" %}
+{% endif %}

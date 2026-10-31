@@ -369,6 +369,17 @@ if (-not $step6Ok) {
 }
 Write-Host " [OK] ساختار ۱۱ جدول با موفقیت ایجاد شد (نسخه اسکیما: $alembicHead)."
 
+function Get-TargetDbState {
+    # Returns EMPTY, NONEMPTY or UNKNOWN for the PostgreSQL target. Read-only; ignores alembic_version.
+    $env:PRINTGUARD_DSN = $pgDsn
+    $checkCode = 'import os, psycopg; from psycopg import sql; conn=psycopg.connect(os.environ[''PRINTGUARD_DSN''], connect_timeout=5); cur=conn.cursor(); cur.execute(''SELECT table_name FROM information_schema.tables WHERE table_schema = %s AND table_name <> %s'', (''public'', ''alembic_version'')); tables=[r[0] for r in cur.fetchall()]; counts=[cur.execute(sql.SQL(''SELECT EXISTS (SELECT 1 FROM {})'').format(sql.Identifier(t))).fetchone()[0] for t in tables]; print(''NONEMPTY'' if any(counts) else ''EMPTY''); conn.close()'
+    $out = & $PyCmd -c $checkCode 2>$null
+    if ($LASTEXITCODE -ne 0) { return 'UNKNOWN' }
+    $last = [string]($out | Select-Object -Last 1)
+    if ($last -eq 'EMPTY' -or $last -eq 'NONEMPTY') { return $last }
+    return 'UNKNOWN'
+}
+
 function Show-DiagnosisIssues {
     # Prints every issue from logs.db.diagnosis.json (written by diagnose_data_quality.py).
     $diagPath = Join-Path $ProjectDir 'logs.db.diagnosis.json'
@@ -393,6 +404,7 @@ function Show-DiagnosisIssues {
 # ---------------------------------------------------------------------------
 
 Write-Host ''
+$hasWarnings = $false
 Write-Host ' [7/7] بررسی پایگاه‌داده منبع (logs.db) و ارزیابی کیفیت داده...'
 if (-not (Test-Path -LiteralPath $LogsDb)) {
     Write-Host '        فایل logs.db وجود ندارد؛ پایگاه‌داده نو و آماده برای ثبت داده‌های جدید است.'
@@ -420,20 +432,29 @@ if (-not (Test-Path -LiteralPath $LogsDb)) {
     } else {
         Write-Host ' [هشدار] بررسی کیفیت داده‌های logs.db پس از ۲ بار تعمیر همچنان ناموفق بود. ادامه با هشدار:'
         Show-DiagnosisIssues
+        $hasWarnings = $true
     }
     Write-Host ''
-    $answer = Read-Host '  آیا مایلید مهاجرت کامل داده‌های logs.db به PostgreSQL همین حالا انجام شود؟ (Y/N) [Y]'
-    if (-not $answer) { $answer = 'Y' }
-    if ($answer -ieq 'Y') {
-        Write-Host '        در حال مهاجرت و تبدیل زمان به فرمت استاندارد UTC Z ...'
-        $migrateCode = Invoke-Live $PyCmd @('tools\migrate_sqlite_to_pg.py', '--source', 'logs.db', '--target', $pgDsn, '--convert-naive-timestamps', '--verify')
-        if ($migrateCode -ne 0) {
-            Write-Host '  [هشدار] مهاجرت داده‌ها متوقف شد؛ برای اجرای اختصاصی از migrate.bat استفاده نمایید.'
-        } else {
-            Write-Host ' [OK] کلیه داده‌ها با موفقیت کامل به PostgreSQL منتقل شدند.'
-        }
+    $targetState = Get-TargetDbState
+    if ($targetState -eq 'NONEMPTY') {
+        Write-Host '        پایگاه‌داده PostgreSQL از قبل داده دارد؛ پرسش مهاجرت نمایش داده نشد. برای مهاجرت اختصاصی از migrate.bat استفاده کنید.'
+    } elseif ($targetState -eq 'UNKNOWN') {
+        Write-Host '        وضعیت پایگاه‌داده PostgreSQL مشخص نشد؛ پرسش مهاجرت نمایش داده نشد.'
     } else {
-        Write-Host '        مهاجرت داده‌ها نادیده گرفته شد (می‌توانید بعداً migrate.bat را اجرا کنید).'
+        $answer = Read-Host '  آیا مایلید مهاجرت کامل داده‌های logs.db به PostgreSQL همین حالا انجام شود؟ (Y/N) [Y]'
+        if (-not $answer) { $answer = 'Y' }
+        if ($answer -ieq 'Y') {
+            Write-Host '        در حال مهاجرت و تبدیل زمان به فرمت استاندارد UTC Z ...'
+            $migrateCode = Invoke-Live $PyCmd @('tools\migrate_sqlite_to_pg.py', '--source', 'logs.db', '--target', $pgDsn, '--convert-naive-timestamps', '--verify')
+            if ($migrateCode -ne 0) {
+                Write-Host '  [هشدار] مهاجرت داده‌ها متوقف شد؛ برای اجرای اختصاصی از migrate.bat استفاده نمایید.'
+                $hasWarnings = $true
+            } else {
+                Write-Host ' [OK] کلیه داده‌ها با موفقیت کامل به PostgreSQL منتقل شدند.'
+            }
+        } else {
+            Write-Host '        مهاجرت داده‌ها نادیده گرفته شد (می‌توانید بعداً migrate.bat را اجرا کنید).'
+        }
     }
 }
 
@@ -444,7 +465,11 @@ if (-not (Test-Path -LiteralPath $LogsDb)) {
 if (Test-Path -LiteralPath $TempLog) { Remove-Item -LiteralPath $TempLog -Force -ErrorAction SilentlyContinue }
 Write-Host ''
 Write-Host $Rule
-Write-Host '   ✔ راه‌اندازی و بررسی هفت‌گانه با موفقیت کامل پایان یافت!'
+if ($hasWarnings) {
+    Write-Host '   ⚠ راه‌اندازی انجام شد، اما با هشدار. دلیل‌ها را در خروجی بالا بررسی کنید.'
+} else {
+    Write-Host '   ✔ راه‌اندازی و بررسی هفت‌گانه با موفقیت کامل پایان یافت!'
+}
 Write-Host '   اکنون برای شروع پایش پرینترها، start.bat را اجرا کنید.'
 Write-Host $Rule
 Write-Host ''

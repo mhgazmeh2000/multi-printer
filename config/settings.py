@@ -120,6 +120,36 @@ MAIL_OAUTH_REFRESH_TOKEN = _cfg("MAIL_OAUTH_REFRESH_TOKEN", "")
 GOOGLE_CLIENT_ID = _cfg("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = _cfg("GOOGLE_CLIENT_SECRET", "")
 GOOGLE_REDIRECT_URI = _cfg("GOOGLE_REDIRECT_URI", "")
+# ─── CAPTCHA (login, register, contact form) ─────────────────
+# Provider chosen in the admin panel (system_config.json) or here: altcha | recaptcha | none.
+# ALTCHA is self-hosted and is the default. reCAPTCHA is optional; when it is selected,
+# the browser loads Google's script and the server calls Google's siteverify API.
+CAPTCHA_PROVIDER = _cfg("CAPTCHA_PROVIDER", "altcha")
+# Global emergency switch, read from the environment only (the admin panel cannot change it).
+# CAPTCHA_ENABLED=false turns CAPTCHA off for ALL providers (Fail-Open). Use it when the admin
+# cannot log in because the CAPTCHA itself is failing. Set it back to true afterwards.
+CAPTCHA_ENABLED = str(os.getenv("CAPTCHA_ENABLED", "true")).strip().lower() in (
+    "1", "true", "yes", "on",
+)
+# ALTCHA-only switch, read from the environment only. ALTCHA_ENABLED=false turns off the ALTCHA
+# provider (CAPTCHA is then off while ALTCHA is selected). reCAPTCHA is not affected.
+ALTCHA_ENABLED = str(os.getenv("ALTCHA_ENABLED", "true")).strip().lower() in (
+    "1", "true", "yes", "on",
+)
+# Networks whose DIRECT requests (no reverse proxy in between) skip CAPTCHA, for example
+# "172.16.25.0/24". Empty (default) = off. Environment only.
+CAPTCHA_BYPASS_NETWORKS = os.getenv("CAPTCHA_BYPASS_NETWORKS", "")
+# IPs of reverse proxies (for example nginx). A request whose peer is one of these always follows
+# the admin panel, even when it is inside CAPTCHA_BYPASS_NETWORKS. Environment only.
+CAPTCHA_TRUSTED_PROXIES = os.getenv("CAPTCHA_TRUSTED_PROXIES", "")
+# Secret used to sign ALTCHA challenges. Required while ALTCHA is the active provider.
+ALTCHA_HMAC_SECRET = _cfg("ALTCHA_HMAC_SECRET", "")
+# PBKDF2 iterations the browser must compute for each challenge (random-prefix mode).
+# 5000 is the ALTCHA-recommended PBKDF2 value; measured here at about 0.2 s mean per solve.
+ALTCHA_COST = int(_cfg("ALTCHA_COST", "") or 5000)
+# Lifetime of a challenge in seconds. A solved challenge can be used once.
+ALTCHA_CHALLENGE_TTL_SECONDS = int(_cfg("ALTCHA_CHALLENGE_TTL_SECONDS", "") or 300)
+# reCAPTCHA (Google). Used only when CAPTCHA_PROVIDER is "recaptcha".
 RECAPTCHA_SITE_KEY = _cfg("RECAPTCHA_SITE_KEY", "")
 RECAPTCHA_SECRET_KEY = _cfg("RECAPTCHA_SECRET_KEY", "")
 

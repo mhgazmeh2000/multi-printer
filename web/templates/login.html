@@ -45,10 +45,7 @@
 
         <label class="auth-check"><input type="checkbox" name="remember"> مرا به خاطر بسپار</label>
 
-        {% if recaptcha_site_key %}
-        <div class="g-recaptcha" data-sitekey="{{ recaptcha_site_key }}"></div>
-        <script src="https://www.google.com/recaptcha/api.js" async defer></script>
-        {% endif %}
+        {% if captcha_enabled %}{% include "_captcha_widget.html" %}{% endif %}
 
         <button class="btn btn-cyan auth-submit" type="submit">ورود</button>
       </form>

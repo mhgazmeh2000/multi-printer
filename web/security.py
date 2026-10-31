@@ -24,6 +24,7 @@ from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import CSRFProtect, CSRFError
 
 from config import settings
+from web.captcha import PROVIDER_RECAPTCHA, active_provider
 
 log = logging.getLogger("PrinterMonitor")
 
@@ -65,21 +66,30 @@ def _security_headers(response):
             "max-age=31536000; includeSubDomains",
         )
     # Content-Security-Policy:
-    # Note: Because Google reCAPTCHA and Chart.js are used, we need to whitelist CDNs.
+    # Note: Chart.js is loaded from a CDN, so its host is whitelisted. CAPTCHA is self-hosted (ALTCHA).
     # 'unsafe-inline' is required for styles at first (to remove inline styles)
     if "Content-Security-Policy" not in response.headers:
         csp_parts = [
             "default-src 'self'",
-            "script-src 'self' 'unsafe-inline' https://www.google.com https://www.gstatic.com",
+            "script-src 'self' 'unsafe-inline'",
+            "worker-src 'self' blob:",  # ALTCHA runs its proof-of-work in a same-origin blob worker
             "style-src 'self' 'unsafe-inline'",
             "img-src 'self' data: https:",
             "font-src 'self' data:",
             "connect-src 'self'",
-            "frame-src https://www.google.com",
             "frame-ancestors 'none'",
             "base-uri 'self'",
             "form-action 'self'",
         ]
+        if active_provider() == PROVIDER_RECAPTCHA:
+            # Google's reCAPTCHA script, its checkbox iframe and its API are allowed only while
+            # reCAPTCHA is the active provider. ALTCHA keeps the strict policy above.
+            csp_parts = [
+                part.replace("script-src 'self' 'unsafe-inline'",
+                             "script-src 'self' 'unsafe-inline' https://www.google.com https://www.gstatic.com")
+                    .replace("connect-src 'self'", "connect-src 'self' https://www.google.com")
+                for part in csp_parts
+            ] + ["frame-src https://www.google.com"]
         response.headers["Content-Security-Policy"] = "; ".join(csp_parts)
     return response
 

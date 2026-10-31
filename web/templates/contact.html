@@ -1,0 +1,51 @@
+{#
+  @file:         web/templates/contact.html
+  @brief:        Sample contact form protected by the self-hosted ALTCHA CAPTCHA.
+  @details:      Responsibilities: render the email and message fields, the ALTCHA widget,
+                 validation errors and the success message.
+  @dependencies: template base.html, partial _captcha_widget.html
+  @notes:        Sample for other forms. The page requires login (see web/__init__.py).
+#}
+
+{% extends "base.html" %}
+
+{% block title %}تماس با ما | Multi Printer Monitoring{% endblock %}
+
+{% block content %}
+<main class="auth-page">
+  <section class="auth-shell">
+    <div class="auth-hero">
+      <div class="auth-badge">Multi Printer Monitoring</div>
+      <h1>تماس با ما</h1>
+      <p>پیام خود را بفرستید. این فرم با ALTCHA محافظت می‌شود.</p>
+    </div>
+
+    <div class="auth-card">
+      {% if success %}
+        <div class="auth-flash auth-flash-success">پیام شما با موفقیت ارسال شد.</div>
+      {% endif %}
+
+      {% if form and form.errors %}
+        {% for message in form.errors %}
+          <div class="auth-flash auth-flash-error">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+
+      <form method="post" action="{{ url_for('contact.contact') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+        <label class="auth-label" for="contact-email">ایمیل</label>
+        <input id="contact-email" class="form-input" type="email" name="email"
+               value="{{ form.email if form else '' }}" required>
+
+        <label class="auth-label" for="contact-message">پیام</label>
+        <textarea id="contact-message" class="form-input" name="message" rows="5" required>{{ form.message if form else '' }}</textarea>
+
+        {% if captcha_enabled %}{% include "_captcha_widget.html" %}{% endif %}
+
+        <button class="btn btn-cyan auth-submit" type="submit">ارسال</button>
+      </form>
+    </div>
+  </section>
+</main>
+{% endblock %}

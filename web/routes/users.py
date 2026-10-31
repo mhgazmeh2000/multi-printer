@@ -476,8 +476,11 @@ _SYSTEM_FIELDS = [
     'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET',
     'MAIL_SERVER', 'MAIL_PORT', 'MAIL_USE_TLS',
     'MAIL_USERNAME', 'MAIL_PASSWORD',
-    'RECAPTCHA_SITE_KEY', 'RECAPTCHA_SECRET_KEY'
+    'CAPTCHA_PROVIDER', 'RECAPTCHA_SITE_KEY', 'RECAPTCHA_SECRET_KEY',
 ]
+
+# Secret fields: returned masked, and kept unchanged when the masked value is sent back.
+_SECRET_FIELDS = ('GOOGLE_CLIENT_SECRET', 'MAIL_PASSWORD', 'RECAPTCHA_SECRET_KEY')
 
 def _load_system_config():
     """Load the system configuration from its JSON file."""
@@ -507,7 +510,9 @@ def api_system_settings_get():
     result = {}
     for key in _SYSTEM_FIELDS:
         val = cfg.get(key, '')
-        if key in ('GOOGLE_CLIENT_SECRET', 'MAIL_PASSWORD', 'RECAPTCHA_SECRET_KEY') and val:
+        if key == 'CAPTCHA_PROVIDER' and not val:
+            val = 'altcha'  # the default provider when nothing has been chosen yet
+        if key in _SECRET_FIELDS and val:
             # Mask secret: show first 4 + last 4 chars
             if len(val) > 8:
                 result[key] = val[:4] + '•' * (len(val) - 8) + val[-4:]
@@ -515,7 +520,18 @@ def api_system_settings_get():
                 result[key] = '•' * len(val)
         else:
             result[key] = val
-    return jsonify({"status": "ok", "settings": result, "fields": _SYSTEM_FIELDS})
+    from config import settings as live
+    return jsonify({
+        "status": "ok",
+        "settings": result,
+        "fields": _SYSTEM_FIELDS,
+        # True when the server's CAPTCHA_ENABLED=false switch turns off every provider.
+        "captcha_env_disabled": not live.CAPTCHA_ENABLED,
+        # True when the server's ALTCHA_ENABLED=false switch turns off the ALTCHA provider.
+        "altcha_env_disabled": not live.ALTCHA_ENABLED,
+        # True when ALTCHA_HMAC_SECRET is empty: ALTCHA is then off (Fail-Open) until it is set.
+        "altcha_secret_missing": not live.ALTCHA_HMAC_SECRET,
+    })
 
 
 @bp.route("/api/system-settings", methods=["POST"])
@@ -526,14 +542,20 @@ def api_system_settings_set():
     data = request.get_json(silent=True) or {}
     cfg = _load_system_config()
 
+    provider = data.get('CAPTCHA_PROVIDER')
+    if provider is not None and str(provider).strip().lower() not in ('altcha', 'recaptcha', 'none'):
+        return jsonify({"error": "CAPTCHA_PROVIDER must be altcha, recaptcha or none"}), 400
+
     # Update only provided fields (secrets that are masked get special handling)
     for key in _SYSTEM_FIELDS:
         if key in data:
             val = data[key]
             # If value contains masking chars, it means user didn't change it
-            if key in ('GOOGLE_CLIENT_SECRET', 'MAIL_PASSWORD', 'RECAPTCHA_SECRET_KEY'):
+            if key in _SECRET_FIELDS:
                 if val and '•' in val:
                     continue  # Keep old value
+            if key == 'CAPTCHA_PROVIDER':
+                val = str(val).strip().lower()
             if key == 'MAIL_PORT':
                 try:
                     val = int(val)

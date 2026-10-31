@@ -1,0 +1,13 @@
+{#
+  @file:         web/templates/_altcha_widget.html
+  @brief:        Self-hosted ALTCHA widget. Include it inside a <form> element.
+  @details:      The widget fetches a challenge from auth.altcha_challenge and adds a hidden
+                 field named "altcha" that holds the solved payload. Everything is served by
+                 this application; no external host is contacted.
+  @dependencies: static: vendor/altcha/altcha.min.js, vendor/altcha/i18n/all.js
+  @notes:        Render this include only when captcha_enabled is true.
+#}
+<script src="{{ url_for('static', filename='vendor/altcha/i18n/all.js') }}" defer></script>
+<script type="module" src="{{ url_for('static', filename='vendor/altcha/altcha.min.js') }}"></script>
+<altcha-widget challenge="{{ url_for('auth.altcha_challenge') }}" name="altcha" language="fa"
+               style="display:block;margin:12px 0"></altcha-widget>

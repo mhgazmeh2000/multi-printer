@@ -129,7 +129,8 @@ class RbacAdminGuardTests(unittest.TestCase):
     # "first registration" assumes the DB is empty; On PG, all tests are one scheme
     # They see a session (setUp this class created 4 users) ⇒ sqlite_only.
     @pytest.mark.sqlite_only
-    def test_4_first_register_requires_matching_setup_token(self):
+    @mock.patch("web.auth.verify_captcha", return_value=True)  # CAPTCHA is not under test here
+    def test_4_first_register_requires_matching_setup_token(self, _captcha):
         """Verifies 4 first register requires matching setup token."""
         with tempfile.TemporaryDirectory() as tmp2:
             old = os.getcwd()
@@ -166,7 +167,8 @@ class RbacAdminGuardTests(unittest.TestCase):
     # "first registration" assumes the DB is empty; On PG, all tests are one scheme
     # They see a session (setUp this class created 4 users) ⇒ sqlite_only.
     @pytest.mark.sqlite_only
-    def test_5_first_register_without_token_keeps_current_behaviour(self):
+    @mock.patch("web.auth.verify_captcha", return_value=True)  # CAPTCHA is not under test here
+    def test_5_first_register_without_token_keeps_current_behaviour(self, _captcha):
         """Verifies 5 first register without token keeps current behaviour."""
         with tempfile.TemporaryDirectory() as tmp2:
             old = os.getcwd()

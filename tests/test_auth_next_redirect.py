@@ -105,6 +105,10 @@ class _AppMixin(unittest.TestCase):
         self.app = create_app()
         self.app.config["WTF_CSRF_ENABLED"] = False
         self.client = self.app.test_client()
+        # These tests cover redirect targets, not ALTCHA: accept the CAPTCHA field.
+        captcha = mock.patch("web.auth.verify_captcha", return_value=True)
+        captcha.start()
+        self.addCleanup(captcha.stop)
 
     def _make_admin(self, username="next_admin"):
         """Helper: make admin."""

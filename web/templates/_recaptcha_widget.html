@@ -1,0 +1,29 @@
+{#
+  @file:         web/templates/_recaptcha_widget.html
+  @brief:        Google reCAPTCHA widget (optional provider, chosen in the admin panel).
+  @details:      Loads Google's api.js and renders the checkbox. Shows a hint when the script
+                 does not load, for example when Google is blocked on the user's network.
+                 The server checks the g-recaptcha-response field.
+  @dependencies: external: https://www.google.com/recaptcha/api.js (only when this provider is active)
+  @notes:        Contacts Google. Use ALTCHA when outside connectivity is unreliable.
+#}
+{% if captcha_site_key %}
+<script src="https://www.google.com/recaptcha/api.js?hl=fa" async defer></script>
+<div class="g-recaptcha" data-sitekey="{{ captcha_site_key }}" style="margin:12px 0"></div>
+<div id="captcha-load-hint" role="status" style="display:none;color:#f87171;font-size:13px;margin:4px 0">
+  کپچا بارگذاری نشد. اتصال به سرویس گوگل ممکن است مسدود باشد؛ مدیر سیستم می‌تواند کپچا را به ALTCHA تغییر دهد.
+</div>
+<script>
+  // If Google's script has not defined grecaptcha after a few seconds, show the hint.
+  setTimeout(function () {
+    if (typeof window.grecaptcha === 'undefined') {
+      var hint = document.getElementById('captcha-load-hint');
+      if (hint) { hint.style.display = 'block'; }
+    }
+  }, 6000);
+</script>
+{% else %}
+<div role="alert" style="color:#f87171;font-size:13px;margin:8px 0">
+  کپچا پیکربندی نشده است (کلید سایت reCAPTCHA خالی است). با مدیر سیستم تماس بگیرید.
+</div>
+{% endif %}

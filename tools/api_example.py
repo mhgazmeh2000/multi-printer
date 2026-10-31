@@ -22,8 +22,9 @@ Examples:
 
 Tips:
 - The name of the user field in the form is "identifier" (username or email).
-- In the development mode, the reCAPTCHA challenge is omitted; If on the server
-  Real reCAPTCHA is enabled, script login is not possible (use browser).
+- With CAPTCHA_ENABLED=false (or CAPTCHA_PROVIDER=none in the admin panel) the CAPTCHA check
+  is skipped, so script login works. While a CAPTCHA is active, script login is not possible:
+  solve the challenge in a browser.
 """
 import argparse
 import json
@@ -62,7 +63,7 @@ def login(session, base, identifier, password):
         "identifier": identifier,
         "password": password,
         "csrf_token": token,
-        "g-recaptcha-response": "",
+        "altcha": "",
     }, timeout=15, allow_redirects=False)
     loc = r.headers.get("Location") or ""
     # Unsuccessful login also returns 302, but to /login?next=... — successful means leaving
@@ -71,7 +72,7 @@ def login(session, base, identifier, password):
         return
     raise RuntimeError(
         f"ورود ناموفق (HTTP {r.status_code}" + (f" → {loc}" if loc else "") +
-        ") — نام کاربری/رمز را بررسی کنید؛ یا اگر reCAPTCHA فعال است از مرورگر استفاده کنید."
+        ") — نام کاربری/رمز را بررسی کنید؛ یا اگر کپچا فعال است (ALTCHA یا reCAPTCHA) از مرورگر استفاده کنید."
     )
 
 

@@ -254,7 +254,7 @@
   <div class="users-modal" style="box-shadow:0 0 30px rgba(245,158,11,0.08),0 4px 20px rgba(0,0,0,0.4)">
     <div class="users-modal-header" style="background:linear-gradient(135deg,rgba(245,158,11,0.18),rgba(180,120,10,0.10));border-bottom:2px solid rgba(245,158,11,0.35);border-radius:12px;padding:18px 20px;margin-bottom:18px">
       <h2 style="margin:0 0 6px;color:#f59e0b;font-size:20px">⚙️ تنظیمات سیستم</h2>
-      <p style="color:#94a3b8;font-size:13px;margin:0">اطلاعات Google OAuth و SMTP برای ارسال ایمیل و ورود به Google.</p>
+      <p style="color:#94a3b8;font-size:13px;margin:0">اطلاعات Google OAuth و SMTP، و انتخاب کپچای فرم‌های ورود، ثبت‌نام و تماس.</p>
     </div>
     <div class="users-modal-body">
     <fieldset style="border:1px solid #334155;border-radius:8px;padding:16px;margin-bottom:16px">
@@ -281,13 +281,32 @@
       <input type="password" id="ss-mail-password" class="form-input" style="width:100%;font-size:12px">
     </fieldset>
     <fieldset style="border:1px solid #334155;border-radius:8px;padding:16px;margin-bottom:16px">
-      <legend style="color:#60a5fa;font-weight:600;padding:0 8px">reCAPTCHA (اختیاری)</legend>
-      <label style="display:block;color:#94a3b8;font-size:12px;margin-bottom:4px">Site Key</label>
-      <input type="text" id="ss-recaptcha-site" class="form-input" style="width:100%;margin-bottom:10px;font-size:12px">
-      <label style="display:block;color:#94a3b8;font-size:12px;margin-bottom:4px">Secret Key</label>
-      <input type="password" id="ss-recaptcha-secret" class="form-input" style="width:100%;font-size:12px">
+      <legend style="color:#60a5fa;font-weight:600;padding:0 8px">کپچا (ورود، ثبت‌نام، فرم تماس)</legend>
+      <div id="ss-captcha-env-warning" role="alert" style="display:none;color:#f87171;font-size:12px;margin-bottom:10px">
+        سوئیچ اضطراری CAPTCHA_ENABLED=false روی سرور فعال است؛ کپچا برای همه فرم‌ها خاموش است، صرف‌نظر از این تنظیم.
+      </div>
+      <div id="ss-altcha-env-warning" role="alert" style="display:none;color:#f87171;font-size:12px;margin-bottom:10px">
+        سوئیچ ALTCHA_ENABLED=false روی سرور فعال است؛ ALTCHA خاموش است و reCAPTCHA تحت تأثیر نیست.
+      </div>
+      <div id="ss-altcha-secret-warning" role="alert" style="display:none;color:#f87171;font-size:12px;margin-bottom:10px">
+        ALTCHA_HMAC_SECRET روی سرور تنظیم نشده است. تا تنظیم شدن کلید، کپچا برای همه فرم‌ها خاموش است (Fail-Open) و خطا در لاگ ثبت می‌شود.
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;color:#e2e8f0;font-size:12px;margin-bottom:8px;cursor:pointer">
+        <input type="radio" name="ss-captcha-provider" value="altcha"> ALTCHA (خودمیزبان و پیش‌فرض؛ بدون ارتباط با سرور خارجی)
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;color:#e2e8f0;font-size:12px;margin-bottom:8px;cursor:pointer">
+        <input type="radio" name="ss-captcha-provider" value="recaptcha"> Google reCAPTCHA (نیاز به دسترسی به گوگل)
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;color:#e2e8f0;font-size:12px;margin-bottom:12px;cursor:pointer">
+        <input type="radio" name="ss-captcha-provider" value="none"> غیرفعال (فرم‌ها بدون کپچا)
+      </label>
+      <label style="display:block;color:#94a3b8;font-size:12px;margin-bottom:4px">reCAPTCHA Site Key</label>
+      <input type="text" id="ss-recaptcha-site-key" class="form-input" style="width:100%;margin-bottom:10px;font-size:12px">
+      <label style="display:block;color:#94a3b8;font-size:12px;margin-bottom:4px">reCAPTCHA Secret Key</label>
+      <input type="password" id="ss-recaptcha-secret-key" class="form-input" style="width:100%;margin-bottom:12px;font-size:12px">
+      <button class="btn btn-red" type="button" onclick="disableAllCaptcha()">⛔ غیرفعال کردن هر دو کپچا</button>
     </fieldset>
-    </div>
+        </div>
     <div class="form-actions users-modal-actions">
       <button class="btn btn-green" onclick="saveSystemSettings()">💾 ذخیره تنظیمات</button>
       <button class="btn btn-blue" onclick="testSystemEmail()">✉️ تست ایمیل</button>
@@ -902,8 +921,14 @@ async function openSystemSettingsModal() {
       document.getElementById("ss-mail-use-tls").checked = d.settings.MAIL_USE_TLS !== false && d.settings.MAIL_USE_TLS !== "false";
       document.getElementById("ss-mail-username").value = d.settings.MAIL_USERNAME || "";
       document.getElementById("ss-mail-password").value = d.settings.MAIL_PASSWORD || "";
-      document.getElementById("ss-recaptcha-site").value = d.settings.RECAPTCHA_SITE_KEY || "";
-      document.getElementById("ss-recaptcha-secret").value = d.settings.RECAPTCHA_SECRET_KEY || "";
+      const provider = d.settings.CAPTCHA_PROVIDER || "altcha";
+      const radio = document.querySelector('input[name="ss-captcha-provider"][value="' + provider + '"]');
+      if (radio) { radio.checked = true; }
+      document.getElementById("ss-recaptcha-site-key").value = d.settings.RECAPTCHA_SITE_KEY || "";
+      document.getElementById("ss-recaptcha-secret-key").value = d.settings.RECAPTCHA_SECRET_KEY || "";
+      document.getElementById("ss-captcha-env-warning").style.display = d.captcha_env_disabled ? "block" : "none";
+      document.getElementById("ss-altcha-env-warning").style.display = d.altcha_env_disabled ? "block" : "none";
+      document.getElementById("ss-altcha-secret-warning").style.display = d.altcha_secret_missing ? "block" : "none";
     }
   } catch(e) { showToast("خطا در بارگذاری تنظیمات: " + e.message, "error"); }
 }
@@ -921,8 +946,9 @@ async function saveSystemSettings() {
     MAIL_USE_TLS: document.getElementById("ss-mail-use-tls").checked,
     MAIL_USERNAME: document.getElementById("ss-mail-username").value,
     MAIL_PASSWORD: document.getElementById("ss-mail-password").value,
-    RECAPTCHA_SITE_KEY: document.getElementById("ss-recaptcha-site").value,
-    RECAPTCHA_SECRET_KEY: document.getElementById("ss-recaptcha-secret").value
+    CAPTCHA_PROVIDER: (document.querySelector('input[name="ss-captcha-provider"]:checked') || {}).value || "altcha",
+    RECAPTCHA_SITE_KEY: document.getElementById("ss-recaptcha-site-key").value.trim(),
+    RECAPTCHA_SECRET_KEY: document.getElementById("ss-recaptcha-secret-key").value
   };
   try {
     const r = await apiFetch("/api/system-settings", {
@@ -938,6 +964,14 @@ async function saveSystemSettings() {
       showToast(d.error || "خطا در ذخیره", "error");
     }
   } catch(e) { showToast("خطا: " + e.message, "error"); }
+}
+
+// Switch CAPTCHA off for every form (provider "none") and save at once.
+async function disableAllCaptcha() {
+  if (!confirm("کپچا برای فرم‌های ورود، ثبت‌نام و تماس خاموش شود؟")) { return; }
+  const none = document.querySelector('input[name="ss-captcha-provider"][value="none"]');
+  if (none) { none.checked = true; }
+  await saveSystemSettings();
 }
 
 async function testSystemEmail() {
