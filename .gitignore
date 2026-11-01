@@ -83,3 +83,21 @@ system_config.json
 # Local backups & readiness cache
 backups/
 caches_readiness.json
+
+# ===== Local scratch files & delivery-bundle artifacts — never commit =====
+# Stray shell/cmd capture files
+\!TEMP_LOG!
+*.log.txt
+*--default-timeout*
+# Patch dumps (changes belong in commits, not .patch files)
+*.patch
+# Manual backups
+*.bak
+# Delivery-bundle metadata (file lists, manifests, checksums, instructions)
+/FILES.txt
+/_META/
+/SHA256SUMS
+# Duplicate of the tracked .env.example
+/env.example
+# Saved pytest output
+/pytest_*.txt
