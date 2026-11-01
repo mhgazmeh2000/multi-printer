@@ -89,14 +89,13 @@ function Read-EnvValue {
     return $value
 }
 
-function Write-EnvFile {
-    # Writes the standard .env (used by repair attempts 1 and 2 of step 4).
-    $lines = @(
-        'DB_BACKEND=postgresql',
-        'PG_DSN=postgresql://postgres:123456@127.0.0.1:5432/printguard',
-        'FLASK_PORT=5050'
-    )
-    [System.IO.File]::WriteAllLines($EnvFile, [string[]]$lines, (New-Object System.Text.UTF8Encoding($false)))
+function Invoke-MakeEnv {
+    # Creates .env with make-env.ps1 (the mode is asked here). Only runs when .env is missing,
+    # because make-env.ps1 overwrites the file.
+    Write-Host '          1 = LAN    2 = Domain'
+    $modeChoice = Read-Host '          Select mode (1/2) [1]'
+    $envMode = if ($modeChoice -eq '2') { 'domain' } else { 'lan' }
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $ProjectDir 'make-env.ps1') -Mode $envMode -Python $PyCmd | Out-Host
 }
 
 function Find-PgBin {
@@ -279,17 +278,22 @@ while ($true) {
     $repairCount++
     Write-Host "        [هشدار] فایل .env ناقص یا ناموجود است. اجرای تعمیر $repairCount از 2..."
     if ($repairCount -eq 1) {
-        Write-Host '        - اقدام تعمیر ۱: ایجاد فایل .env با مقادیر استاندارد ...'
+        if (Test-Path -LiteralPath $EnvFile) {
+            # Never overwrite an existing .env: it holds the secrets and the captcha settings.
+            Write-Host '        - .env exists but PG_DSN is missing. Fix .env by hand (see docs), then run setup again.'
+        } else {
+            Write-Host '        - .env not found. Creating it with make-env.ps1 ...'
+            Invoke-MakeEnv
+        }
     } else {
-        Write-Host '        - اقدام تعمیر ۲: بازنویسی فایل .env با کدگذاری استاندارد UTF-8 ...'
+        Write-Host '        - .env is still incomplete. See the make-env.ps1 output above.'
     }
-    Write-EnvFile
 }
 if (-not $step4Ok) {
     Add-SetupError '[خطا در گام ۴] تنظیم فایل .env ممکن نیست.'
     Exit-Fatal
 }
-Write-Host " [OK] فایل .env تأیید شد: $pgDsn"
+Write-Host " [OK] .env validated (PG_DSN is set; value hidden)."
 
 # ---------------------------------------------------------------------------
 # Step 5: PostgreSQL service and the printguard database (Collation C)
@@ -441,8 +445,8 @@ if (-not (Test-Path -LiteralPath $LogsDb)) {
     } elseif ($targetState -eq 'UNKNOWN') {
         Write-Host '        وضعیت پایگاه‌داده PostgreSQL مشخص نشد؛ پرسش مهاجرت نمایش داده نشد.'
     } else {
-        $answer = Read-Host '  آیا مایلید مهاجرت کامل داده‌های logs.db به PostgreSQL همین حالا انجام شود؟ (Y/N) [Y]'
-        if (-not $answer) { $answer = 'Y' }
+        $answer = Read-Host '  آیا مایلید مهاجرت کامل داده‌های logs.db به PostgreSQL همین حالا انجام شود؟ (Y/N) [N]'
+        if (-not $answer) { $answer = 'N' }
         if ($answer -ieq 'Y') {
             Write-Host '        در حال مهاجرت و تبدیل زمان به فرمت استاندارد UTC Z ...'
             $migrateCode = Invoke-Live $PyCmd @('tools\migrate_sqlite_to_pg.py', '--source', 'logs.db', '--target', $pgDsn, '--convert-naive-timestamps', '--verify')

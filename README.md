@@ -70,7 +70,7 @@
 ### 🛠️ برای توسعه‌دهنده
 - **`run.py`:** نقطه‌ی ورود؛ حلقه‌ی polling را در یک thread و سرور Flask را راه می‌اندازد.
 - **`core/poller.py`:** تابع `poll_all()` برای تک‌تک چاپگرها `collect(ip)` را صدا می‌زند.
-- **`core/collectors/`:** مسیر اختیاری `exporter_adapter` (با `USE_SNMP_EXPORTER=1`)، جمع‌آورنده‌ی اصلی `core/enhanced_collector.py` و در صورت ناقص بودن داده، fallback وب.
+- **`core/collectors/`:** جمع‌آورنده‌ی اصلی `core/enhanced_collector.py` و در صورت ناقص بودن داده، fallback وب.
 - **`core/snmp/protocol.py`:** درخواست SNMP GET از طریق UDP/161.
 - **`core/collectors/base.py`:** پردازش داده: تشخیص واقعی بودن تغییر شمارنده، تفکیک A3/A4، محاسبه‌ی تونر و Yield Engine.
 - **`core/store.py` و `core/db/`:** حافظه‌ی زنده برای API و ذخیره‌سازی پایدار در SQLite یا PostgreSQL.
@@ -87,7 +87,6 @@
 
 ### 🛠️ برای توسعه‌دهنده
 - **مسیر اصلی:** `run.py` ← `polling_loop` (thread) ← `core/poller.py:poll_all()` ← `collect(ip)` ← پردازش در `core/collectors/base.py` ← ذخیره در `core/store.py` و `core/db/`.
-- **مسیر Exporter:** با `USE_SNMP_EXPORTER=1` درخواست‌ها به `core/exporter_client.py` می‌روند که از **exponential backoff** و **circuit breaker** استفاده می‌کند. اگر داده ناقص باشد، به وب‌اسکرپینگ برمی‌گردد.
 - **قرارداد زمان:** لایه‌ی دیتابیس فقط UTC کار می‌کند؛ تبدیل به `Asia/Tehran` فقط در لایه‌ی نمایش و گزارش انجام می‌شود (`docs/timezone-contract.md`).
 
 ---
@@ -101,7 +100,7 @@
 ```text
 run.py                  نقطه‌ی ورود برنامه
 core/                   جمع‌آوری، پردازش و ذخیره‌سازی
-  collectors/           جمع‌آورندگان (base، exporter_adapter، ...)
+  collectors/           جمع‌آورندگان (base، ...)
   snmp/                 لایه‌ی پروتکل SNMP
   db/                   لایه‌ی دیتابیس (SQLite و PostgreSQL)
   yield_engine.py       تخمین ظرفیت کارتریج
@@ -110,9 +109,7 @@ config/                 تنظیمات (settings.py) و نمونه‌های JSON
 alembic/versions/       مهاجرت‌های شِمای دیتابیس
 tools/                  ابزارهای خط فرمان
 tests/                  تست‌ها (fixtures در tests/fixtures)
-monitoring/             پیکربندی snmp_exporter (generator.yml، snmp.yml)
 grafana/                داشبوردها و provisioning گرافانا
-windows/                اسکریپت‌های ویندوزی (مثل نصب snmp_exporter)
 docs/                   مستندات فنی و runbookها
 ```
 
@@ -181,7 +178,6 @@ python run.py
 | `DB_BACKEND` | `sqlite` یا `postgresql` |
 | `PG_DSN` | رشته‌ی اتصال PostgreSQL |
 | `METRICS_TOKEN` | توکن Bearer برای مسیر `/metrics` |
-| `USE_SNMP_EXPORTER` و `SNMP_EXPORTER_URL` | فعال‌سازی مسیر snmp_exporter و آدرس آن |
 | `DEFAULT_PRINTERS_JSON` | مسیر فایل پیش‌فرض فهرست چاپگرها |
 | `OFFICE_SUBNET_*` | تعریف زیرشبکه‌های دفتری |
 | `CARTRIDGE_YIELD_CATALOG` | مسیر کاتالوگ ظرفیت کارتریج |
@@ -266,9 +262,6 @@ python run.py
 | `python tools/auto_migrate.py` | مهاجرت خودکار به PostgreSQL (فقط برای مقصد خالی) |
 | `python tools/migrate_sqlite_to_pg.py --verify` | انتقال داده‌ی SQLite به PostgreSQL و اعتبارسنجی |
 | `python tools/diagnose_data_quality.py --db logs.db` | بررسی سلامت دیتابیس |
-| `python tools/build_oid_matrix.py --write` | بازسازی `docs/oid-matrix.md` |
-| `python tools/compare_snmp_sources.py` | مقایسه‌ی منابع SNMP |
-| `python tools/build_snmp_yml.py` | ساخت `snmp.yml` برای snmp_exporter |
 | `python tools/verify_server_timezone.py` | بررسی تنظیم منطقه‌ی زمانی سرور |
 | `python create_admin.py` | ایجاد حساب ادمین |
 
@@ -339,8 +332,6 @@ python -m pytest tests/ -m "not slow" -q            # بدون تست‌های �
 ### 🛠️ برای توسعه‌دهنده
 - **محیط تولید:** `ENVIRONMENT=production`، `SECRET_KEY` اختصاصی و قرار گرفتن پشت reverse proxy (`docs/deployment_reverse_proxy.md`). سرور داخلی Flask برای تولید مناسب نیست.
 - **PostgreSQL:** `docs/postgresql-setup.md`.
-- **snmp_exporter:** `docs/snmp-exporter-setup.md`.
-- **سرویس‌های ویندوز:** `docs/windows-services.md`.
 - **پشتیبان‌گیری:** قبل از هر مهاجرت، `logs.db` را پشتیبان بگیرید. `migrate.bat` این کار را انجام می‌دهد.
 - **مرجع کامل:** `docs/technical-reference.en.md`.
 

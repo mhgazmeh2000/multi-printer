@@ -18,6 +18,8 @@ With support for paper size detection and accurate toner calculation
 
 import logging
 import re
+
+from core.collectors.url_safety import is_http_url
 import time
 from datetime import datetime, timezone
 
@@ -78,6 +80,8 @@ def _scrape_toshiba_toners(ip: str, timeout: float = 4.0):
     if html is None:
         try:
             import urllib.request as _ur
+            if not is_http_url(url):
+                raise ValueError(f"unsupported URL scheme: {url!r}")
             req = _ur.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; PrinterMonitor/1.0)"})
             with _ur.urlopen(req, timeout=timeout) as resp:
                 html = resp.read(200_000).decode("utf-8", errors="replace")

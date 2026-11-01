@@ -183,7 +183,7 @@ def check_and_send_sensor_alert(ip: str, sensor_name: str, readings: list):
         '<tr><td style="padding:8px;border:1px solid #ddd"><strong>\u0632\u0645\u0627\u0646</strong></td><td style="padding:8px;border:1px solid #ddd">%s</td></tr>' % now_str,
         '</table>',
         '<h3 style="color:#333">\u0647\u0634\u062f\u0627\u0631\u0647\u0627:</h3>',
-        '<table style="width:100%;border-collapse:collapse">%s</table>' % alert_rows,
+        '<table style="width:100%;border-collapse:collapse">' + alert_rows + '</table>',
         '<hr style="margin:20px 0;border-color:#eee">',
         '<p style="color:#999;font-size:11px">\u0627\u06cc\u0646 \u0627\u06cc\u0645\u06cc\u0644 \u0628\u0647 \u0635\u0648\u0631\u062a \u062e\u0648\u062f\u06a9\u0627\u0631 \u0627\u0631\u0633\u0627\u0644 \u0634\u062f\u0647 \u0627\u0633\u062a.</p>',
         '</div>',

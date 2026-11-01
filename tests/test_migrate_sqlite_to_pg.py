@@ -58,6 +58,19 @@ from tools.migrate_sqlite_to_pg import (
 )
 
 
+def _pg_reachable() -> bool:
+    """True when the DSN from PG_DSN/ALEMBIC_DB_URL accepts a connection (fast, 2 s timeout)."""
+    try:
+        with psycopg.connect(resolve_pg_dsn(None), connect_timeout=2):
+            return True
+    except Exception:  # noqa: BLE001 - any failure means "not reachable"
+        return False
+
+
+_PG_OK = _pg_reachable()
+_PG_SKIP = pytest.mark.skipif(not _PG_OK, reason="PostgreSQL not reachable (set PG_DSN for a live run)")
+
+
 def _sha256_of_file(path: str) -> str:
     """Helper: sha 256 of file."""
     h = hashlib.sha256()
@@ -458,6 +471,7 @@ class TestRollback:
 
 
 # ─── Class 6: Overall Integration Tests (End-to-End Unit/Mock) ───────
+@_PG_SKIP
 class TestEndToEnd:
     """Complete immigration workflow tests."""
 
@@ -632,6 +646,7 @@ class TestEndToEnd:
 
 
 # ─── Class 7: Intelligent management of timestamps without Z (revision decision) ───
+@_PG_SKIP
 class TestNaiveTimestampHandling:
     """Accurate and Fail-Loudly handling tests of ISO strings without Z extension."""
 
@@ -811,6 +826,7 @@ class TestNaiveTimestampHandling:
 
 
 # ─── Class 8: Integrity tests on production-like data ───────
+@_PG_SKIP
 class TestProductionLikeE2E:
     """End-to-end regression tests with real format production data."""
 

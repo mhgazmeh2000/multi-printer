@@ -305,6 +305,10 @@ class IntegrityAndMarkerTests(unittest.TestCase):
         self.assertIn("2026-10-04T00:00:00Z", res["detail"])
 
 
+# Explicit cutover so the test does not depend on the git commit date of the repository.
+CUTOVER = "2026-09-01T00:00:00Z"
+
+
 class TimestampsTests(unittest.TestCase):
     """Criterion 7 remains locked with the same `analyze_old_events.py` ⇒ Z/Asia-Tehran contract."""
 
@@ -319,7 +323,7 @@ class TimestampsTests(unittest.TestCase):
         """Verifies after cutover z is green."""
         db = self.dir / "logs.db"
         _make_logs_db(db, ("2026-10-04T10:00:00Z",))
-        res = self.t.check_timestamps(db)
+        res = self.t.check_timestamps(db, cutover=CUTOVER)
         self.assertEqual(res.status, "ok", res["detail"])
         self.assertIn("ردیف‌های نیازمند بازبینی=0", res["detail"])
 
@@ -327,7 +331,7 @@ class TimestampsTests(unittest.TestCase):
         """Verifies before cutover z is yellow not red."""
         db = self.dir / "logs.db"
         _make_logs_db(db, ("2026-01-02T10:00:00Z", "2026-01-03T10:00:00Z"))
-        res = self.t.check_timestamps(db)
+        res = self.t.check_timestamps(db, cutover=CUTOVER)
         self.assertEqual(res.status, "warn", res["detail"])
         self.assertIn("F.5", res["action"])
         self.assertIn("ردیف‌های نیازمند بازبینی=2", res["detail"])

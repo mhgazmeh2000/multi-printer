@@ -185,7 +185,9 @@ def main():
 
     # Flask server
     debug_mode = os.getenv("FLASK_DEBUG", "0") == "1"
-    app.run(host="0.0.0.0", port=FLASK_PORT, debug=debug_mode, use_reloader=False)
+    if debug_mode:
+        log.warning("FLASK_DEBUG=1: Werkzeug debugger is ON. Do not expose this port to the network.")
+    app.run(host=os.getenv("FLASK_HOST", "0.0.0.0"), port=FLASK_PORT, debug=debug_mode, use_reloader=False)
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@
 # @file:         start.ps1
 # @brief:        PowerShell launcher that starts PrintGuard on a chosen port.
 # @details:      Responsibilities: find Python, ask for the port, free it if busy, check the
-#                database (starting PostgreSQL from E:\pgsql when it is off), open the browser
+#                database (starting PostgreSQL with tools\pg_setup.ps1 when it is off), open the browser
 #                and run run.py. Same steps and messages as the former start.bat.
 # @dependencies: python or py, run.py, tools\auto_migrate.py, PostgreSQL pg_ctl (optional)
 # @notes:        Saved as UTF-8 with BOM so Windows PowerShell 5.1 reads Persian text.
@@ -85,6 +85,26 @@ Get-ChildItem -LiteralPath $ProjectDir -Recurse -Filter '*.pyc' -ErrorAction Sil
     Remove-Item -Force -ErrorAction SilentlyContinue
 
 # ---------------------------------------------------------------------------
+# [1b] Create .env on first run when it is missing (make-env.ps1 asks for the mode)
+# ---------------------------------------------------------------------------
+
+if (-not (Test-Path -LiteralPath $EnvFile)) {
+    Write-Host ''
+    Write-Host '  [!] .env not found. Creating it with make-env.ps1 ...'
+    Write-Host '      1 = LAN    (direct access; LAN networks skip captcha)'
+    Write-Host '      2 = Domain (behind nginx; captcha follows the admin panel)'
+    $modeChoice = Read-Host '      Select mode (1/2) [1]'
+    $envMode = if ($modeChoice -eq '2') { 'domain' } else { 'lan' }
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $ProjectDir 'make-env.ps1') -Mode $envMode -Python $PyCmd | Out-Host
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $EnvFile)) {
+        Write-Host '  [ERROR] .env could not be created.'
+        Pop-Location
+        exit 1
+    }
+    Write-Host " [OK] .env created (mode: $envMode)."
+}
+
+# ---------------------------------------------------------------------------
 # [2/4] Web port
 # ---------------------------------------------------------------------------
 
@@ -123,12 +143,17 @@ $pgDsn = Read-EnvValue 'PG_DSN'
 if ($dbBackend -ieq 'postgresql') {
     Write-Host '        نوع پایگاه‌داده: PostgreSQL'
     if (-not (Test-PortListening 5432)) {
-        Write-Host '        پایگاه‌داده خاموش است؛ در حال استارت خودکار از E:\pgsql ...'
-        $pgCtl = 'E:\pgsql\binaries\bin\pg_ctl.exe'
-        if (Test-Path -LiteralPath $pgCtl) {
-            Invoke-Quiet $pgCtl @('-D', 'E:\pgsql\data', 'start') | Out-Null
-            Start-Sleep -Seconds 3
+        Write-Host '        پایگاه‌داده خاموش است؛ تلاش برای راه‌اندازی...'
+        # tools\pg_setup.ps1 starts the server from PG_BIN / PG_DATA in .env. If that is not
+        # possible it asks for the existing or new PostgreSQL location and saves it to .env.
+        & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $ProjectDir 'tools\pg_setup.ps1') -EnvFile $EnvFile | Out-Host
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host '  [ERROR] PostgreSQL is not available. Start it, then run start again.'
+            Pop-Location
+            exit 1
         }
+        # pg_setup may have saved a new PG_DSN, so read it again
+        $pgDsn = Read-EnvValue 'PG_DSN'
     }
 
     $env:PRINTGUARD_DSN = $pgDsn

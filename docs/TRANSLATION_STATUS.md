@@ -29,7 +29,6 @@ These files were not produced by `tools/translation/pipeline.py`: the hosted tra
 | `docs/deployment_reverse_proxy.md` | 1,291 | 1,193 | Partially translated |
 | `docs/e7-sandbox-dryrun.md` | 1,846 | 1,730 | Partially translated |
 | `docs/golden-pii-audit.md` | 2,588 | 2,449 | Partially translated |
-| `docs/hybrid-path-report.md` | 4,449 | 4,237 | Partially translated |
 | `docs/import-db-retirement.md` | 1,643 | 1,529 | Partially translated |
 | `docs/insert-or-replace-inventory.md` | 3,436 | 3,287 | Partially translated |
 | `docs/phase-e-completion-report.md` | 2,481 | 2,304 | Partially translated |
@@ -40,14 +39,11 @@ These files were not produced by `tools/translation/pipeline.py`: the hosted tra
 | `docs/postgresql-setup.md` | 2,394 | 2,250 | Partially translated |
 | `docs/postgresql-strictness.md` | 7,318 | 7,151 | Partially translated |
 | `docs/retention-consumers.md` | 4,243 | 4,076 | Partially translated |
-| `docs/snmp-exporter-decision.md` | 7,716 | 7,497 | Partially translated |
-| `docs/snmp-exporter-setup.md` | 16,066 | 15,823 | Partially translated |
 | `docs/sql-paths-inventory.md` | 2,692 | 2,522 | Partially translated |
 | `docs/sqlite-excepts-inventory.md` | 3,604 | 3,470 | Partially translated |
 | `docs/tech-debt.md` | 18,642 | 18,163 | Partially translated |
 | `docs/timestamp-consumers.md` | 6,045 | 5,803 | Partially translated |
 | `docs/timezone-contract.md` | 9,924 | 9,657 | Partially translated |
-| `docs/windows-services.md` | 3,951 | 3,829 | Partially translated |
 
 ## Still Persian (2 files)
 
