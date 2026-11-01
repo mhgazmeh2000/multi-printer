@@ -156,19 +156,11 @@
       <div class="access-grid" id="access-grid"></div>
     </div>
 
-    <!-- Daily consumption chart section -->
+    <!-- Print usage chart section (color / black-white, range filter, bar/line) -->
     {% if current_user.can_access_module('printers') %}
     <div class="section" style="margin-top:14px">
-      <div class="section-title">📊 نمودار مصرف روزانه (۳۰ روز اخیر)</div>
-      <div style="display:flex; gap:10px; margin-bottom:10px; align-items:center; flex-wrap:wrap">
-        <select id="chart-printer-select" class="form-input" style="width:200px">
-          <option value="111">همه پرینترها</option>
-        </select>
-        <button class="btn btn-cyan" onclick="loadDailyChart()">📈 نمایش</button>
-      </div>
-      <div style="position:relative; height:300px;">
-        <canvas id="dailyChart" role="img" aria-label="نمودار مصرف روزانه ۳۰ روز اخیر" style="width:100%; height:100%;"></canvas>
-      </div>
+      <div class="section-title">📊 نمودار مصرف چاپ</div>
+      <div class="ug-root" data-ug-key="overview" data-ug-select="1"></div>
     </div>
     {% endif %}
 
