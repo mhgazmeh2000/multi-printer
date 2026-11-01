@@ -11,13 +11,13 @@
 """Statistics API routes."""
 
 import logging
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone
 
 from flask import Blueprint, jsonify, request
 
 from core.db import DatabaseError, UndefinedColumn, UndefinedTable, get_connection
 from core import store
-from core.time_utils import local_tz, to_local_day, to_utc_z
+from core.time_utils import local_tz, parse_utc, to_filter_bound, to_local_day, to_utc_z
 
 bp = Blueprint("stats", __name__)
 log = logging.getLogger("PrinterMonitor")
@@ -204,3 +204,142 @@ def api_sensor_daily_stats():
     except Exception as e:
         log.error(f"Sensor stats API error: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
+
+
+# ─── Sensor time-series (line chart with a free time-range filter) ───────────
+#: Allowed aggregation steps in seconds (auto picks the smallest that keeps the chart light).
+_SERIES_STEPS = (60, 300, 900, 1800, 3600, 10800, 21600, 86400)
+_SERIES_MAX_POINTS = 800
+_SERIES_MAX_DAYS = 366
+_SERIES_MAX_ROWS = 600000
+
+
+def _series_pick_step(span_seconds: float, requested: str) -> int:
+    """Return the bucket size in seconds for a span (``auto`` or an allowed explicit step)."""
+    if requested and requested != "auto":
+        try:
+            value = int(requested)
+        except ValueError:
+            value = 0
+        if value in _SERIES_STEPS:
+            return value
+    for step in _SERIES_STEPS:
+        if span_seconds / step <= _SERIES_MAX_POINTS:
+            return step
+    return _SERIES_STEPS[-1]
+
+
+def _series_row_epoch(ts):
+    """Row timestamp (str or datetime) -> epoch seconds; None when invalid/naive."""
+    try:
+        dt = ts if isinstance(ts, datetime) else parse_utc(str(ts))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        return None
+    return dt.timestamp()
+
+
+@bp.route('/api/stats/sensor/series')
+def api_sensor_series():
+    """
+    Sensor temperature/humidity as a time series for a free time range.
+
+    Query: ip (required) · start / end (ISO; naive values are Tehran local time) ·
+    hours (alternative to start/end: last N hours) · port (optional) ·
+    bucket (``auto`` or one of 60,300,900,1800,3600,10800,21600,86400 seconds).
+    """
+    ip = request.args.get('ip')
+    if not ip:
+        return jsonify({"error": "ip required"}), 400
+
+    now = datetime.now(timezone.utc)
+    end_raw = request.args.get('end')
+    start_raw = request.args.get('start')
+    hours = request.args.get('hours', type=float)
+    try:
+        end_dt = parse_utc(to_filter_bound(end_raw)) if end_raw else now
+        if start_raw:
+            start_dt = parse_utc(to_filter_bound(start_raw))
+        else:
+            start_dt = end_dt - timedelta(hours=hours if hours and hours > 0 else 24)
+    except ValueError:
+        return jsonify({"error": "invalid start/end"}), 400
+
+    if start_dt >= end_dt:
+        return jsonify({"error": "start must be before end"}), 400
+    if end_dt - start_dt > timedelta(days=_SERIES_MAX_DAYS):
+        start_dt = end_dt - timedelta(days=_SERIES_MAX_DAYS)
+
+    port = request.args.get('port', type=int)
+    span = (end_dt - start_dt).total_seconds()
+    step = _series_pick_step(span, request.args.get('bucket', 'auto'))
+    start_z, end_z = to_utc_z(start_dt), to_utc_z(end_dt)
+
+    base = {
+        "printer_ip": ip, "start": start_z, "end": end_z, "bucket_seconds": step,
+        "timestamps": [], "temperature": [], "humidity": [], "summary": {},
+    }
+    try:
+        conn = get_connection(timeout=30.0)
+        try:
+            sql = (
+                "SELECT timestamp, kind, value FROM sensor_readings "
+                "WHERE printer_ip = ? AND timestamp >= ? AND timestamp <= ? "
+                "AND value IS NOT NULL AND kind IN ('temperature', 'humidity')"
+            )
+            params = [ip, start_z, end_z]
+            if port is not None:
+                sql += " AND port = ?"
+                params.append(port)
+            sql += " ORDER BY timestamp LIMIT ?"
+            params.append(_SERIES_MAX_ROWS)
+            rows = conn.execute(sql, tuple(params)).fetchall()
+        finally:
+            conn.close()
+    except (UndefinedTable, UndefinedColumn, DatabaseError) as e:
+        log.error(f"Sensor series API database error: {e}", exc_info=True)
+        return jsonify(base)
+    except Exception as e:
+        log.error(f"Sensor series API error: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+    buckets = {}
+    skipped = 0
+    for ts, kind, value in rows:
+        epoch = _series_row_epoch(ts)
+        if epoch is None:
+            skipped += 1
+            continue
+        key = int(epoch // step) * step
+        slot = buckets.setdefault(key, {"temperature": [0.0, 0], "humidity": [0.0, 0]})
+        acc = slot[kind]
+        acc[0] += _sql_numeric(value)
+        acc[1] += 1
+    if skipped:
+        log.warning(f"stats/sensor/series: {skipped} ردیف با timestamp نامعتبر نادیده گرفته شد")
+
+    stamps, temps, hums = [], [], []
+    all_t, all_h = [], []
+    for key in sorted(buckets):
+        slot = buckets[key]
+        stamps.append(to_utc_z(datetime.fromtimestamp(key, tz=timezone.utc)))
+        t = round(slot["temperature"][0] / slot["temperature"][1], 2) if slot["temperature"][1] else None
+        h = round(slot["humidity"][0] / slot["humidity"][1], 2) if slot["humidity"][1] else None
+        temps.append(t)
+        hums.append(h)
+        if t is not None:
+            all_t.append(t)
+        if h is not None:
+            all_h.append(h)
+
+    def _sum(values):
+        if not values:
+            return None
+        return {"min": min(values), "max": max(values), "avg": round(sum(values) / len(values), 2)}
+
+    base.update({
+        "timestamps": stamps, "temperature": temps, "humidity": hums,
+        "summary": {"temperature": _sum(all_t), "humidity": _sum(all_h)},
+    })
+    return jsonify(base)

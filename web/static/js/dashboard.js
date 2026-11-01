@@ -917,12 +917,281 @@ function destroyPrinterDailyChart(ip) {
   if (!existing) return;
   try {
     if (typeof existing.destroy === 'function') {
-      existing.destroy();
+      existing.destroy();            // Chart.js
+    } else if (typeof existing.dispose === 'function') {
+      if (window.PrintGuardECharts) window.PrintGuardECharts.dispose(existing);
+      else existing.dispose();       // ECharts
     }
   } catch (e) {
     console.error('Printer chart destroy error:', e);
   }
   delete printerChartInstances[ip];
+}
+
+
+// ══════════════════════════════════════════════════
+// SENSOR TIME-SERIES LINE CHART (free time-range filter)
+// ══════════════════════════════════════════════════
+const SENSOR_RANGE_PRESETS = [
+  { hours: 1,    label: '۱ ساعت' },
+  { hours: 6,    label: '۶ ساعت' },
+  { hours: 24,   label: '۲۴ ساعت' },
+  { hours: 168,  label: '۷ روز' },
+  { hours: 720,  label: '۳۰ روز' },
+  { hours: 2160, label: '۹۰ روز' }
+];
+const SENSOR_TZ = 'Asia/Tehran';          // مطابق قرارداد زمانی سرور (to_filter_bound)
+const SENSOR_REFRESH_MS = 60000;
+const sensorRangeState = {};              // ip -> {mode, hours, start, end, zoomed}
+const sensorSeriesTimers = {};
+
+function getSensorRangeState(ip) {
+  if (!sensorRangeState[ip]) {
+    sensorRangeState[ip] = { mode: 'preset', hours: 24, start: '', end: '', zoomed: false };
+  }
+  return sensorRangeState[ip];
+}
+
+function sensorSeriesSectionHtml(ip) {
+  const st = getSensorRangeState(ip);
+  if (st.mode === 'preset' && (!st.start || !st.end)) {
+    const now = new Date();
+    st.start = sensorTehranInputValue(new Date(now.getTime() - st.hours * 3600 * 1000));
+    st.end = sensorTehranInputValue(now);
+  }
+  const key = ip.replace(/\./g, '-');
+  const presetBtns = SENSOR_RANGE_PRESETS.map(r => `
+        <button class="filter-btn${st.mode === 'preset' && st.hours === r.hours ? ' active' : ''}"
+                data-hours="${r.hours}" onclick="setSensorPreset('${ip}', ${r.hours}, this)">${r.label}</button>`).join('');
+  return `
+    <div class="section sensor-ts-section" data-ip="${ip}" style="margin-bottom:14px">
+      <div class="section-title">📈 روند دما و رطوبت</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+        ${presetBtns}
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+        <span style="font-size:11px;color:var(--text3)">از</span>
+        <input type="datetime-local" class="form-input sensor-ts-from" value="${st.start}" style="width:190px">
+        <span style="font-size:11px;color:var(--text3)">تا</span>
+        <input type="datetime-local" class="form-input sensor-ts-to" value="${st.end}" style="width:190px">
+        <button class="btn btn-cyan" onclick="applySensorCustomRange('${ip}')">اعمال بازه</button>
+        <span style="font-size:10px;color:var(--text3)">(به وقت تهران)</span>
+      </div>
+      <div class="sensor-ts-summary" style="font-size:11px;color:var(--text3);margin-bottom:6px;min-height:16px"></div>
+      <div style="position:relative;height:340px;">
+        <div id="printer-daily-chart-${key}" class="printer-daily-chart-canvas" data-chart-type="sensor" style="width:100%;height:100%;"></div>
+      </div>
+    </div>`;
+}
+
+function sensorSection(ip) {
+  return document.querySelector(`.sensor-ts-section[data-ip="${ip}"]`);
+}
+
+function sensorTehranInputValue(date) {
+  // YYYY-MM-DDTHH:mm در منطقهٔ زمانی تهران برای input[type=datetime-local]
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: SENSOR_TZ, hourCycle: 'h23',
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
+  }).formatToParts(date).reduce((a, x) => { a[x.type] = x.value; return a; }, {});
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
+}
+
+function setSensorPreset(ip, hours, btn) {
+  const st = getSensorRangeState(ip);
+  st.mode = 'preset'; st.hours = hours; st.zoomed = false;
+  const sec = sensorSection(ip);
+  if (sec) {
+    sec.querySelectorAll('.filter-btn').forEach(b => b.classList.toggle('active', b === btn));
+    const now = new Date();
+    st.start = sensorTehranInputValue(new Date(now.getTime() - hours * 3600 * 1000));
+    st.end = sensorTehranInputValue(now);
+    sec.querySelector('.sensor-ts-from').value = st.start;
+    sec.querySelector('.sensor-ts-to').value = st.end;
+  }
+  schedulePrinterDailyChartLoad(ip, 0, true);
+}
+
+function applySensorCustomRange(ip) {
+  const sec = sensorSection(ip);
+  if (!sec) return;
+  const start = sec.querySelector('.sensor-ts-from').value;
+  const end = sec.querySelector('.sensor-ts-to').value;
+  const summary = sec.querySelector('.sensor-ts-summary');
+  if (!start || !end) { summary.textContent = '⚠ هر دو تاریخ «از» و «تا» را انتخاب کنید.'; return; }
+  if (start >= end) { summary.textContent = '⚠ زمان شروع باید قبل از زمان پایان باشد.'; return; }
+  const st = getSensorRangeState(ip);
+  st.mode = 'custom'; st.start = start; st.end = end; st.zoomed = false;
+  sec.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  schedulePrinterDailyChartLoad(ip, 0, true);
+}
+
+function sensorSeriesUrl(ip) {
+  const st = getSensorRangeState(ip);
+  const base = `${API}/api/stats/sensor/series?ip=${encodeURIComponent(ip)}`;
+  if (st.mode === 'custom' && st.start && st.end) {
+    return `${base}&start=${encodeURIComponent(st.start)}&end=${encodeURIComponent(st.end)}`;
+  }
+  return `${base}&hours=${st.hours}`;
+}
+
+function sensorAxisLabel(spanMs) {
+  const fmt = (opts) => new Intl.DateTimeFormat('fa-IR', Object.assign({ timeZone: SENSOR_TZ, hourCycle: 'h23' }, opts));
+  const time = fmt({ hour: '2-digit', minute: '2-digit' });
+  const dayTime = fmt({ month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const day = fmt({ month: 'short', day: 'numeric' });
+  const f = spanMs <= 36 * 3600e3 ? time : spanMs <= 3 * 86400e3 ? dayTime : day;
+  return (value) => f.format(new Date(value));
+}
+
+function sensorSeriesToPoints(stamps, values, stepMs) {
+  const out = [];
+  let prev = null;
+  stamps.forEach((iso, i) => {
+    const t = new Date(iso).getTime();
+    // وقتی بین دو نمونه فاصلهٔ زیادی هست (دستگاه قطع بوده) خط را قطع کن
+    if (prev !== null && t - prev > stepMs * 3) out.push([prev + stepMs, null]);
+    out.push([t, values[i]]);
+    prev = t;
+  });
+  return out;
+}
+
+function sensorShowEmpty(el, text) {
+  const wrap = el.parentElement;
+  let msg = wrap.querySelector('.printer-chart-empty');
+  if (!msg) {
+    msg = document.createElement('div');
+    msg.className = 'printer-chart-empty';
+    msg.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--text3);font-size:13px;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:8px;';
+    wrap.appendChild(msg);
+  }
+  msg.textContent = text;
+}
+
+function sensorClearEmpty(el) {
+  const msg = el.parentElement && el.parentElement.querySelector('.printer-chart-empty');
+  if (msg) msg.remove();
+}
+
+async function loadSensorSeriesChart(ip, el, opts = {}) {
+  if (!window.echarts) { sensorShowEmpty(el, 'کتابخانهٔ نمودار (ECharts) بارگذاری نشده است'); return; }
+  const st = getSensorRangeState(ip);
+  const sec = sensorSection(ip);
+  const summaryEl = sec && sec.querySelector('.sensor-ts-summary');
+  const silent = !!opts.silent;
+
+  let data;
+  try {
+    const res = await fetch(sensorSeriesUrl(ip), { cache: 'no-store' });
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try { const j = await res.json(); if (j && j.error) msg = j.error; } catch (_) {}
+      throw new Error(msg);
+    }
+    data = await res.json();
+  } catch (err) {
+    console.error('Sensor series load failed:', err);
+    if (!silent) sensorShowEmpty(el, `خطا در دریافت داده: ${err.message}`);
+    return;
+  }
+
+  // اگر در حین دریافت، پنل/نمودار عوض شده باشد
+  if (!document.body.contains(el)) return;
+
+  const stamps = data.timestamps || [];
+  const temps = data.temperature || [];
+  const hums = data.humidity || [];
+  const hasData = temps.some(v => typeof v === 'number') || hums.some(v => typeof v === 'number');
+  if (!hasData) {
+    destroyPrinterDailyChart(ip);
+    if (summaryEl) summaryEl.textContent = '';
+    sensorShowEmpty(el, 'در این بازهٔ زمانی داده‌ای برای سنسور ثبت نشده است');
+    return;
+  }
+  sensorClearEmpty(el);
+
+  const stepMs = (data.bucket_seconds || 60) * 1000;
+  const startMs = new Date(data.start).getTime();
+  const endMs = new Date(data.end).getTime();
+  const tempPts = sensorSeriesToPoints(stamps, temps, stepMs);
+  const humPts = sensorSeriesToPoints(stamps, hums, stepMs);
+
+  const fmtNum = (v) => (window.PrintGuardECharts ? window.PrintGuardECharts.formatNumber(v, { decimals: 1 }) : v);
+  if (summaryEl) {
+    const part = (label, unit, s) => s ? `${label}: کمینه ${fmtNum(s.min)} · بیشینه ${fmtNum(s.max)} · میانگین ${fmtNum(s.avg)} ${unit}` : '';
+    const stepTxt = data.bucket_seconds >= 3600 ? `${fmtNum(data.bucket_seconds / 3600)} ساعت`
+      : `${fmtNum(data.bucket_seconds / 60)} دقیقه`;
+    summaryEl.textContent = [
+      part('🌡️ دما', '°C', data.summary && data.summary.temperature),
+      part('💧 رطوبت', '%', data.summary && data.summary.humidity),
+      `میانگین هر ${stepTxt}`
+    ].filter(Boolean).join('   |   ');
+  }
+
+  const tipFmt = new Intl.DateTimeFormat('fa-IR', {
+    timeZone: SENSOR_TZ, hourCycle: 'h23', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit'
+  });
+  const option = {
+    animation: !silent,
+    color: ['#00d4ff', '#64b5f6'],
+    grid: { top: 48, left: 14, right: 14, bottom: 76, containLabel: true },
+    legend: { top: 4, data: ['دما (°C)', 'رطوبت (%)'] },
+    toolbox: { right: 8, top: 0, feature: { restore: {}, saveAsImage: { name: `sensor-${ip}` } } },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'cross' },
+      formatter: (params) => {
+        if (!params || !params.length) return '';
+        const head = tipFmt.format(new Date(params[0].value[0]));
+        const lines = params.filter(x => typeof x.value[1] === 'number').map(x => {
+          const unit = x.seriesIndex === 0 ? '°C' : '%';
+          return `${x.marker} ${x.seriesName.replace(/ \(.*\)/, '')}: <b>${fmtNum(x.value[1])}</b> ${unit}`;
+        });
+        return `${head}<br/>${lines.join('<br/>')}`;
+      }
+    },
+    xAxis: {
+      type: 'time', min: startMs, max: endMs,
+      axisLabel: { formatter: sensorAxisLabel(endMs - startMs), hideOverlap: true }
+    },
+    yAxis: [
+      { type: 'value', scale: true, name: '°C', axisLabel: { formatter: (v) => fmtNum(v) } },
+      { type: 'value', name: '%', min: 0, max: 100, splitLine: { show: false }, axisLabel: { formatter: (v) => fmtNum(v) } }
+    ],
+    dataZoom: [
+      { type: 'inside', filterMode: 'none' },
+      { type: 'slider', height: 22, bottom: 14, filterMode: 'none' }
+    ],
+    series: [
+      { name: 'دما (°C)', type: 'line', yAxisIndex: 0, data: tempPts, showSymbol: false, smooth: 0.15, connectNulls: false, lineStyle: { width: 2 } },
+      { name: 'رطوبت (%)', type: 'line', yAxisIndex: 1, data: humPts, showSymbol: false, smooth: 0.15, connectNulls: false, lineStyle: { width: 2 } }
+    ]
+  };
+
+  let chart = printerChartInstances[ip];
+  if (!chart || (typeof chart.isDisposed === 'function' && chart.isDisposed()) || chart.getDom() !== el) {
+    destroyPrinterDailyChart(ip);
+    chart = window.PrintGuardECharts ? window.PrintGuardECharts.init(el) : window.echarts.init(el);
+    printerChartInstances[ip] = chart;
+    chart.on('datazoom', () => {
+      const z = (chart.getOption().dataZoom || [])[0] || {};
+      st.zoomed = (z.start > 0.01) || (z.end < 99.99);
+    });
+  }
+  chart.setOption(option, { notMerge: !silent });
+
+  // به‌روزرسانی خودکار برای بازه‌های «اخیر» (وقتی کاربر زوم نکرده)
+  if (!sensorSeriesTimers[ip]) {
+    sensorSeriesTimers[ip] = setInterval(() => {
+      const cur = document.getElementById(`printer-daily-chart-${ip.replace(/\./g, '-')}`);
+      if (!cur || !document.body.contains(cur)) { clearInterval(sensorSeriesTimers[ip]); delete sensorSeriesTimers[ip]; return; }
+      if (cur.offsetParent === null) return;           // تب فعال نیست
+      const cs = getSensorRangeState(ip);
+      if (cs.mode !== 'preset' || cs.zoomed) return;
+      loadSensorSeriesChart(ip, cur, { silent: true });
+    }, SENSOR_REFRESH_MS);
+  }
 }
 
 function schedulePrinterDailyChartLoad(ip, delay = 50, force = false) {
@@ -1076,11 +1345,17 @@ function renderAllPrinterPanels(printers) {
     }
 
     const wasActive = panel.classList.contains('active') || activeTab === p.ip;
-    destroyPrinterDailyChart(p.ip);
+    // نمودار سنسور (با فیلتر و زوم کاربر) بین رندرهای دوره‌ای حفظ می‌شود
+    const keptSensorSection = p.device_type === 'sensor' ? panel.querySelector('.sensor-ts-section') : null;
+    if (!keptSensorSection) destroyPrinterDailyChart(p.ip);
     
     // تشخیص نوع دستگاه
     if (p.device_type === 'sensor') {
       panel.innerHTML = buildSensorDetail(p);
+      if (keptSensorSection) {
+        const placeholder = panel.querySelector('.sensor-ts-section');
+        if (placeholder) placeholder.replaceWith(keptSensorSection);
+      }
     } else {
       panel.innerHTML = buildPrinterDetail(p);
     }
@@ -1090,7 +1365,7 @@ function renderAllPrinterPanels(printers) {
     renderLogTable(printerEvents, logId, logId+'-count');
 
     if (wasActive) {
-      schedulePrinterDailyChartLoad(p.ip, 80, true);
+      schedulePrinterDailyChartLoad(p.ip, 80, !keptSensorSection);
     }
   });
 }
@@ -1558,12 +1833,7 @@ function buildSensorDetail(p) {
       </div>
     </div>
 
-    <div class="section" style="margin-bottom:14px">
-      <div class="section-title">📈 میانگین روزانه دما و رطوبت (۳۰ روز اخیر)</div>
-      <div style="position:relative;height:280px;">
-        <canvas id="printer-daily-chart-${p.ip.replace(/\./g,'-')}" class="printer-daily-chart-canvas" data-chart-type="sensor" style="width:100%;height:100%;"></canvas>
-      </div>
-    </div>
+    ${sensorSeriesSectionHtml(p.ip)}
 
     <!-- اطلاعات دستگاه -->
     <div class="section" style="margin-bottom:14px">
@@ -3149,6 +3419,9 @@ async function loadPrinterDailyChart(ip) {
 
   let canvasId = `printer-daily-chart-${ip.replace(/\./g,'-')}`;
   let canvas = document.getElementById(canvasId);
+  if (canvas && canvas.dataset.chartType === 'sensor') {
+    return loadSensorSeriesChart(ip, canvas);
+  }
   if (!canvas) {
     const panel = document.getElementById('panel-' + ip.replace(/\./g, '-'));
     if (!panel) {
