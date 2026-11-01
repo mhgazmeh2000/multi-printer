@@ -166,12 +166,36 @@ class MigrationScopeTests(unittest.TestCase):
 
 
 class SqliteSchemaUnchangedTests(unittest.TestCase):
-    """SQLite side: Nothing is converted — checked against the actual schema of the repository."""
+    """SQLite side: Nothing is converted — checked against the schema created by core.database.init_db().
 
-    @staticmethod
-    def _decls(table):
-        """Helper: decls."""
-        conn = sqlite3.connect(f"file:{ROOT / 'logs.db'}?mode=ro", uri=True)
+    The test builds its own throwaway SQLite database in a temp directory instead of reading the
+    repository's logs.db (which is a user data file and may be absent or different on other machines).
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.TemporaryDirectory()
+        cls._cwd = os.getcwd()
+        cls._saved_backend = os.environ.get("DB_BACKEND")
+        os.environ["DB_BACKEND"] = "sqlite"
+        os.chdir(cls._tmp.name)
+        from core.database import init_db
+        init_db()
+        cls._db_path = Path(cls._tmp.name) / "logs.db"
+
+    @classmethod
+    def tearDownClass(cls):
+        os.chdir(cls._cwd)
+        if cls._saved_backend is None:
+            os.environ.pop("DB_BACKEND", None)
+        else:
+            os.environ["DB_BACKEND"] = cls._saved_backend
+        cls._tmp.cleanup()
+
+    @classmethod
+    def _decls(cls, table):
+        """Helper: declared column types of a table in the temporary SQLite database."""
+        conn = sqlite3.connect(f"file:{cls._db_path}?mode=ro", uri=True)
         try:
             return {r[1]: (r[2] or "").upper() for r in conn.execute(
                 f"PRAGMA table_info({table})")}

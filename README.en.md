@@ -70,7 +70,7 @@ The system has three parts:
 ### 🛠️ For developers
 - **`run.py`:** the entry point. It starts the polling loop in a thread and the Flask server.
 - **`core/poller.py`:** `poll_all()` calls `collect(ip)` for each printer.
-- **`core/collectors/`:** an optional `exporter_adapter` path (enabled with `USE_SNMP_EXPORTER=1`), the main collector in `core/enhanced_collector.py`, and a web-scraping fallback when data is incomplete.
+- **`core/collectors/`:** the main collector in `core/enhanced_collector.py`, and a web-scraping fallback when data is incomplete.
 - **`core/snmp/protocol.py`:** sends SNMP GET requests over UDP/161.
 - **`core/collectors/base.py`:** processing: detects genuine counter changes, reconciles the A3/A4 split, and computes toner and Yield Engine values.
 - **`core/store.py` and `core/db/`:** an in-memory live store for the API, and persistent storage in SQLite or PostgreSQL.
@@ -87,7 +87,6 @@ The system has three parts:
 
 ### 🛠️ For developers
 - **Main path:** `run.py` → `polling_loop` (thread) → `core/poller.py:poll_all()` → `collect(ip)` → processing in `core/collectors/base.py` → storage in `core/store.py` and `core/db/`.
-- **Exporter path:** with `USE_SNMP_EXPORTER=1`, requests go through `core/exporter_client.py`, which uses **exponential backoff** and a **circuit breaker**. If the data is incomplete, the system falls back to web scraping.
 - **Time contract:** the database layer works only in UTC. Conversion to `Asia/Tehran` happens only in the display and report layers (`docs/timezone-contract.md`).
 
 ---
@@ -101,7 +100,7 @@ You do not need to know the folder layout for day-to-day use. Note that `printer
 ```text
 run.py                  entry point
 core/                   collection, processing, and storage
-  collectors/           collectors (base, exporter_adapter, ...)
+  collectors/           collectors (base, ...)
   snmp/                 SNMP protocol layer
   db/                   database layer (SQLite and PostgreSQL)
   yield_engine.py       cartridge capacity estimation
@@ -110,9 +109,7 @@ config/                 settings (settings.py) and example JSON files
 alembic/versions/       database schema migrations
 tools/                  command-line tools
 tests/                  tests (fixtures in tests/fixtures)
-monitoring/             snmp_exporter configuration (generator.yml, snmp.yml)
 grafana/                Grafana dashboards and provisioning
-windows/                Windows scripts (e.g. snmp_exporter installer)
 docs/                   technical documentation and runbooks
 ```
 
@@ -181,7 +178,6 @@ python run.py
 | `DB_BACKEND` | `sqlite` or `postgresql` |
 | `PG_DSN` | PostgreSQL connection string |
 | `METRICS_TOKEN` | Bearer token for the `/metrics` endpoint |
-| `USE_SNMP_EXPORTER` and `SNMP_EXPORTER_URL` | Enable the snmp_exporter path and set its URL |
 | `DEFAULT_PRINTERS_JSON` | Path to the default printer list |
 | `OFFICE_SUBNET_*` | Office subnet definitions |
 | `CARTRIDGE_YIELD_CATALOG` | Path to the cartridge capacity catalogue |
@@ -266,9 +262,6 @@ Windows batch files:
 | `python tools/auto_migrate.py` | Automatic migration to PostgreSQL (empty target only) |
 | `python tools/migrate_sqlite_to_pg.py --verify` | Copy SQLite data to PostgreSQL and verify it |
 | `python tools/diagnose_data_quality.py --db logs.db` | Database health check |
-| `python tools/build_oid_matrix.py --write` | Regenerate `docs/oid-matrix.md` |
-| `python tools/compare_snmp_sources.py` | Compare SNMP data sources |
-| `python tools/build_snmp_yml.py` | Build `snmp.yml` for snmp_exporter |
 | `python tools/verify_server_timezone.py` | Check the server's timezone setting |
 | `python create_admin.py` | Create an admin account |
 
@@ -339,8 +332,6 @@ python -m pytest tests/ -m "not slow" -q            # skip slow tests
 ### 🛠️ For developers
 - **Production:** set `ENVIRONMENT=production`, use a unique `SECRET_KEY`, and run behind a reverse proxy (`docs/deployment_reverse_proxy.md`). The built-in Flask development server is not suitable for production.
 - **PostgreSQL:** `docs/postgresql-setup.md`.
-- **snmp_exporter:** `docs/snmp-exporter-setup.md`.
-- **Windows services:** `docs/windows-services.md`.
 - **Backups:** back up `logs.db` before any migration. `migrate.bat` does this for you.
 - **Full reference:** `docs/technical-reference.en.md`.
 

@@ -34,7 +34,7 @@ CACHE_PATH = os.environ.get(
     "TR_CACHE", os.path.join(os.path.expanduser("~"), ".cache", "printguard-translation-cache.json"))
 PERSIAN = re.compile(r"[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]")
 ZWNJ = "\u200c"
-GENERATED = {"docs/oid-matrix.md"}   # produced by tools/build_oid_matrix.py; byte-exact --check
+GENERATED = {"docs/oid-matrix.md"}   # generated doc (its generator was removed with the SNMP exporter); not translated
 SCOPE_EXTRA = ["README.md", "README.en.md"]
 SCOPE_HTML = ["docs/architecture.html"]
 SCOPE_JSON = ["config/cartridge_id_map.example.json"]

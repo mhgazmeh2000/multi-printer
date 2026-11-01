@@ -185,6 +185,7 @@ class PgBackendEnvTests(unittest.TestCase):
                          "پوشهٔ جاری نباید آلوده شود")
 
 
+@unittest.skipUnless(shutil.which("pg_restore"), "pg_restore is not on PATH (install postgresql-client)")
 class VerifyDumpTests(unittest.TestCase):
     """Dump verification should be ruthless: anything other than a valid dump ⇒ explicit error."""
 

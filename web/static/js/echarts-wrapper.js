@@ -265,18 +265,23 @@
      */
     refreshAllThemes() {
       const newTheme = getActiveThemeName();
-      registeredInstances.forEach((chart) => {
-        if (!chart.isDisposed()) {
-          const dom = chart.getDom();
-          const option = chart.getOption();
-          const ro = chart.__ro;
-          chart.dispose();
-          const next = global.echarts.init(dom, newTheme, { locale: "FA" });
+      // Snapshot first: Set#forEach also visits items added while iterating, so adding the
+      // re-created chart to the live Set made this loop dispose/init forever (page freeze).
+      Array.from(registeredInstances).forEach((chart) => {
+        registeredInstances.delete(chart);
+        if (chart.isDisposed()) return;
+        const dom = chart.getDom();
+        const option = chart.getOption();
+        if (chart.__ro) chart.__ro.disconnect();
+        chart.dispose();
+        const next = global.echarts.init(dom, newTheme, { locale: "FA" });
+        if (typeof ResizeObserver !== "undefined") {
+          const ro = new ResizeObserver(() => next.resize());
+          ro.observe(dom);
           next.__ro = ro;
-          next.setOption(option);
-          registeredInstances.delete(chart);
-          registeredInstances.add(next);
         }
+        next.setOption(option);
+        registeredInstances.add(next);
       });
     },
 

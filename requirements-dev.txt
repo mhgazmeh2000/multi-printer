@@ -17,7 +17,3 @@
 
 pytest>=7.0
 pytest-cov>=4.1
-
-# Phase G gates (monitoring/generator.yml and docs/oid-matrix.md) with yaml.safe_load
-# Working: tests/test_generator_yml.py and tools/check_oid_coverage.py.
-PyYAML>=6.0

@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 
 from core.snmp.protocol import snmp_get_with_fallback
 from core.collectors.base import si, ss, _counters_event
+from core.collectors.url_safety import is_http_url
 from core import store
 from core.time_utils import to_utc_z, utc_now_iso
 
@@ -58,6 +59,8 @@ def _scrape_canon_toners(ip: str, timeout: float = 4.0):
         try:
             import urllib.request as _ur
             for url in urls:
+                if not is_http_url(url):
+                    continue
                 try:
                     req = _ur.Request(url, headers={"User-Agent": "PrinterMonitor/1.0"})
                     with _ur.urlopen(req, timeout=timeout) as resp:

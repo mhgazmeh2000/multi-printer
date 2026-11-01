@@ -7,11 +7,10 @@
 #                Side effects: network I/O, starts threads
 # @dependencies: internal: config.settings, core, core.collectors.base,
 #                core.collectors.base_enhanced, core.collectors.brother, core.collectors.canon,
-#                core.collectors.exporter_adapter, core.collectors.hp, core.collectors.sensor,
-#                core.collectors.toshiba, core.database, core.exporter_client, core.snmp.oid_map,
+#                core.collectors.hp, core.collectors.sensor,
+#                core.collectors.toshiba, core.database, core.snmp.oid_map,
 #                core.snmp.protocol, core.time_utils
-# @notes:        Per-IP locks prevent concurrent polls of one printer. The SNMP exporter path is
-#                off unless USE_SNMP_EXPORTER is enabled.
+# @notes:        Per-IP locks prevent concurrent polls of one printer.
 # =============================================================================
 
 # core/poller.py (PATCHED - All Critical Bugs Fixed)
@@ -38,9 +37,6 @@ from core.collectors.base import detect_brand
 from core.collectors.base_enhanced import collect_enhanced
 # Enhanced fallback to brand-oriented collectors to preserve event logging in case of error
 from core.collectors.sensor import collect_sensor
-# Phase G · Step G.5 — exporter test path (default off; see exporter_enabled())
-from core.exporter_client import client_from_env, exporter_enabled
-from core.collectors.exporter_adapter import collect_via_exporter
 from core.collectors.toshiba import collect_toshiba
 from core.collectors.hp import collect_hp
 from core.collectors.canon import collect_canon
@@ -52,17 +48,6 @@ log = logging.getLogger("PrinterMonitor")
 # Lock to prevent concurrent execution of poll_all
 _polling_lock = threading.Lock()
 
-#: only created when the flag is on (lazy) — with the flag off no object
-#: It is not created and no socket is opened.
-_exporter_client_cache = None
-
-
-def _exporter_client():
-    """Return the shared exporter client, creating it on first use."""
-    global _exporter_client_cache
-    if _exporter_client_cache is None:
-        _exporter_client_cache = client_from_env()
-    return _exporter_client_cache
 
 # Bug #1: separate lock for processed_ips (avoid race condition)
 _processed_ips_lock = Lock()
@@ -303,20 +288,6 @@ def _collect_inner(printer: dict) -> dict:
                     p["brand"] = brand
                     store.save_printers(store.PRINTERS)
                     break
-
-    # ── Phase G · Step G.5: exporter path, only with USE_SNMP_EXPORTER=1 ──────────
-    # The order of the condition is important: exporter_enabled() is evaluated first, then with the off flag
-    # (Phase default) No is_available() and no socket occur, and today's behavior
-    # Word for word it is the same path as collect_enhanced.
-    # This path intentionally does not register the counter event (_counters_event is in collectors and
-    # collectors/ remains intact in this phase); That is why it is experimental and until
-    # Step G.6 does not turn on (docs/snmp-exporter-setup.md §9).
-    if exporter_enabled() and _exporter_client().is_available():
-        exporter_result = collect_via_exporter(_exporter_client(), ip, name, brand, start)
-        if exporter_result is not None:
-            exporter_result["nickname"] = nickname
-            exporter_result["device_type"] = exporter_result.get("device_type", device_type)
-            return exporter_result
 
     # 🔥 Use enhanced_collector for all printers
     try:

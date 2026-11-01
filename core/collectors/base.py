@@ -30,6 +30,7 @@ from core.snmp.protocol import snmp_get_with_fallback
 from core import store
 from core.database import add_event
 from core.time_utils import parse_utc, utc_now_iso
+from core.collectors.url_safety import is_http_url, tls_verify_enabled
 
 log = logging.getLogger("PrinterMonitor")
 DEFAULT_YIELD_PER_PAGE = 2000
@@ -1502,16 +1503,20 @@ def fetch_first_web_page(ip: str, urls, timeout: float = 4.0):
     """
     try:
         import requests as _req
-        try:
-            import urllib3
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        except Exception:
-            pass
+        verify = tls_verify_enabled()
+        if not verify:
+            try:
+                import urllib3
+                urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            except Exception:
+                pass
         for url in urls:
+            if not is_http_url(url):
+                continue
             try:
                 resp = _req.get(url, timeout=timeout,
                                 headers={"User-Agent": "PrinterMonitor/1.0"},
-                                allow_redirects=True, verify=False)
+                                allow_redirects=True, verify=verify)
                 if resp.status_code == 200 and resp.text:
                     return url, resp.text
             except Exception:
@@ -1522,9 +1527,12 @@ def fetch_first_web_page(ip: str, urls, timeout: float = 4.0):
         import urllib.request as _ur
         import ssl as _ssl
         ctx = _ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = _ssl.CERT_NONE
+        if not tls_verify_enabled():
+            ctx.check_hostname = False
+            ctx.verify_mode = _ssl.CERT_NONE
         for url in urls:
+            if not is_http_url(url):
+                continue
             try:
                 req = _ur.Request(url, headers={"User-Agent": "PrinterMonitor/1.0"})
                 with _ur.urlopen(req, timeout=timeout, context=ctx) as resp:

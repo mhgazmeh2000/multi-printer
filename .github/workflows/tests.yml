@@ -18,7 +18,7 @@ name: tests
 #   3) fixed byte by byte golden fixtures (difference-zero)
 #
 # Tests are hermetic: no network/real time/external service. No ancillary services
-# (PostgreSQL/Exporter) is not required in this workflow.
+# (PostgreSQL) is not required in this workflow.
 # =====================================================
 
 on:
