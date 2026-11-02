@@ -74,44 +74,11 @@ jobs:
           python -m unittest discover -s tests -p "test_*.py" 2>&1 | tee "${{ runner.temp }}/unittest.log"
 
       # ---------- Anti-double counting guard ----------
-      # No test shall be omitted or counted twice. The number of unittest-discovered must
-      # be exactly equal to pytest set without marker (independent comparison of constant number).
+      # Every unittest-style test must run in exactly one route. The checker compares, per
+      # module, unittest's loader with pytest's collection (pytest_only deselected). It runs no
+      # tests and does not parse the unittest log, so skipped modules cannot skew it.
       - name: گارد ضد دوبارشماری
-        shell: python
-        env:
-          UNITTEST_LOG: ${{ runner.temp }}/unittest.log
-        run: |
-          import os
-          import re
-          import subprocess
-          import sys
-
-          def pytest_collected(marker):
-              out = subprocess.run(
-                  [sys.executable, "-m", "pytest", "tests/", "-m", marker,
-                   "--collect-only", "-q", "--color=no"],
-                  capture_output=True, text=True,
-              )
-              if out.returncode != 0:
-                  sys.exit("pytest --collect-only شکست خورد:\n" + out.stdout + out.stderr)
-              return sum(1 for line in out.stdout.splitlines() if "::" in line)
-
-          only = pytest_collected("pytest_only")
-          rest = pytest_collected("not pytest_only")
-          total = only + rest
-
-          log = open(os.environ["UNITTEST_LOG"], encoding="utf-8", errors="replace").read()
-          m = re.search(r"^Ran (\d+) tests?", log, re.M)
-          if not m:
-              sys.exit("سطر «Ran N tests» در لاگ unittest پیدا نشد")
-          unittest_n = int(m.group(1))
-
-          print(f"pytest_only={only} | unittest={unittest_n} | pytest کل={total}")
-          if only == 0:
-              sys.exit("هیچ تست pytest_onlyای کشف نشد (marker/load_tests خراب است)")
-          if rest != unittest_n:
-              sys.exit(f"دوبارشماری/حذف تست: pytest(بدون marker)={rest} ولی unittest={unittest_n}")
-          print(f"✔ بدون دوبارشماری: {only} + {unittest_n} = {total} تست، هر کدام یک بار")
+        run: python tools/check_test_split.py
 
       # ---------- golden regression guard ----------
       - name: golden fixtures — تفاضل-صفر (۱۰/۱۰)
