@@ -220,7 +220,6 @@ let serverInfo  = {};
 const PAGE_SIZE = 20;
 const _pgState  = {};
 
-let chartInstance = null;
 const printerChartInstances = {};
 
 const USER_ROLE = document.body?.dataset?.currentUserRole || 'viewer';
@@ -245,16 +244,8 @@ function canManage() {
   return USER_VERIFIED && (USER_ROLE === 'admin' || USER_ROLE === 'manager') && canAccessModule('excel');
 }
 
-function canViewLogs() {
-  return USER_VERIFIED && canAccessModule('logs');
-}
-
 function canEditPrinters() {
   return canAdmin() && canAccessModule('printers');
-}
-
-function canManualEvents() {
-  return canAdmin() && canAccessModule('logs');
 }
 
 let OFFICE_GROUPS = (window.SERVER_OFFICE_GROUPS && Array.isArray(window.SERVER_OFFICE_GROUPS)) ? window.SERVER_OFFICE_GROUPS : [];
@@ -272,32 +263,6 @@ async function fetchCustomGroups() {
     }
   } catch (e) { /* سایلنت — گروه‌ها اختیاری‌اند */ }
   return CUSTOM_GROUPS;
-}
-
-function renderCustomGroupsList() {
-  const el = document.getElementById('custom-groups-list');
-  if (!el) return;
-  if (!Array.isArray(CUSTOM_GROUPS) || CUSTOM_GROUPS.length === 0) {
-    el.innerHTML = '<div style="color:var(--text3)">هیچ گروه سفارشی‌ای تعریف نشده</div>';
-    return;
-  }
-  // show subnet input alongside each custom group so user can configure per-group subnets
-  el.innerHTML = CUSTOM_GROUPS.map(g => `
-    <div style="display:flex;align-items:center;justify-content:space-between;padding:6px;border-bottom:1px solid var(--border)">
-      <div style="display:flex;gap:12px;align-items:center;flex:1">
-        <div style="font-size:18px">${escapeHtml(g.icon||'⭐')}</div>
-        <div style="flex:1">
-          <div style="font-weight:700">${escapeHtml(g.name)}</div>
-          <div style="font-size:11px;color:var(--text3);margin-top:4px">${escapeHtml(g.id)}</div>
-        </div>
-        <div style="flex:0 0 220px">
-          <input class="form-input" data-key="${escapeHtml(g.id)}" value="${escapeHtml(g.subnet||'')}" placeholder="مثلاً: 172.16.25">
-        </div>
-      </div>
-      <div style="display:flex;gap:8px">
-        <button class="btn btn-ghost" onclick="deleteGroupUI('${escapeHtml(g.id)}')">× حذف</button>
-      </div>
-    </div>`).join('');
 }
 
 function groupDefById(gid) {
@@ -342,7 +307,6 @@ let sortableInstance = null;
 let currentPrinters = [];
 const STORAGE_KEY = 'printer_order';
 const EXTRA_COUNTERS_ACCORDION_KEY = 'printer_extra_counters_open';
-let swapPluginMounted = false;
 
 function getDefaultPrinterOrder(printers) {
   const groups = {};
@@ -2846,76 +2810,6 @@ async function clearPrinterLog(ip) { openClearLogsModal(ip); }
 // ══════════════════════════════════════════════════
 // NICKNAME EDITING
 // ══════════════════════════════════════════════════
-let _nicknameCallback = null;
-let _nicknameIp = null;
-
-function openNicknameModal(ip, currentNickname, callback) {
-  _nicknameIp = ip;
-  _nicknameCallback = callback;
-  const input = document.getElementById('nickname-input');
-  input.value = currentNickname || '';
-  input.placeholder = 'نام مستعار جدید...';
-  const modal = document.getElementById('modal-nickname');
-  modal.classList.add('show');
-  input.focus();
-  input.select();
-}
-
-function closeNicknameModal() {
-  document.getElementById('modal-nickname').classList.remove('show');
-  _nicknameIp = null;
-  _nicknameCallback = null;
-}
-
-function bindNicknameModalEvents() {
-  const saveBtn = document.getElementById('nickname-save');
-  const cancelBtn = document.getElementById('nickname-cancel');
-  const modalOverlay = document.getElementById('modal-nickname');
-  
-  if (saveBtn) {
-    saveBtn.onclick = () => {
-      const newValue = document.getElementById('nickname-input').value.trim();
-      if (_nicknameCallback) _nicknameCallback(_nicknameIp, newValue);
-      closeNicknameModal();
-    };
-  }
-  if (cancelBtn) {
-    cancelBtn.onclick = () => closeNicknameModal();
-  }
-  if (modalOverlay) {
-    modalOverlay.onclick = (e) => {
-      if (e.target === modalOverlay) closeNicknameModal();
-    };
-  }
-  const inputField = document.getElementById('nickname-input');
-  if (inputField) {
-    inputField.onkeypress = (e) => {
-      if (e.key === 'Enter' && saveBtn) saveBtn.click();
-    };
-  }
-}
-
-async function editNickname(ip, currentNickname) {
-  if (!canAdmin()) { toast('دسترسی ندارید', 'e'); return; }
-  openNicknameModal(ip, currentNickname, async (ip, newNick) => {
-    try {
-      const r = await apiFetch(`${API}/api/printer/${ip}/rename`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nickname: newNick })
-      });
-      const j = await r.json();
-      if (r.ok) {
-        toast(newNick ? 'نام مستعار تغییر کرد' : 'نام مستعار حذف شد', 's');
-        fetchData();
-      } else {
-        toast(j.error || 'خطا', 'e');
-      }
-    } catch(e) {
-      toast('خطا در اتصال', 'e');
-    }
-  });
-}
 
 // ══════════════════════════════════════════════════
 // MANUAL EVENT MODAL
@@ -3277,11 +3171,6 @@ function populatePrinterSelect() {
   if (window.PrintGuardUsageChart) window.PrintGuardUsageChart.setPrinters('overview', allData);
 }
 
-// سازگاری با فراخوانی‌های قدیمی؛ نمودار اصلی در usage-chart.js مدیریت می‌شود.
-function loadDailyChart() {
-  if (window.PrintGuardUsageChart) window.PrintGuardUsageChart.reload('overview');
-}
-
 async function loadPrinterDailyChart(ip) {
   if (!ip) {
     console.error('loadPrinterDailyChart called without ip');
@@ -3577,7 +3466,6 @@ async function loadPrinterDailyChart(ip) {
 // ══════════════════════════════════════════════════
 fetchData();
 resetCountdown();
-// bindNicknameModalEvents();
 
 // ══════════════════════════════════════════════════
 // PRINTER EDIT MODAL
