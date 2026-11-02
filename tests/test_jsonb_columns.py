@@ -161,7 +161,7 @@ class MigrationScopeTests(unittest.TestCase):
         self.assertEqual((m.revision, m.down_revision), ("0004", "0003"))
 
     def test_0004_is_the_head_of_the_chain(self):
-        """The chain head is 0005 (0004 was 0005 before migration)."""
+        """The chain head is 0008 (0004 was 0005 before the migration renumbering)."""
         self.assertEqual(migration_head(), "0005")
 
 

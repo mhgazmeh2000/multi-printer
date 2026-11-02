@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-core/retention_policy.py — سیاست نگهداری و پاک‌سازی داده‌های سری‌زمانی (فاز I.2).
+core/retention_policy.py — retention and cleanup policy for time-series data (phase I.2).
 
-سیاست نگهداری (Retention Policy):
-  • logs: ۹۰ روز
-  • sensor_readings: ۹۰ روز
-  • toner_snapshots_v2: ۹۰ روز
-  • security_events: ۲ سال (۷۳۰ روز)
+Retention policy:
+  • logs: 90 days
+  • sensor_readings: 90 days
+  • toner_snapshots_v2: 90 days
+  • security_events: 2 years (730 days)
 
-جداول دائمی (Permanent - بدون حذف):
+Permanent tables (never deleted):
   • print_events
   • cartridge_lifecycle
   • daily_stats
@@ -49,15 +49,15 @@ def purge_table(
     dry_run: bool = False,
 ) -> int:
     """
-    حذف ردیف‌های قدیمی‌تر از `days` روز به‌صورت دسته‌ای (batch) جهت جلوگیری از قفل طولانی جدول.
+    Deletes rows older than `days` days in batches, to avoid long table locks.
 
-    پارامترها:
-      conn: اتصال پایگاه‌داده (ConnectionAdapter یا sqlite3/psycopg connection)
-      table: نام جدول (باید در ALLOWED_PURGE_TABLES باشد)
-      days: تعداد روزهای نگهداری
-      batch_size: اندازه هر بسته حذف (پیش‌فرض: ۱۰,۰۰۰)
-      now_dt: زمان مرجع (اختیاری، جهت تست)
-      dry_run: شبیه‌سازی و شمارش ردیف‌های مشمول حذف بدون حذف فیزیکی
+    Parameters:
+      conn: database connection (ConnectionAdapter, or a raw sqlite3/psycopg connection)
+      table: table name (must be in ALLOWED_PURGE_TABLES)
+      days: number of retention days
+      batch_size: size of each delete batch (default: 10,000)
+      now_dt: reference time (optional, for tests)
+      dry_run: simulate and count the rows that would be deleted, without physically deleting them
     """
     if table in PERMANENT_TABLES:
         raise ValueError(
@@ -82,10 +82,10 @@ def purge_table(
         ref_dt = ref_dt.astimezone(timezone.utc)
 
     cutoff_dt = ref_dt - timedelta(days=days)
-    # فرمت ایزوی استاندارد ۲۷ کاراکتری پروژه
+    # Standard ISO format, the project's 27-character length
     cutoff_iso = cutoff_dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
-    # تشخیص اینکه آیا شیء اتصال ConnectionAdapter است یا اتصال خام psycopg
+    # Detect whether the connection object is a ConnectionAdapter or a raw psycopg connection
     is_pg_raw = False
     if hasattr(conn, "info") and hasattr(conn.info, "vendor") and conn.info.vendor == "PostgreSQL":
         is_pg_raw = True
@@ -156,8 +156,8 @@ def run_retention(
     dry_run: bool = False,
 ) -> Dict[str, int]:
     """
-    اجرای سیاست نگهداری برای تمامی جداول پیکربندی‌شده.
-    خروجی: دیکشنری شامل تعداد ردیف‌های حذف‌شده به ازای هر جدول.
+    Runs the retention policy for all configured tables.
+    Output: dictionary with the number of deleted rows for each table.
     """
     config = retention_config or RETENTION_DAYS
     results: Dict[str, int] = {}

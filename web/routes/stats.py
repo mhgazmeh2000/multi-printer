@@ -2,7 +2,7 @@
 # @file:         web/routes/stats.py
 # @brief:        API routes for daily statistics, including sensor statistics.
 # @details:      Responsibilities: Aggregate daily counters for the dashboard charts.
-#                Main API: api_daily_stats(), api_sensor_daily_stats()
+#                Main API: api_daily_stats(), api_sensor_daily_stats(), api_sensor_series()
 #                Side effects: database access, defines HTTP routes
 # @dependencies: internal: core, core.db, core.time_utils | external: flask
 # @notes:        None.
@@ -26,12 +26,12 @@ bp = Blueprint("stats", __name__)
 log = logging.getLogger("PrinterMonitor")
 
 
-# ─── Phase E.3 Auxiliaries
-# Until E.3, the stored data was local naive and daily grouping with
-# `substr(timestamp, 1, 10)` was done in SQL. Now the data is UTC/Z ⇒ "day" should be
-# It must be a local day (Asia/Tehran), otherwise every row after 20:30 Tehran time
-# The basket drops the next day. Grouping is done in Python rather than SQL on both backends
-# (SQLite today, PostgreSQL in E.4) remain the same.
+# ─── Phase E.3 helpers
+# Until E.3 the stored data was naive local time, and daily grouping with
+# `substr(timestamp, 1, 10)` was done in SQL. The data is now UTC/Z, so a "day"
+# must be a local day (Asia/Tehran). Otherwise every row after 20:30 Tehran time
+# falls into the next day's bucket. Grouping is done in Python rather than SQL so that
+# the results stay the same on both backends (SQLite today, PostgreSQL in E.4).
 
 def _local_day_start(days_ago: int) -> str:
     """Local midnight of "today minus days_ago" in standard Z format (SQL filter boundary)."""
@@ -65,8 +65,8 @@ def api_daily_stats():
         conn = get_connection(timeout=30.0)
 
         # Phase E.3: SELECT rows (without GROUP BY) and local day grouping in Python.
-        # Phase E.4.6: The raw cursor was removed ⇒ ``conn.execute'' (on PG translation of? ⇒ %s too
-        # It comes from the same path and two-style SQL is not required).
+        # Phase E.4.6: the raw cursor was removed ⇒ ``conn.execute`` is used. The adapter
+        # translates ? placeholders to %s on PG through the same path, so two SQL styles are not needed.
         if ip:
             rows = conn.execute('''
                 SELECT timestamp, pages

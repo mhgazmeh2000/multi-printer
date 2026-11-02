@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-core/scheduler.py — زمان‌بندی خودکار اجرای دوره‌ای سیاست نگهداری و خلاصه‌سازی (فاز I.4).
+core/scheduler.py — automatic periodic scheduling of the retention policy and summarization (phase I.4).
 
-وظایف زمان‌بندی‌شده:
-  • rollup_daily_stats: هر روز ساعت ۱:۰۰ بامداد UTC
-  • run_retention: هر روز ساعت ۳:۰۰ بامداد UTC
+Scheduled tasks:
+  • rollup_daily_stats: every day at 01:00 UTC
+  • run_retention: every day at 03:00 UTC
 
-پشتیبانی:
-  • در صورت نصب بودن `APScheduler`: استفاده از `BackgroundScheduler`.
-  • در صورت عدم نصب: ثبت هشدار و هدایت به Windows Task Scheduler از طریق `tools/run_*.py`.
+Support:
+  • If `APScheduler` is installed: uses `BackgroundScheduler`.
+  • If it is not installed: logs a warning and points to Windows Task Scheduler via `tools/run_*.py`.
 """
 
 from __future__ import annotations
@@ -79,7 +79,7 @@ def _job_retention(conn_or_factory: Any) -> None:
 
 def start_scheduler(conn: Optional[Any] = None) -> Optional[Any]:
     """
-    راه‌اندازی زمان‌بند پس‌زمینه برای وظایف نگهداری و خلاصه‌سازی داده‌ها.
+    Starts the background scheduler for the retention and summarization tasks.
     """
     global _scheduler_instance
 
@@ -93,7 +93,7 @@ def start_scheduler(conn: Optional[Any] = None) -> Optional[Any]:
     try:
         scheduler = BackgroundScheduler(timezone="UTC")
 
-        # خلاصه‌سازی روزانه ساعت ۰۱:۰۰ بامداد UTC
+        # Daily summarization at 01:00 UTC
         scheduler.add_job(
             _job_rollup,
             CronTrigger(hour=1, minute=0),
@@ -103,7 +103,7 @@ def start_scheduler(conn: Optional[Any] = None) -> Optional[Any]:
             replace_existing=True,
         )
 
-        # پاک‌سازی سیاست نگهداری ساعت ۰۳:۰۰ بامداد UTC
+        # Retention cleanup at 03:00 UTC
         scheduler.add_job(
             _job_retention,
             CronTrigger(hour=3, minute=0),
@@ -123,7 +123,7 @@ def start_scheduler(conn: Optional[Any] = None) -> Optional[Any]:
 
 
 def stop_scheduler() -> None:
-    """توقف زمان‌بند در صورت فعال بودن."""
+    """Stops the scheduler if it is running."""
     global _scheduler_instance
     if _scheduler_instance is not None:
         try:

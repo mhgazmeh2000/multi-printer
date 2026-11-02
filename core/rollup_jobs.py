@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-core/rollup_jobs.py — خلاصه‌سازی و تجمیع روزانه آمار چاپ و مصرفی‌ها (فاز I.3).
+core/rollup_jobs.py — daily summarization and aggregation of print statistics and consumables (phase I.3).
 
-اهداف:
-  • تولید خودکار رکوردهای `daily_stats` برای هر پرینتر در هر روز (بر مبنای UTC).
-  • تجمیع شمارنده‌های کل، تفکیک رنگی/مونو، تفکیک اندازه کاغذ A3/A4 و میانگین تونرها.
-  • پشتیبانی از بازتولید بدون تکرار (Idempotent) با دستور `ON CONFLICT (date, printer_ip) DO UPDATE`.
-  • پشتیبانی از بازتولید و جبران گذشته (Backfill) با قابلیت خواندن داده‌های تاریخی از `logs` در صورت خالی بودن `print_events`.
+Goals:
+  • Automatically generate `daily_stats` records for every printer, every day (based on UTC).
+  • Aggregate total counters, the color/mono split, the A3/A4 paper-size split, and toner averages.
+  • Support idempotent regeneration with `ON CONFLICT (date, printer_ip) DO UPDATE`.
+  • Support regeneration and backfill of past data, reading historical data from `logs` when `print_events` is empty.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ log = logging.getLogger(__name__)
 
 def _parse_date(d: Union[date, str, None]) -> date:
     if d is None:
-        # پیش‌فرض: دیروز بر اساس تقویم جهانی UTC
+        # Default: yesterday, based on the UTC calendar
         return (datetime.now(timezone.utc) - timedelta(days=1)).date()
     if isinstance(d, date):
         return d
@@ -33,24 +33,24 @@ def rollup_daily_stats(
     target_date: Union[date, str, None] = None,
 ) -> int:
     """
-    محاسبه و ذخیره آمار روزانه تمام پرینترها در جدول `daily_stats` برای یک تاریخ مشخص.
-    خروجی: تعداد پرینترهایی که آمار آن‌ها ثبت/به‌روزرسانی شد.
+    Computes and stores the daily statistics of all printers in the `daily_stats` table for a specific date.
+    Output: number of printers whose statistics were recorded/updated.
     """
     dt_obj = _parse_date(target_date)
     date_str = dt_obj.strftime("%Y-%m-%d")
 
-    # بازه زمانی روز به فرمت ۲۷ کاراکتری پروژه
+    # Time range of the day, in the project's 27-character format
     start_ts = f"{date_str}T00:00:00.000000Z"
     next_day = dt_obj + timedelta(days=1)
     end_ts = f"{next_day.strftime('%Y-%m-%d')}T00:00:00.000000Z"
 
     processed_count = 0
 
-    # ۱. استخراج لیست پرینترهای فعال در این تاریخ
-    # از print_events، logs و toner_snapshots_v2
+    # 1. Get the list of active printers on this date
+    # from print_events, logs and toner_snapshots_v2
     printer_ips = set()
 
-    # الف) از print_events
+    # a) from print_events
     try:
         rows = conn.execute(
             "SELECT DISTINCT printer_ip FROM print_events WHERE timestamp >= ? AND timestamp < ?",
@@ -62,7 +62,7 @@ def rollup_daily_stats(
     except Exception:
         pass
 
-    # ب) از logs
+    # b) from logs
     try:
         rows = conn.execute(
             "SELECT DISTINCT printer_ip FROM logs WHERE timestamp >= ? AND timestamp < ?",
@@ -74,7 +74,7 @@ def rollup_daily_stats(
     except Exception:
         pass
 
-    # ج) از toner_snapshots_v2
+    # c) from toner_snapshots_v2
     try:
         rows = conn.execute(
             "SELECT DISTINCT printer_ip FROM toner_snapshots_v2 WHERE timestamp >= ? AND timestamp < ?",
@@ -112,7 +112,7 @@ def _compute_printer_day_stats(
     start_ts: str,
     end_ts: str,
 ) -> Dict[str, Any]:
-    """محاسبه جزئیات آمار یک پرینتر در بازه زمانی موردنظر."""
+    """Computes the statistics of one printer in the requested time range."""
     printer_name = None
     total_pages = 0
     color_pages = 0
@@ -121,7 +121,7 @@ def _compute_printer_day_stats(
     a4_pages = 0
     print_events_count = 0
 
-    # بررسی print_events
+    # Check print_events
     has_print_events = False
     try:
         row = conn.execute(
@@ -151,7 +151,7 @@ def _compute_printer_day_stats(
     except Exception:
         has_print_events = False
 
-    # اگر داده‌ای در print_events نبود، استخراج fallback از جدول logs
+    # If there is no data in print_events, extract the fallback from the logs table
     if not has_print_events:
         try:
             rows = conn.execute(
@@ -195,7 +195,7 @@ def _compute_printer_day_stats(
         except Exception as exc:
             log.debug("خطا در خواندن logs fallback برای %s: %s", ip, exc)
 
-    # نام دستگاه fallback از آخرین وضعیت لاگ
+    # Fallback device name from the last log status
     if not printer_name:
         try:
             r = conn.execute(
@@ -207,7 +207,7 @@ def _compute_printer_day_stats(
         except Exception:
             pass
 
-    # ۲. محاسبه میانگین تونرها از toner_snapshots_v2
+    # 2. Compute toner averages from toner_snapshots_v2
     toner_stats = _compute_toner_averages(conn, ip, start_ts, end_ts)
 
     return {
@@ -228,7 +228,7 @@ def _compute_toner_averages(
     start_ts: str,
     end_ts: str,
 ) -> Dict[str, Optional[float]]:
-    """محاسبه میانگین و کمترین سطح تونرها برای پرینتر در بازه روز."""
+    """Computes the average and lowest toner levels for the printer over the day range."""
     result = {
         "avg_toner_black": None,
         "avg_toner_cyan": None,
@@ -271,8 +271,8 @@ def _upsert_daily_stats(
     ip: str,
     stats: Dict[str, Any],
 ) -> None:
-    """درج یا به‌روزرسانی امن در جدول daily_stats."""
-    # شناسایی نوع پارامتر (%s برای PG یا ? برای SQLite)
+    """Safely inserts or updates a row in the daily_stats table."""
+    # Detect the parameter style (%s for PG or ? for SQLite)
     is_pg_raw = False
     if hasattr(conn, "info") and hasattr(conn.info, "vendor") and conn.info.vendor == "PostgreSQL":
         is_pg_raw = True
@@ -338,8 +338,8 @@ def backfill_daily_stats(
     end_date: Union[date, str, None] = None,
 ) -> int:
     """
-    اجرای خلاصه‌سازی برای بازه‌ای از روزها جهت جبران و تولید آمار گذشته (Backfill).
-    خروجی: مجموع رکوردهای تولیدشده.
+    Runs the summarization over a range of days to backfill and regenerate past statistics (Backfill).
+    Output: total number of records generated.
     """
     s = _parse_date(start_date)
     e = _parse_date(end_date) if end_date else datetime.now(timezone.utc).date()

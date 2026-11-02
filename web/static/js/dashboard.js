@@ -58,11 +58,11 @@ function closeTopbarMenu() {
   if (el) el.classList.remove('open');
 }
 
-// ─── سیستم دراپ‌داون عمومی ───
+// ─── Generic dropdown system ───
 function toggleDropdown(id) {
   const el = document.getElementById(id);
   if (el) {
-    // بستن بقیه دراپ‌داون‌ها
+    // Close the other dropdowns
     document.querySelectorAll('.dropdown').forEach(d => {
       if (d.id !== id) d.classList.remove('open');
     });
@@ -71,11 +71,11 @@ function toggleDropdown(id) {
 }
 
 document.addEventListener('click', function(e) {
-  // بستن منوی تاپ‌بار
+  // Close the top-bar menu
   const topbarMore = document.getElementById('topbar-more');
   if (topbarMore && !topbarMore.contains(e.target)) topbarMore.classList.remove('open');
   
-  // بستن دراپ‌داون‌های عمومی
+  // Close the generic dropdowns
   if (!e.target.closest('.dropdown')) {
     document.querySelectorAll('.dropdown').forEach(d => d.classList.remove('open'));
   }
@@ -95,17 +95,17 @@ function escapeHtml(str) {
 }
 
 // ══════════════════════════════════════════════════
-// نمایش زمان (فاز E.3)
+// Time display (phase E.3)
 // ══════════════════════════════════════════════════
-// از فاز E.3، API مقدار timestamp را همیشه UTC با پسوند Z و ۶ رقم میکروثانیه
-// می‌فرستد (طول ثابت ۲۷)؛ پیش از آن رشته‌ی naive محلی بود. نمایش باید ساعت محلی
-// تهران باشد، وگرنه هر ردیف ۳ ساعت و ۳۰ دقیقه جابه‌جا دیده می‌شود.
+// Since phase E.3 the API always sends the timestamp as UTC with a Z suffix and 6 microsecond digits
+// (fixed length 27); before that it was a naive local string. Display must use local
+// Tehran time, otherwise every row looks shifted by 3 hours and 30 minutes.
 const DISPLAY_TZ = 'Asia/Tehran';
 
 function apiTimeToMs(value) {
   const raw = String(value == null ? '' : value).trim();
   if (!raw) return NaN;
-  // میکروثانیه (۶ رقم) ⇒ میلی‌ثانیه (۳ رقم): تجزیه‌ی قطعی در همه‌ی مرورگرها.
+  // microseconds (6 digits) ⇒ milliseconds (3 digits): deterministic parsing in every browser.
   return Date.parse(raw.replace(/(\.\d{3})\d+/, '$1'));
 }
 
@@ -113,7 +113,7 @@ function formatEventTime(value) {
   const raw = String(value == null ? '' : value).trim();
   if (!raw) return '';
   const ms = apiTimeToMs(raw);
-  if (!Number.isFinite(ms)) return raw.slice(0, 19).replace('T', ' ');  // ناخوانا ⇒ خام
+  if (!Number.isFinite(ms)) return raw.slice(0, 19).replace('T', ' ');  // unreadable ⇒ raw
   try {
     return new Intl.DateTimeFormat('sv-SE', {   // sv-SE ⇒ «YYYY-MM-DD HH:MM:SS»
       timeZone: DISPLAY_TZ, year: 'numeric', month: '2-digit', day: '2-digit',
@@ -126,10 +126,10 @@ function formatEventTime(value) {
 
 function _eventTimeValue(event) {
   const ms = apiTimeToMs(event && event.timestamp);
-  return Number.isFinite(ms) ? ms : -Infinity;   // نامعتبر ⇒ قدیمی‌ترین
+  return Number.isFinite(ms) ? ms : -Infinity;   // invalid ⇒ oldest
 }
 
-// نشان کیفیت سیگنال شناسه کارتریج
+// signal-quality indicator for the cartridge ID
 const _SQ_BADGES = {
   genuine:    { icon: '⚡', label: 'تراشه واقعی', color: 'var(--green)' },
   generation: { icon: '📊', label: 'شمارشگر تعویض', color: 'var(--cyan)' },
@@ -158,8 +158,8 @@ function latestSensorChange(ip, kind, port) {
   return allEvents
     .filter(e => e.printer_ip === ip && e.type === 'SENSOR_CHANGE' && e.sensor_kind === kind && Number(e.sensor_port) === Number(port))
     .sort((a, b) => {
-      // فاز E.3: مقایسه‌ی زمانی واقعی (نه localeCompare روی رشته) — امن در برابر
-      // ردیف مهاجرت‌نشده و فرمت‌های مختلط.
+      // phase E.3: real time comparison (not localeCompare on strings) — safe against
+      // unmigrated rows and mixed formats.
       const tb = _eventTimeValue(b), ta = _eventTimeValue(a);
       return tb === ta ? 0 : (tb > ta ? 1 : -1);
     })[0] || null;
@@ -250,7 +250,7 @@ function canEditPrinters() {
 
 let OFFICE_GROUPS = (window.SERVER_OFFICE_GROUPS && Array.isArray(window.SERVER_OFFICE_GROUPS)) ? window.SERVER_OFFICE_GROUPS : [];
 
-// ─── گروه‌های سفارشی (از سرور) ───
+// ─── Custom groups (from server) ───
 let CUSTOM_GROUPS = [];
 
 async function fetchCustomGroups() {
@@ -261,7 +261,7 @@ async function fetchCustomGroups() {
       CUSTOM_GROUPS = Array.isArray(j.groups) ? j.groups : [];
       // custom groups are now managed inside office-subnets-editor
     }
-  } catch (e) { /* سایلنت — گروه‌ها اختیاری‌اند */ }
+  } catch (e) { /* silent — groups are optional */ }
   return CUSTOM_GROUPS;
 }
 
@@ -269,8 +269,8 @@ function groupDefById(gid) {
   return OFFICE_GROUPS.find(g => g.id === gid) || CUSTOM_GROUPS.find(g => g.id === gid) || null;
 }
 
-// مقادیر قدیمی: بعضی رکوردها «نام نمایشی» گروه (مثل «دفتر امامت») ذخیره کرده‌اند
-// به‌جای id («imamat»). برای سازگاری، به id تبدیلشان می‌کنیم.
+// Old values: some records stored the group display name (e.g. «Imamat office») instead of
+// the id («imamat»). For compatibility, we convert them to the id.
 function normalizeGroupId(g) {
   if (!g) return '';
   if (groupDefById(g)) return g;
@@ -279,7 +279,7 @@ function normalizeGroupId(g) {
 }
 
 function allGroupDefs() {
-  // همه گروه‌های شناخته‌شده برای نمایش در دراپ‌داون‌ها
+  // all known groups, to show in the dropdowns
   const defs = [...OFFICE_GROUPS];
   for (const cg of CUSTOM_GROUPS) defs.push(cg);
   return defs;
@@ -392,7 +392,7 @@ function renderPrinterCard(p) {
   const deviceType = p.device_type || 'unknown';
   const badgeStyle = 'display:inline-block;padding:2px 8px;border-radius:10px;font-size:9px;margin-right:6px;font-weight:bold;color:#fff;vertical-align:middle;';
 
-  // ═══ کارت مخصوص دماسنج ═══
+  // ═══ Thermometer card ═══
   if (deviceType === 'sensor') {
     const c = p.counters || {};
     const tempPorts = Array.isArray(c.temp_ports) && c.temp_ports.length
@@ -442,7 +442,7 @@ function renderPrinterCard(p) {
       </div>`;
   }
 
-  // ═══ کارت پرینتر (کد قبلی) ═══
+  // ═══ Printer card (previous version) ═══
   const c = p.counters || {};
   const total = c.total || 0;
   const fc = c.full_color || 0;
@@ -454,7 +454,7 @@ function renderPrinterCard(p) {
   const yellowLevel = toners.yellow?.level;
   const blackLevel = toners.black?.level;
 
-  // ✅ باگ #7: تشخیص صحیح وضعیت undefined برای نوارهای تونر
+  // ✅ Bug #7: correct detection of an undefined status for toner bars
   const cyanHasData = cyanLevel !== null && cyanLevel !== undefined;
   const magentaHasData = magentaLevel !== null && magentaLevel !== undefined;
   const yellowHasData = yellowLevel !== null && yellowLevel !== undefined;
@@ -484,8 +484,8 @@ function renderPrinterCard(p) {
   }
   if (!officeName) officeName = 'سایر';
 
-  // ✅ باگ #7: نمایش صحیح تونرهای نامشخص (جلوگیری از نمایش 0% وقتی مقدار null است)
-  // ✅ باگ #7: نمایش صحیح تونرهای نامشخص (جلوگیری از نمایش 0% وقتی مقدار null است)
+  // ✅ Bug #7: correct display of unknown toners (prevents showing 0% when the value is null)
+  // ✅ Bug #7: correct display of unknown toners (prevents showing 0% when the value is null)
   const colorTonersHtml = `
     <div class="oc-toner-group">
       <div class="oc-toner-item">
@@ -506,17 +506,17 @@ function renderPrinterCard(p) {
     </div>
   `;
 
-  // شناسه‌ی کارتریج روی کارت خلاصه — فقط مقدار معتبرِ استخراج‌شده از backend
+  // cartridge ID on the summary card — only the valid value extracted from the backend
   const _OC_FALLBACK = ['model:', 'toner_gen:', 'part:'];
   const cartIds = p.cartridge_ids || {};
   const cartIdEntries = Object.entries(cartIds).filter(([,v]) => v && !_OC_FALLBACK.some(p => String(v).startsWith(p)));
   const sq = p.cartridge_signal_quality || {};
-  // بهترین کیفیت سیگنال برای نمایش badge
+  // best signal quality to show in the badge
   const bestQuality = ['genuine','generation','static'].find(q => Object.values(sq).includes(q));
   const qualityBadge = signalQualityBadge(bestQuality);
   let cartIdHtml = '';
   if (cartIdEntries.length) {
-    // شناسه‌ی واقعی تراشه موجود است
+    // the real chip ID is available
     cartIdHtml = `<div class="oc-cart-id" style="margin-top:4px;font-size:10px;color:var(--text3);font-family:var(--mono);direction:ltr;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${cartIdEntries.map(([c,v])=>c+': '+v).join(' | ')}">🧩 ${cartIdEntries.map(([,v])=>escapeHtml(v)).join(' · ')} ${qualityBadge}</div>`;
   } else {
     cartIdHtml = `<div class="oc-cart-id" style="margin-top:4px;font-size:10px;color:var(--text3);font-family:var(--mono);direction:ltr;text-align:left;white-space:normal;overflow-wrap:anywhere" title="شناسه‌ی معتبر کارتریج از backend موجود نیست">N/A</div>`;
@@ -572,9 +572,9 @@ function renderPrinterCard(p) {
 // ══════════════════════════════════════════════════
 
 // --- Connection resilience ----------------------------------------
-// اگر fetch شکست بخورد، حلقه‌ی Live هرگز نباید برای همیشه بمیرد (رفع باگ
-// «باید دستی رفرش کنم»). با backoff نمایی ۵ث تا سقف ۶۰ث تلاش مجدد می‌شود،
-// بنر وضعیت نمایش داده می‌شود و با بازگشت تب/شبکه بلافاصله رفرش می‌گیریم.
+// If fetch fails, the Live loop must never die permanently (fix for the bug
+// "I have to refresh manually"). It retries with exponential backoff from 5 s up to a 60 s cap;
+// a status banner is shown, and we refresh immediately when the tab or network comes back.
 let _fetchInFlight = false;
 let _retryTimer = null;
 let _retryDelay = 5000;
@@ -598,7 +598,7 @@ function _showConnBanner() { _getConnBanner().style.display = 'block'; }
 function _hideConnBanner() { if (_connBanner) _connBanner.style.display = 'none'; }
 
 function scheduleFetchRetry() {
-  if (_retryTimer) return; // جلوگیری از تایمر تکراری
+  if (_retryTimer) return; // prevent a duplicate timer
   _showConnBanner();
   const delay = _retryDelay;
   _retryDelay = Math.min(_retryDelay * 2, RETRY_DELAY_MAX);
@@ -619,9 +619,9 @@ window.addEventListener('online', () => {
 });
 
 async function fetchData() {
-  if (_fetchInFlight) return; // جلوگیری از fetch همزمان
+  if (_fetchInFlight) return; // prevent simultaneous fetches
   _fetchInFlight = true;
-  // fetch دستی/برنامه‌ریزی‌شده، retry زمان‌دار معلق را لغو می‌کند
+  // a manual/scheduled fetch cancels the pending timed retry
   if (_retryTimer) { clearTimeout(_retryTimer); _retryTimer = null; }
   setDot('fetch');
   try {
@@ -639,8 +639,8 @@ async function fetchData() {
     allData   = pr.printers || [];
     allEvents = lg.events   || [];
     serverInfo = st;
-    // توکن CSRF تازه از /api/status — صفحه ساعت‌ها باز می‌ماند و توکن متا
-    // منقضی می‌شود؛ این خط مانع 400 شدن POSTها (discover, toner_reset, ...) می‌شود.
+    // Fresh CSRF token from /api/status — the page stays open for hours and the meta token
+    // expires; this line prevents 400 responses on POSTs (discover, toner_reset, ...).
     if (st && st.csrf_token) {
       if (typeof window.updateCsrfToken === 'function') window.updateCsrfToken(st.csrf_token);
       else window.CSRF_TOKEN = st.csrf_token;
@@ -655,7 +655,7 @@ async function fetchData() {
     setDot('on');
     if (!isFirst) toast('آپدیت شد','s');
     isFirst = false;
-    // موفقیت ⇒ ریست backoff/بنر؛ چرخه‌ی عادی با resetCountdown ادامه می‌یابد
+    // success ⇒ reset backoff/banner; the normal cycle continues with resetCountdown
     _retryDelay = RETRY_DELAY_BASE;
     _errToastShown = false;
     _lastFetchOkAt = Date.now();
@@ -664,9 +664,9 @@ async function fetchData() {
   } catch(e) {
     console.error(e);
     setDot('err');
-    // toast فقط برای شروع قطعی — در هر تلاش تکرار نشود (ضد اسپم)
+    // toast only for the initial failure — not repeated on every retry (anti-spam)
     if (!_errToastShown) { toast('خطا در اتصال به سرور','e'); _errToastShown = true; }
-    scheduleFetchRetry(); // حلقه‌ی Live هیچ‌وقت نمی‌میرد
+    scheduleFetchRetry(); // the Live loop never dies
   } finally {
     _fetchInFlight = false;
   }
@@ -760,7 +760,7 @@ function rebuildTabs(printers) {
   const badge = document.getElementById('sb-ov-badge');
   if (badge) badge.textContent = totalOnline + '▲ ' + totalOffline + '▼';
 
-  // استخراج گروه‌های پویا — با ادغام تعاریف گروه‌های سفارشی
+  // extract dynamic groups — merged with the custom group definitions
   const groups = new Map();
   OFFICE_GROUPS.forEach(g => groups.set(g.id, { ...g, printers: [] }));
   CUSTOM_GROUPS.forEach(g => groups.set(g.id, { ...g, printers: [] }));
@@ -768,7 +768,7 @@ function rebuildTabs(printers) {
   printers.forEach(p => {
     let gid = normalizeGroupId(p.group) || getOfficeGroup(p.ip);
     if (!groups.has(gid)) {
-      // گروه ناشناخته (مثلاً حذف شده) — نمایش با نام خود مقدار
+      // unknown group (e.g. deleted) — show it with its own value as the name
       groups.set(gid, { id: gid, name: gid, icon: '🏢', color: 'cyan', printers: [] });
     }
     groups.get(gid).printers.push(p);
@@ -829,7 +829,7 @@ function rebuildTabs(printers) {
     container.appendChild(groupEl);
   });
 
-  // بروزرسانی لیست گروه‌ها در مودال افزودن (با دسته‌بندی شفاف)
+  // update the group list in the add modal (with clear categorization)
   const groupSelect = document.getElementById('add-group-select');
   if (groupSelect) {
     const currentVal = groupSelect.value;
@@ -855,7 +855,7 @@ function rebuildTabs(printers) {
 let activeGroupFilter = null;
 
 function filterByGroup(groupId) {
-  activeTab = 'overview'; // فیلتر در نمای کلی اعمال می‌شود
+  activeTab = 'overview'; // filter applied in the overview
   activeGroupFilter = groupId;
   
   document.querySelectorAll('.sb-item, .sb-overview').forEach(t => t.classList.remove('active'));
@@ -904,7 +904,7 @@ const SENSOR_RANGE_PRESETS = [
   { hours: 720,  label: '۳۰ روز' },
   { hours: 2160, label: '۹۰ روز' }
 ];
-const SENSOR_TZ = 'Asia/Tehran';          // مطابق قرارداد زمانی سرور (to_filter_bound)
+const SENSOR_TZ = 'Asia/Tehran';          // per the server time contract (to_filter_bound)
 const SENSOR_REFRESH_MS = 60000;
 const sensorRangeState = {};              // ip -> {mode, hours, start, end, zoomed}
 const sensorSeriesTimers = {};
@@ -953,7 +953,7 @@ function sensorSection(ip) {
 }
 
 function sensorTehranInputValue(date) {
-  // YYYY-MM-DDTHH:mm در منطقهٔ زمانی تهران برای input[type=datetime-local]
+  // YYYY-MM-DDTHH:mm in the Tehran time zone for input[type=datetime-local]
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: SENSOR_TZ, hourCycle: 'h23',
     year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
@@ -1013,7 +1013,7 @@ function sensorSeriesToPoints(stamps, values, stepMs) {
   let prev = null;
   stamps.forEach((iso, i) => {
     const t = new Date(iso).getTime();
-    // وقتی بین دو نمونه فاصلهٔ زیادی هست (دستگاه قطع بوده) خط را قطع کن
+    // when there is a large gap between two samples (the device was off), break the line
     if (prev !== null && t - prev > stepMs * 3) out.push([prev + stepMs, null]);
     out.push([t, values[i]]);
     prev = t;
@@ -1060,7 +1060,7 @@ async function loadSensorSeriesChart(ip, el, opts = {}) {
     return;
   }
 
-  // اگر در حین دریافت، پنل/نمودار عوض شده باشد
+  // if the panel/chart changed while data was being received
   if (!document.body.contains(el)) return;
 
   const stamps = data.timestamps || [];
@@ -1145,12 +1145,12 @@ async function loadSensorSeriesChart(ip, el, opts = {}) {
   }
   chart.setOption(option, { notMerge: !silent });
 
-  // به‌روزرسانی خودکار برای بازه‌های «اخیر» (وقتی کاربر زوم نکرده)
+  // automatic update for "recent" ranges (when the user has not zoomed)
   if (!sensorSeriesTimers[ip]) {
     sensorSeriesTimers[ip] = setInterval(() => {
       const cur = document.getElementById(`printer-daily-chart-${ip.replace(/\./g, '-')}`);
       if (!cur || !document.body.contains(cur)) { clearInterval(sensorSeriesTimers[ip]); delete sensorSeriesTimers[ip]; return; }
-      if (cur.offsetParent === null) return;           // تب فعال نیست
+      if (cur.offsetParent === null) return;           // tab is not active
       const cs = getSensorRangeState(ip);
       if (cs.mode !== 'preset' || cs.zoomed) return;
       loadSensorSeriesChart(ip, cur, { silent: true });
@@ -1191,7 +1191,7 @@ function schedulePrinterDailyChartLoad(ip, delay = 50, force = false) {
 function switchTab(id, el) {
   activeTab = id;
   
-  // اگر روی یک پرینتر کلیک شد، فیلتر گروه را پاک کن
+  // if a printer is clicked, clear the group filter
   if (id !== 'overview' && !id.startsWith('group:')) {
     activeGroupFilter = null;
   }
@@ -1243,7 +1243,7 @@ function renderOverviewCards(printers) {
 
   currentPrinters = printers;
   
-  // اعمال فیلتر بر اساس گروه
+  // apply the filter by group
   let displayPrinters = printers;
   if (activeGroupFilter) {
     displayPrinters = printers.filter(p => {
@@ -1264,7 +1264,7 @@ function renderOverviewCards(printers) {
     sortableInstance = null;
   }
 
-  // فقط در صورتی که فیلتر فعال نباشد اجازه جابجایی می‌دهیم
+  // only allow moving when no filter is active
   if (!activeGroupFilter) {
     sortableInstance = new Sortable(grid, {
         animation: 400,
@@ -1309,12 +1309,12 @@ function renderAllPrinterPanels(printers) {
     }
 
     const wasActive = panel.classList.contains('active') || activeTab === p.ip;
-    // نمودار سنسور (با فیلتر و زوم کاربر) بین رندرهای دوره‌ای حفظ می‌شود
+    // sensor chart (with the user's filter and zoom) is preserved between periodic renders
     const keptSensorSection = p.device_type === 'sensor' ? panel.querySelector('.sensor-ts-section') : null;
     const keptUsageRoots = Array.from(panel.querySelectorAll('.ug-root[data-ug-mounted]'));
     if (!keptSensorSection) destroyPrinterDailyChart(p.ip);
     
-    // تشخیص نوع دستگاه
+    // detect device type
     if (p.device_type === 'sensor') {
       panel.innerHTML = buildSensorDetail(p);
       if (keptSensorSection) {
@@ -1450,9 +1450,9 @@ function buildPrinterDetail(p) {
           ? `${fmtN(td.max)} صفحه`
           : (learnedCapacity > 0 ? `${fmtN(learnedCapacity)} صفحه${isEstimatedCapacity ? ' تخمینی' : ''}` : '—'));
       const pagesAfterZero = Number(td.pages_after_zero || 0);
-      // پیام zero plateau فقط وقتی معنی دارد که سطح فعلی واقعاً 0٪ باشد.
-      // بعد از شارژ/ریست، ممکن است cycle_status تا تأیید poll بعدی در backend موقتاً باقی بماند؛
-      // در سطح 100٪ نباید پیام «تونر صفر است» نمایش داده شود.
+      // the zero-plateau message only makes sense when the current level is really 0%.
+      // after a charge/reset, cycle_status may temporarily remain in the backend until the next poll confirms it;
+      // at 100% the message "toner is empty" must not be shown.
       const showZeroPlateau = hasLevel && level === 0 && (td.cycle_status === 'zero_plateau' || pagesAfterZero > 0);
       const zeroPlateauHtml = showZeroPlateau ? `
         <div class="supply-zero-hint">تونر از دید SNMP صفر است اما چاپ ادامه دارد؛ چاپ پس از صفر: <strong class="num">${fmtN(pagesAfterZero)}</strong> صفحه</div>
@@ -1471,7 +1471,7 @@ function buildPrinterDetail(p) {
       const unsupportedHint = (status === 'not_supported' || status === 'no_sensor')
         ? `<div class="supply-card-hint">این دستگاه سطح این مصرفی را از طریق SNMP گزارش نمی‌کند.</div>`
         : '';
-      // identity دقیق همان رنگ از backend؛ fallbackهای مدل/نسل/نام supply معتبر نیستند.
+      // exact identity of the same color from the backend; model/generation/supply-name fallbacks are not valid.
       const _FALLBACK_PREFIXES = ['model:', 'toner_gen:', 'part:'];
       const cartChipId = (p.cartridge_ids || {})[col];
       const chipQuality = (p.cartridge_signal_quality || {})[col];
@@ -1544,13 +1544,13 @@ function buildPrinterDetail(p) {
           ${editButtonHtml}
        </div>`;
 
-  // ✅ باگ #6: حذف دکمه حذف تکراری — فقط printerDeleteButtonHtml استفاده می‌شود
+  // ✅ Bug #6: removed the duplicate delete button — only printerDeleteButtonHtml is used
   const printerDeleteButtonHtml = canEditPrinters()
     ? `<button class="btn btn-sm btn-orange" onclick="removePrinter('${p.ip}','${escapeHtml(p.name)}')" style="font-size:9px">× حذف</button>`
     : '';
 
 
-  // ========== بخش جدید آمار با نوارهای افقی ==========
+  // ========== New stats section with horizontal bars ==========
   const isColorDeviceType = (p.device_type === 'color');
   const statsCardHtml = `
     <div class="stats-card">
@@ -1604,8 +1604,8 @@ function buildPrinterDetail(p) {
     </div>
   `;
 
-  // بخش شمارنده‌های اضافی (پرینتر، کپی، فکس، اسکن) به صورت دو ستونی
-  // فقط ردیف‌هایی نمایش داده می‌شوند که مقدار عددی معتبر دارند.
+  // extra counters section (printer, copy, fax, scan) in two columns
+  // only rows that have a valid numeric value are shown.
   const extraCounterPrimaryRows = [
     ['Printer', (c.printer ?? total), 'var(--text2)'],
     ['Copy', c.copy, 'var(--magenta)'],
@@ -1751,14 +1751,14 @@ function buildSensorDetail(p) {
       ? `<button class="btn btn-yellow" onclick="exportPrinterLogExcel('${p.ip}')">↓ Excel</button>`
       : '';
 
-  // Helper برای نمایش وضعیت سنسور
+  // Helper to display sensor status
   const statusBadge = (status) => {
     if (status === 'active') return '<span style="color:var(--green); font-weight:700">⦿ فعال</span>';
     if (status === 'invalid') return '<span style="color:var(--red); font-weight:700">⚠ نامعتبر</span>';
     return '<span style="color:var(--text3)">⦾ غیرفعال</span>';
   };
 
-  // ردیف یک سنسور (دما یا رطوبت)
+  // a sensor row (temperature or humidity)
   const sensorRow = (label, value, unit, status, port) => {
     const kind = sensorKindFromUnit(unit);
     return `
@@ -1841,15 +1841,15 @@ function buildSensorDetail(p) {
 }
 
 // ══════════════════════════════════════════════════
-// LOG RENDER (بدون تغییر)
+// LOG RENDER (unchanged)
 // ══════════════════════════════════════════════════
 function _buildRows(events, hasPrinter, hasUser) {
   const SEV = {error:'sev-error',warning:'sev-warning',success:'sev-success',info:'sev-info'};
   return events.map(e => {
-    const ts     = formatEventTime(e.timestamp);   // فاز E.3: UTC ⇒ ساعت محلی تهران
+    const ts     = formatEventTime(e.timestamp);   // phase E.3: UTC ⇒ Tehran local time
     const sev    = e.severity || 'info';
     const badge  = `<span class="sev-badge ${SEV[sev] || 'sev-info'}">${escapeHtml(sev.toUpperCase())}</span>`;
-    // ✅ خانواده‌ی صفحات با برچسب فارسی؛ PRINT_GAP رویداد «تخمینی» است و بصری جدا می‌شود
+    // ✅ page families with their Persian labels; PRINT_GAP is an "estimated" event and is shown visually separately
     const isEstimated = e.type === 'PRINT_GAP' || e.estimated === true;
     const TYPE_FA = { PRINT: 'چاپ', PRINT_GAP: 'چاپ·تخمینی', PRINT_OVERFLOW: 'جهش مشکوک', CARTRIDGE_CHANGED: 'تعویض/شارژ کارتریج' };
     const tbadge = `<span class="type-badge">${escapeHtml(TYPE_FA[e.type] || e.type || '—')}</span>`;
@@ -1863,7 +1863,7 @@ function _buildRows(events, hasPrinter, hasUser) {
       : '';
 
     let message = e.message ? escapeHtml(e.message) : '—';
-    // ✅ tooltip جزئیات تشخیص برای رویدادهای CARTRIDGE_CHANGED
+    // ✅ detection-detail tooltip for CARTRIDGE_CHANGED events
     let msg_tooltip = '';
     if (e.type === 'CARTRIDGE_CHANGED' && e.detection) {
       const DET_FA = { chip_id: 'شناسه تراشه', supply_name_change: 'نام supply', supply_pages_reset: 'شمارنده صفحات', toner_jump: 'جهش سطح تونر' };
@@ -1892,8 +1892,8 @@ function _buildRows(events, hasPrinter, hasUser) {
     const pages_fmt = (pages !== '—' && !isNaN(parseInt(pages))) ? fmtN(pages) : pages;
     let pages_display = pages_fmt;
     let pages_tooltip = '';
-    // ✅ سایز کاغذ حالا برای رویدادهای برآوردی PRINT_GAP هم نمایش داده می‌شود و
-    // در حالت Mixed تفکیک دقیق بزرگ/کوچک با tooltip ذکر می‌شود.
+    // ✅ paper size is now also shown for estimated PRINT_GAP events, and
+    // in Mixed mode the large/small split is detailed in the tooltip.
     const PSIZE_FA = {
       'Large (A3/B4)': 'بزرگ (A3/B4)',
       'Small (A4/A5)': 'کوچک (A4/A5)',
@@ -1908,8 +1908,8 @@ function _buildRows(events, hasPrinter, hasUser) {
         }
         pages_display = `${pages_fmt} (${escapeHtml(sizeLabel)})`;
       }
-      // ✅ حسابرسی تفکیکی (از details مرج می‌شود): رفتن موس روی ستون صفحه
-      // تفکیک عملکرد (پرینت/کپی/فکس/لیست) و زیرگروه سایز چاپ رایانه‌ای را نشان می‌دهد.
+      // ✅ detailed audit (merged from details): hovering over the page column
+      // shows the breakdown by function (print/copy/fax/scan) and the computer print-size subgroup.
       const fd = e.func_split || null, pd = e.paper_detail || null;
       const tt = [];
       if (fd) {
@@ -1928,7 +1928,7 @@ function _buildRows(events, hasPrinter, hasUser) {
         if (pd.print_small !== undefined) parts.push(`چاپ‌کوچک ${fmtN(pd.print_small)}`);
         if (parts.length) tt.push(`تفکیک کاغذ: ${parts.join(' · ')}`);
       }
-      // ✅ منبع عدد (شفاف‌سازی): خط اول tooltip همیشه مشخص می‌کند عدد از کجا آمده
+      // source of the number (for clarity): the first line of the tooltip always says where the number came from
       let srcLine;
       if (e.type === 'PRINT_GAP') {
         const pv = (e.prev_total !== undefined && e.prev_total !== null) ? fmtN(e.prev_total) : '؟';
@@ -1943,7 +1943,7 @@ function _buildRows(events, hasPrinter, hasUser) {
       }
       tt.unshift(srcLine);
       if (tt.length) pages_tooltip = ` title="${escapeHtml(tt.join('\n'))}"`;
-      // ✅ تمایز بصری عدد تخمینی: پیشوند ≈ و بج «تخمینی»
+      // visual distinction for estimated numbers: ≈ prefix and an "estimated" badge
       if (isEstimated) pages_display = `≈ ${pages_display} <span class="est-badge">تخمینی</span>`;
     }
 
@@ -2110,11 +2110,11 @@ function renderAccessPanel(st) {
   const grid = document.getElementById('access-grid');
   if (!panel || !grid) return;
 
-  // پاک کردن محتوای قبلی
+  // clear previous content
   grid.innerHTML = '';
 
-  // استفاده از آدرس فعلی صفحه (پروتکل + هاست) به جای IP ثابت
-  const baseUrl = window.location.origin;   // مثال: https://khak-va-sazeh.ir یا http://172.16.25.82:5050
+  // use the current page address (protocol + host) instead of a fixed IP
+  const baseUrl = window.location.origin;   // example: https://khak-va-sazeh.ir or http://172.16.25.82:5050
 
   const urls = [
     { title: 'داشبورد (همین صفحه)', url: baseUrl + '/' },
@@ -2305,7 +2305,7 @@ async function doAddPrinter() {
   if (!ip) { toast('IP الزامی است','e'); return; }
 
   let group = groupSel === '__new__' ? '' : groupSel;
-  // ساخت گروه جدید اگر گزینهی __new__ انتخاب شده
+  // create a new group if the "__new__" option is selected
   if (groupSel === '__new__') {
     if (!groupCust) { toast('نام گروه جدید را بنویسید','e'); return; }
     try {
@@ -2416,7 +2416,7 @@ async function assignSelectedToGroup() {
   if (!checks.length) { toast('پرینتری انتخاب نشده', 'w'); return; }
   const ips = checks.map(c=>c.dataset.ip).filter(Boolean);
   try {
-    // انجام فراخوانی‌ها به‌صورت همزمان
+    // run the calls concurrently
     await Promise.all(ips.map(ip => apiFetch(`${API}/api/printer/${encodeURIComponent(ip)}/update`, {
       method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ group: groupId })
     })));
