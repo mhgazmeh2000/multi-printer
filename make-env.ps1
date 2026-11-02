@@ -1,4 +1,3 @@
-$content = @'
 # make-env.ps1
 # Creates a new .env in the current folder with freshly generated secrets.
 # Secrets are generated on this machine and are never printed or sent anywhere.
@@ -80,5 +79,3 @@ $path = Join-Path (Get-Location) ".env"
 
 Write-Host "Created .env (mode: $Mode)."
 Write-Host "Next: restart the app from a NEW cmd window, then test the challenge URL."
-'@
-Set-Content -Path "make-env.ps1" -Value $content -Encoding UTF8
