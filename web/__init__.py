@@ -192,6 +192,7 @@ def create_app() -> Flask:
             "logs.api_printer_log",
             "logs.api_all_logs",
             "stats.api_daily_stats",
+            "stats.api_usage_series",
             "auth.logout",
         }
         manager_allowed = viewer_allowed | {

@@ -11,13 +11,16 @@
 """Statistics API routes."""
 
 import logging
+import re
 from datetime import datetime, time, timedelta, timezone
 
 from flask import Blueprint, jsonify, request
+from flask_login import current_user
 
 from core.db import DatabaseError, UndefinedColumn, UndefinedTable, get_connection
 from core import store
 from core.time_utils import local_tz, parse_utc, to_filter_bound, to_local_day, to_utc_z
+from web.auth import user_allowed_offices, user_can_access_office, allowed_printer_ips
 
 bp = Blueprint("stats", __name__)
 log = logging.getLogger("PrinterMonitor")
@@ -342,4 +345,183 @@ def api_sensor_series():
         "timestamps": stamps, "temperature": temps, "humidity": hums,
         "summary": {"temperature": _sum(all_t), "humidity": _sum(all_h)},
     })
+    return jsonify(base)
+
+
+# ─── Print usage series (color / black-white split, free range, auto bucket) ──
+_USAGE_MAX_DAYS = 366
+_USAGE_MAX_ROWS = 500000
+_USAGE_BUCKETS = ("hour", "day", "week")
+_PERSIAN_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+# "12 صفحه رنگی + 30 صفحه سیاه‌سفید = 42 صفحه چاپ شد" — the only place the mixed split is stored.
+_MIXED_RE = re.compile(r"(\d+)\s*صفحه\s*رنگی\s*\+\s*(\d+)\s*صفحه\s*سیاه")
+
+
+def _usage_split(color, pages, message):
+    """
+    Split one PRINT event into (color, black_white, unknown) pages.
+
+    ``logs.color`` holds رنگی / سیاه‌سفید / مختلط / نامشخص. For «مختلط» the exact
+    split exists only in the message text; when it cannot be parsed the pages are
+    reported as *unknown* instead of being guessed.
+    """
+    pages = max(0, int(_sql_numeric(pages)))
+    if pages == 0:
+        return 0, 0, 0
+    label = (str(color or "")).replace("\u200c", "").replace(" ", "").lower()
+    if "مختلط" in label or "mixed" in label:
+        match = _MIXED_RE.search(str(message or "").translate(_PERSIAN_DIGITS))
+        if match:
+            c, b = int(match.group(1)), int(match.group(2))
+            if c + b <= pages:
+                return c, b, pages - c - b
+        return 0, 0, pages
+    if "سیاه" in label or label in ("bw", "b/w", "mono", "black", "blackwhite", "grayscale"):
+        return 0, pages, 0
+    if "رنگ" in label or "color" in label or "colour" in label:
+        return pages, 0, 0
+    return 0, 0, pages
+
+
+def _usage_pick_bucket(span_seconds: float, requested: str) -> str:
+    if requested in _USAGE_BUCKETS:
+        return requested
+    days = span_seconds / 86400.0
+    if days <= 3:
+        return "hour"
+    return "day" if days <= 120 else "week"
+
+
+def _usage_bucket_start(dt_local, bucket: str):
+    """Local datetime -> start of its bucket (hour / local day / Saturday-based week)."""
+    if bucket == "hour":
+        return dt_local.replace(minute=0, second=0, microsecond=0)
+    day = dt_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    if bucket == "week":
+        day -= timedelta(days=(day.weekday() + 2) % 7)   # Iran: week starts on Saturday
+    return day
+
+
+def _usage_label(dt_local, bucket: str) -> str:
+    """Wall-clock label in Tehran time (no offset); the browser formats it as given."""
+    return dt_local.strftime("%Y-%m-%dT%H:00") if bucket == "hour" else dt_local.strftime("%Y-%m-%d")
+
+
+@bp.route('/api/stats/usage/series')
+def api_usage_series():
+    """
+    Printed pages per time bucket, split into color / black-white / unknown.
+
+    Query: ip (optional; all printers when omitted) ·
+    range: ``days=N`` (N whole local days incl. today) | ``hours=N`` | ``start``/``end`` (ISO; naive = Tehran) ·
+    bucket: auto | hour | day | week.
+    """
+    ip = (request.args.get('ip') or '').strip() or None
+    restricted = (getattr(current_user, "role", None) != "admin"
+                  and bool(user_allowed_offices(current_user)))
+    if ip and restricted and not user_can_access_office(current_user, ip):
+        return jsonify({"error": "forbidden"}), 403
+    allowed_ips = set(allowed_printer_ips(current_user)) if (restricted and not ip) else None
+
+    tz = local_tz()
+    now_utc = datetime.now(timezone.utc)
+    try:
+        if request.args.get('start'):
+            start_dt = parse_utc(to_filter_bound(request.args['start']))
+            end_dt = parse_utc(to_filter_bound(request.args['end'])) if request.args.get('end') else now_utc
+        elif request.args.get('hours', type=float):
+            end_dt = now_utc
+            start_dt = end_dt - timedelta(hours=min(request.args.get('hours', type=float), _USAGE_MAX_DAYS * 24))
+        else:
+            days = max(1, min(request.args.get('days', default=30, type=int) or 30, _USAGE_MAX_DAYS))
+            end_dt = now_utc
+            first_day = datetime.now(tz).date() - timedelta(days=days - 1)
+            start_dt = datetime.combine(first_day, time.min, tzinfo=tz)
+    except ValueError:
+        return jsonify({"error": "invalid start/end"}), 400
+
+    if start_dt >= end_dt:
+        return jsonify({"error": "start must be before end"}), 400
+    if end_dt - start_dt > timedelta(days=_USAGE_MAX_DAYS):
+        start_dt = end_dt - timedelta(days=_USAGE_MAX_DAYS)
+
+    bucket = _usage_pick_bucket((end_dt - start_dt).total_seconds(), request.args.get('bucket', 'auto'))
+    start_z, end_z = to_utc_z(start_dt), to_utc_z(end_dt)
+    empty = {
+        "printer_ip": ip, "start": start_z, "end": end_z, "bucket": bucket,
+        "labels": [], "color": [], "bw": [], "unknown": [], "total": [], "summary": {},
+    }
+
+    try:
+        conn = get_connection(timeout=30.0)
+        try:
+            sql = ("SELECT timestamp, pages, color, message, printer_ip FROM logs "
+                   "WHERE type = 'PRINT' AND timestamp >= ? AND timestamp <= ? "
+                   "AND pages IS NOT NULL AND pages > 0")
+            params = [start_z, end_z]
+            if ip:
+                sql += " AND printer_ip = ?"
+                params.append(ip)
+            sql += " LIMIT ?"
+            params.append(_USAGE_MAX_ROWS)
+            rows = conn.execute(sql, tuple(params)).fetchall()
+        finally:
+            conn.close()
+    except (UndefinedTable, UndefinedColumn, DatabaseError) as e:
+        log.error(f"Usage series API database error: {e}", exc_info=True)
+        return jsonify(empty)
+    except Exception as e:
+        log.error(f"Usage series API error: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+    acc = {}
+    skipped = 0
+    for ts, pages, color, message, row_ip in rows:
+        if allowed_ips is not None and row_ip not in allowed_ips:
+            continue
+        try:
+            dt = ts if isinstance(ts, datetime) else parse_utc(str(ts))
+            if dt.tzinfo is None:
+                raise ValueError("naive")
+            key = _usage_bucket_start(dt.astimezone(tz), bucket)
+        except ValueError:
+            skipped += 1
+            continue
+        c, b, u = _usage_split(color, pages, message)
+        slot = acc.setdefault(key, [0, 0, 0])
+        slot[0] += c
+        slot[1] += b
+        slot[2] += u
+    if skipped:
+        log.warning(f"stats/usage/series: {skipped} ردیف با timestamp نامعتبر نادیده گرفته شد")
+
+    # Continuous axis (empty buckets are real zeros, not missing days)
+    cursor = _usage_bucket_start(start_dt.astimezone(tz), bucket)
+    last = _usage_bucket_start(end_dt.astimezone(tz), bucket)
+    step = timedelta(hours=1) if bucket == "hour" else timedelta(days=7 if bucket == "week" else 1)
+    labels, colors, bws, unknowns, totals = [], [], [], [], []
+    while cursor <= last and len(labels) < 2000:
+        c, b, u = acc.get(cursor, (0, 0, 0))
+        labels.append(_usage_label(cursor, bucket))
+        colors.append(c)
+        bws.append(b)
+        unknowns.append(u)
+        totals.append(c + b + u)
+        # wall-clock stepping keeps local midnight stable across DST changes
+        cursor = (cursor.replace(tzinfo=None) + step).replace(tzinfo=tz)
+
+    grand = sum(totals)
+    peak_i = max(range(len(totals)), key=totals.__getitem__) if totals else None
+    sum_c, sum_b, sum_u = sum(colors), sum(bws), sum(unknowns)
+    base = {
+        "printer_ip": ip, "start": start_z, "end": end_z, "bucket": bucket,
+        "labels": labels, "color": colors, "bw": bws, "unknown": unknowns, "total": totals,
+        "summary": {
+            "total": grand, "color": sum_c, "bw": sum_b, "unknown": sum_u,
+            "color_pct": round(sum_c * 100.0 / grand, 1) if grand else 0,
+            "bw_pct": round(sum_b * 100.0 / grand, 1) if grand else 0,
+            "avg_per_bucket": round(grand / len(totals), 1) if totals else 0,
+            "peak": {"label": labels[peak_i], "value": totals[peak_i]} if peak_i is not None and totals[peak_i] else None,
+        },
+    }
     return jsonify(base)

@@ -1347,6 +1347,7 @@ function renderAllPrinterPanels(printers) {
     const wasActive = panel.classList.contains('active') || activeTab === p.ip;
     // نمودار سنسور (با فیلتر و زوم کاربر) بین رندرهای دوره‌ای حفظ می‌شود
     const keptSensorSection = p.device_type === 'sensor' ? panel.querySelector('.sensor-ts-section') : null;
+    const keptUsageRoots = Array.from(panel.querySelectorAll('.ug-root[data-ug-mounted]'));
     if (!keptSensorSection) destroyPrinterDailyChart(p.ip);
     
     // تشخیص نوع دستگاه
@@ -1359,6 +1360,14 @@ function renderAllPrinterPanels(printers) {
     } else {
       panel.innerHTML = buildPrinterDetail(p);
     }
+    // نمودار مصرف چاپ: همان DOM (فیلتر، نوع نمودار، زوم) را حفظ کن؛ اگر جایگاهی نیست آزادش کن
+    keptUsageRoots.forEach(node => {
+      const slot = Array.from(panel.querySelectorAll('.ug-root:not([data-ug-mounted])'))
+        .find(el => el.dataset.ugKey === node.dataset.ugKey);
+      if (slot) slot.replaceWith(node);
+      else if (window.PrintGuardUsageChart) window.PrintGuardUsageChart.dispose(node.dataset.ugKey);
+    });
+    if (window.PrintGuardUsageChart) window.PrintGuardUsageChart.mountAll(panel);
     
     const logId = 'plog-' + p.ip.replace(/\./g,'-');
     const printerEvents = allEvents.filter(e => e.printer_ip === p.ip);
@@ -1700,7 +1709,7 @@ function buildPrinterDetail(p) {
       ${extraCountersHtml}
     </div>
 
-    <div class="detail-grid" style="margin-bottom:14px">
+    <div class="detail-grid col1" style="margin-bottom:14px">
       <div class="section">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
           <div class="section-title">📦 تونر و کارتریج‌ها</div>
@@ -1708,10 +1717,8 @@ function buildPrinterDetail(p) {
         </div>
         <div class="supply-grid">${supplyCards || '<span style="color:var(--text3);font-size:11px">اطلاعات موجود نیست</span>'}</div>
       </div>
-      <div class="section"><div class="section-title">📈 نمودار مصرف روزانه (۳۰ روز اخیر)</div>
-        <div style="position:relative;height:280px;">
-          <canvas id="printer-daily-chart-${ip.replace(/\./g,'-')}" class="printer-daily-chart-canvas" style="width:100%;height:100%;"></canvas>
-        </div>
+      <div class="section"><div class="section-title">📈 نمودار مصرف چاپ</div>
+        <div class="ug-root" data-ug-key="p:${ip}" data-ug-ip="${ip}"></div>
       </div>
     </div>
 
@@ -3267,148 +3274,12 @@ document.getElementById('ev-modal').addEventListener('click',e=>{ if(e.target===
 // DAILY CHART
 // ══════════════════════════════════════════════════
 function populatePrinterSelect() {
-  const select = document.getElementById('chart-printer-select');
-  if (!select) return;
-  select.innerHTML = '<option value="">همه پرینترها</option>';
-  allData.forEach(p => {
-    select.innerHTML += `<option value="${p.ip}">${p.name} (${p.ip})</option>`;
-  });
+  if (window.PrintGuardUsageChart) window.PrintGuardUsageChart.setPrinters('overview', allData);
 }
 
-async function loadDailyChart() {
-  const select = document.getElementById('chart-printer-select');
-  const canvas = document.getElementById('dailyChart');
-  
-  if (!select || !canvas) {
-    console.error('Chart elements not found');
-    return;
-  }
-  
-  const ip = select.value;
-  let url = `${API}/api/stats/daily?days=30`;
-  if (ip) url += `&ip=${encodeURIComponent(ip)}`;
-  
-  try {
-    const res = await fetch(url, {cache: 'no-store'});
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    
-    if (!data.dates || !data.totals || data.dates.length === 0) {
-      toast('داده‌ای برای نمایش وجود ندارد', 'w');
-      return;
-    }
-    
-    if (chartInstance) {
-      try {
-        chartInstance.destroy();
-      } catch (e) {
-        console.warn('Chart destroy warning:', e);
-      }
-      chartInstance = null;
-    }
-    
-    const persianDates = data.dates.map(d => {
-      try {
-        return new Date(d).toLocaleDateString('fa-IR', {
-          month: 'short',
-          day: 'numeric'
-        });
-      } catch {
-        return d;
-      }
-    });
-    
-    const ctx = canvas.getContext('2d');
-    chartInstance = new Chart(ctx, {
-      type: 'bar',
-      data: {
-        labels: persianDates,
-        datasets: [{
-          label: 'تعداد صفحات چاپ شده',
-          data: data.totals,
-          backgroundColor: 'rgba(0, 212, 255, 0.6)',
-          borderColor: '#00d4ff',
-          borderWidth: 2,
-          borderRadius: 4,
-          hoverBackgroundColor: 'rgba(0, 212, 255, 0.8)'
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: {
-            display: true,
-            position: 'top',
-            labels: {
-              color: '#e4e8f0',
-              font: {
-                family: 'Noto Sans Arabic',
-                size: 12
-              }
-            }
-          },
-          tooltip: {
-            backgroundColor: 'rgba(20, 23, 32, 0.95)',
-            titleColor: '#00d4ff',
-            bodyColor: '#e4e8f0',
-            borderColor: '#2a3248',
-            borderWidth: 1,
-            padding: 12,
-            displayColors: false,
-            callbacks: {
-              label: function(context) {
-                return `چاپ: ${context.parsed.y.toLocaleString('fa-IR')} صفحه`;
-              }
-            }
-          }
-        },
-        scales: {
-          y: {
-            beginAtZero: true,
-            grid: {
-              color: 'rgba(42, 50, 72, 0.5)',
-              drawBorder: false
-            },
-            ticks: {
-              color: '#7b86a0',
-              font: {
-                family: 'JetBrains Mono',
-                size: 10
-              },
-              callback: function(value) {
-                return value.toLocaleString('fa-IR');
-              }
-            }
-          },
-          x: {
-            grid: {
-              display: false
-            },
-            ticks: {
-              color: '#7b86a0',
-              font: {
-                family: 'Noto Sans Arabic',
-                size: 10
-              },
-              maxRotation: 45,
-              minRotation: 45
-            }
-          }
-        },
-        animation: {
-          duration: 750,
-          easing: 'easeInOutQuart'
-        }
-      }
-    });
-    
-    toast(`نمودار ${data.dates.length} روز نمایش داده شد`, 's');
-    
-  } catch (e) {
-    console.error('Chart error:', e);
-    toast('خطا در بارگذاری نمودار: ' + e.message, 'e');
-  }
+// سازگاری با فراخوانی‌های قدیمی؛ نمودار اصلی در usage-chart.js مدیریت می‌شود.
+function loadDailyChart() {
+  if (window.PrintGuardUsageChart) window.PrintGuardUsageChart.reload('overview');
 }
 
 async function loadPrinterDailyChart(ip) {
@@ -3708,11 +3579,6 @@ fetchData();
 resetCountdown();
 // bindNicknameModalEvents();
 
-setTimeout(() => {
-  if (activeTab === 'overview') {
-    loadDailyChart();
-  }
-}, 1000);
 // ══════════════════════════════════════════════════
 // PRINTER EDIT MODAL
 // ══════════════════════════════════════════════════
