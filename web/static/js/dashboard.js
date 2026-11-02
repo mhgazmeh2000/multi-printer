@@ -1324,7 +1324,7 @@ function renderAllPrinterPanels(printers) {
     } else {
       panel.innerHTML = buildPrinterDetail(p);
     }
-    // نمودار مصرف چاپ: همان DOM (فیلتر، نوع نمودار، زوم) را حفظ کن؛ اگر جایگاهی نیست آزادش کن
+    // Print usage chart: keep the same DOM (filter, chart type, zoom); if there is no slot for it, free it
     keptUsageRoots.forEach(node => {
       const slot = Array.from(panel.querySelectorAll('.ug-root:not([data-ug-mounted])'))
         .find(el => el.dataset.ugKey === node.dataset.ugKey);

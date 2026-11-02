@@ -101,3 +101,5 @@ caches_readiness.json
 /env.example
 # Saved pytest output
 /pytest_*.txt
+
+.cloud-attachments/

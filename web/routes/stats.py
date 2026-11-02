@@ -353,7 +353,8 @@ _USAGE_MAX_DAYS = 366
 _USAGE_MAX_ROWS = 500000
 _USAGE_BUCKETS = ("hour", "day", "week")
 _PERSIAN_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
-# "12 صفحه رنگی + 30 صفحه سیاه‌سفید = 42 صفحه چاپ شد" — the only place the mixed split is stored.
+# Example message: "12 صفحه رنگی + 30 صفحه سیاه‌سفید = 42 صفحه چاپ شد" (12 color pages + 30 B/W pages = 42 printed).
+# This message is the only place the mixed split is stored; the regex below parses it.
 _MIXED_RE = re.compile(r"(\d+)\s*صفحه\s*رنگی\s*\+\s*(\d+)\s*صفحه\s*سیاه")
 
 
@@ -361,9 +362,10 @@ def _usage_split(color, pages, message):
     """
     Split one PRINT event into (color, black_white, unknown) pages.
 
-    ``logs.color`` holds رنگی / سیاه‌سفید / مختلط / نامشخص. For «مختلط» the exact
-    split exists only in the message text; when it cannot be parsed the pages are
-    reported as *unknown* instead of being guessed.
+    ``logs.color`` holds the labels رنگی (color) / سیاه‌سفید (black-and-white) /
+    مختلط (mixed) / نامشخص (unknown); these are the literal values matched below.
+    For a mixed event the exact split exists only in the message text; when it
+    cannot be parsed, the pages are reported as *unknown* instead of being guessed.
     """
     pages = max(0, int(_sql_numeric(pages)))
     if pages == 0:
