@@ -1442,13 +1442,12 @@ function buildPrinterDetail(p) {
       const yieldConfidenceMap = {low: 'کم', medium: 'متوسط', high: 'بالا'};
       const yieldSourceText = yieldSourceMap[capacitySource] || (capacitySource.includes('learned') ? 'یادگیری خودکار' : capacitySource || 'نامشخص');
       const yieldConfidenceText = yieldConfidenceMap[yieldConfidence] || yieldConfidence || 'نامشخص';
-      const isEstimatedCapacity = learnedCapacity > 0 && (!td.max || td.max <= 100 || capacitySource.includes('learned') || capacitySource.includes('default') || capacitySource === 'auto_learn' || capacitySource === 'shared_profile');
-      const hasLearnedCapacity = learnedCapacity > 0 && (capacitySource.includes('learned') || capacitySource.includes('forced') || capacitySource === 'auto_learn' || capacitySource === 'shared_profile');
-      const capacityText = hasLearnedCapacity
-        ? `${fmtN(learnedCapacity)} صفحه تخمینی`
-        : ((typeof td.max === 'number' && td.max > 100)
-          ? `${fmtN(td.max)} صفحه`
-          : (learnedCapacity > 0 ? `${fmtN(learnedCapacity)} صفحه${isEstimatedCapacity ? ' تخمینی' : ''}` : '—'));
+      // Catalog and device-declared values are reference capacities, not estimates; every other source is.
+      const isReferenceCapacity = capacitySource === 'catalog' || capacitySource === 'device_capacity';
+      // SNMP max is a last resort, used only when no learned or reference capacity is available.
+      const capacityText = learnedCapacity > 0
+        ? `${fmtN(learnedCapacity)} صفحه${isReferenceCapacity ? '' : ' تخمینی'}`
+        : ((typeof td.max === 'number' && td.max > 100) ? `${fmtN(td.max)} صفحه` : '—');
       const pagesAfterZero = Number(td.pages_after_zero || 0);
       // the zero-plateau message only makes sense when the current level is really 0%.
       // after a charge/reset, cycle_status may temporarily remain in the backend until the next poll confirms it;
