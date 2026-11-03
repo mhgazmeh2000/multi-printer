@@ -600,6 +600,62 @@ def _blend_yield(old_yield: int, old_weight: float, estimated_yield: int, sample
     return int(round(((old_yield * max(0.0, old_weight)) + (estimated_yield * max(0.1, sample_weight))) / total_w))
 
 
+#: (ip, color) slots for which a legacy sample without cartridge_key was used (warned once per process).
+_LEGACY_FALLBACK_WARNED: set = set()
+
+
+def _is_cartridge_swap(state: Optional[dict], cartridge_key: str) -> bool:
+    """True when the slot's stored cartridge_key differs from the cartridge now reported in the same slot.
+
+    Not a swap when:
+    - the stored row has no cartridge_key (legacy row: keep today's behaviour, no reset), or
+    - the stored identity is a placeholder (model "Unknown", or the name equal to the colour fallback),
+      which means the metadata is being completed, not that the cartridge changed.
+    """
+    old_key = (state or {}).get("cartridge_key")
+    if not old_key or old_key == cartridge_key:
+        return False
+    old_model = _norm_text(state.get("printer_model"))
+    old_color = _norm_text(state.get("color"))
+    old_name = _norm_text(state.get("cartridge_name"))
+    if old_model == "unknown" or old_name in ("unknown", old_color):
+        return False
+    return True
+
+
+def _swap_reset_fields(level_i: Optional[int], usage_counter: Optional[int], timestamp: str) -> dict:
+    """Learned-state fields for a new cartridge in an existing slot.
+
+    Yield falls back to DEFAULT; the caller's catalog/device logic then applies the reference capacity.
+    last_refill_at is deliberately not included: it is slot history, not cartridge history.
+    """
+    has_level = level_i is not None
+    return {
+        "yield_per_page": DEFAULT_YIELD_PER_PAGE,
+        "yield_source": "default",
+        "confidence": "low",
+        "sample_count": 0,
+        "total_weight": 0.0,
+        "learned_at": None,
+        "current_level": level_i,
+        "last_valid_level": level_i,
+        "last_counter": usage_counter,
+        "anchor_counter": usage_counter,
+        "anchor_level": level_i,
+        "anchor_timestamp": timestamp if has_level else None,
+        "cycle_start_counter": usage_counter,
+        "cycle_start_level": level_i,
+        "cycle_start_timestamp": timestamp if has_level else None,
+        "zero_reached_counter": usage_counter if level_i == 0 else None,
+        "zero_reached_timestamp": timestamp if level_i == 0 else None,
+        "pages_after_zero": 0,
+        "cycle_status": "active",
+        "pending_refill_level": None,
+        "pending_refill_counter": None,
+        "pending_refill_timestamp": None,
+    }
+
+
 def _robust_learned_yield(conn, ip: str, color: str, cartridge_key: str,
                           rated: Optional[int] = None, limit: int = 12):
     """Robust yield estimate from accepted samples — weighted median of the N most recent samples.
@@ -612,19 +668,30 @@ def _robust_learned_yield(conn, ip: str, color: str, cartridge_key: str,
     Output: (yield or None, total weight of these mini-samples)
     """
     try:
+        # Samples of another cartridge that used the same slot must not feed this median (R2).
+        # Legacy rows written before cartridge_key existed have NULL/'' keys; they are still matched by slot
+        # so that existing learning is not lost. Migration note: once legacy rows have been re-keyed (or have
+        # aged out of the LIMIT window), the slot fallback below can be removed.
         rows = conn.execute(
             # Phase E.4.1: "accepted=1" on PG (BOOLEAN column) gives a type error ⇒
             # comparison with a bool parameter; it has the same meaning on both backends.
-            """SELECT estimated_yield, confidence_weight FROM yield_samples
+            """SELECT estimated_yield, confidence_weight,
+                      CASE WHEN cartridge_key IS NULL OR cartridge_key = '' THEN 1 ELSE 0 END
+               FROM yield_samples
                WHERE accepted = ? AND estimated_yield IS NOT NULL
-                 AND (cartridge_key = ? OR (printer_ip = ? AND color = ?))
+                 AND (cartridge_key = ?
+                      OR ((cartridge_key IS NULL OR cartridge_key = '') AND printer_ip = ? AND color = ?))
                ORDER BY id DESC LIMIT ?""",
             (True, cartridge_key, ip, color, int(limit)),
         ).fetchall()
     except Exception as exc:
         log.debug("robust yield query failed: %s", exc)
         return None, 0.0
-    pts = [(int(y), max(0.1, float(w or 0.1))) for y, w in rows if y]
+    if any(r[2] for r in rows) and (ip, color) not in _LEGACY_FALLBACK_WARNED:
+        _LEGACY_FALLBACK_WARNED.add((ip, color))
+        log.warning("yield %s/%s: using legacy samples without cartridge_key for this slot (matched by slot)",
+                    ip, color)
+    pts = [(int(r[0]), max(0.1, float(r[1] or 0.1))) for r in rows if r[0]]
     if rated:
         lo, hi = rated * 0.25, rated * 2.5
         pts = [p for p in pts if lo <= p[0] <= hi]
@@ -872,6 +939,10 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
         # Reference capacity (device-declared first, then catalog) — the "principled" capacity anchor
         rated_capacity = device_capacity or catalog_capacity
 
+        # Must be read before the metadata update below overwrites the stored key (R2).
+        swapped = _is_cartridge_swap(state, cartridge_key)
+        old_key = state.get("cartridge_key")
+
         # metadata is always updated, because the cartridge or model name may become more complete in later polls.
         state.update({
             "printer_model": printer_model,
@@ -879,6 +950,12 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
             "cartridge_key": cartridge_key,
             "updated_at": now,
         })
+        if swapped:
+            # A different cartridge now sits in this slot: the old cartridge's learned yield, confidence and
+            # counts must not carry over. The catalog/device logic below fills in the reference capacity.
+            log.info("  [%s/%s] cartridge changed (%s -> %s): learned state for this slot restarts",
+                     ip, color, old_key, cartridge_key)
+            state.update(_swap_reset_fields(level_i, usage_counter, timestamp))
 
         # If we still only have the default and the device itself declares a valid capacity, we use it as a
         # better fallback. We do not override auto_learn/shared/high.
@@ -1257,6 +1334,12 @@ def register_manual_refill(*, ip: str, color: str, printer_model: str, cartridge
     with db_connection(commit=True) as conn:
         state = _load_state(conn, ip, color) or {}
         profile = _load_profile(conn, cartridge_key)
+        if _is_cartridge_swap(state, cartridge_key):
+            # Manual reset with a different cartridge: start from an empty state (R2). The old cycle is not
+            # closed, because its end level is unknown and the estimate would be biased.
+            log.info("  [%s/%s] manual reset with a different cartridge (%s -> %s): learned state restarts",
+                     ip, color, state.get("cartridge_key"), cartridge_key)
+            state = {}
         inherited_yield = _to_int(state.get("yield_per_page"), DEFAULT_YIELD_PER_PAGE)
         inherited_source = state.get("yield_source") or "default"
         inherited_conf = state.get("confidence") or "low"
