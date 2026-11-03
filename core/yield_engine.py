@@ -1431,26 +1431,32 @@ def compute_yield_per_color(
             for r in rows:
                 if r[0] and MIN_ESTIMATED_YIELD <= r[0] <= MAX_ESTIMATED_YIELD:
                     samples.append(float(r[0]))
-        except Exception:
-            pass
+        except Exception as exc:
+            log.warning(
+                "compute_yield_per_color: cartridge_lifecycle query failed for %s/%s: %s",
+                printer_ip, color, exc, exc_info=True,
+            )
 
         # 2. Check learning samples in yield_samples
         if len(samples) < 3:
             try:
                 rows = c.execute(
                     """
-                    SELECT yield_per_page
+                    SELECT estimated_yield
                     FROM yield_samples
-                    WHERE printer_ip = ? AND color = ? AND accepted = 1 AND yield_per_page > 0
+                    WHERE printer_ip = ? AND color = ? AND accepted = ? AND estimated_yield > 0
                     ORDER BY id DESC LIMIT 20
                     """,
-                    (printer_ip, color),
+                    (printer_ip, color, True),
                 ).fetchall()
                 for r in rows:
                     if r[0] and MIN_ESTIMATED_YIELD <= r[0] <= MAX_ESTIMATED_YIELD:
                         samples.append(float(r[0]))
-            except Exception:
-                pass
+            except Exception as exc:
+                log.warning(
+                    "compute_yield_per_color: yield_samples query failed for %s/%s: %s",
+                    printer_ip, color, exc, exc_info=True,
+                )
 
         # 3. If there are enough samples, compute the median (Median) after removing outliers
         if samples:
@@ -1473,8 +1479,11 @@ def compute_yield_per_color(
                 return float(r[0])
             if not b_name and r and r[1]:
                 b_name = str(r[1])
-        except Exception:
-            pass
+        except Exception as exc:
+            log.warning(
+                "compute_yield_per_color: cartridge_state query failed for %s/%s: %s",
+                printer_ip, color, exc, exc_info=True,
+            )
 
         # 5. Fallback based on brand and color
         if b_name:

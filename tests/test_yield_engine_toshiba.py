@@ -35,7 +35,7 @@ class TestYieldEngineToshiba(unittest.TestCase):
                 printer_ip TEXT NOT NULL,
                 color TEXT NOT NULL,
                 accepted INTEGER NOT NULL,
-                yield_per_page REAL
+                estimated_yield INTEGER
             )
             """
         )
@@ -103,8 +103,25 @@ class TestYieldEngineToshiba(unittest.TestCase):
         self.assertEqual(yield_black, 31500.0)
         self.assertEqual(yield_yellow, 26000.0)
 
-    def test_compute_yield_per_color_fallback_to_brand(self):
-        """هنگامی که داده تاریخی وجود ندارد، به پیش‌فرض برند توشیبا رجوع کند."""
+    def test_compute_yield_per_color_default_row_masks_brand_fallback(self):
+        """Current behavior: a cartridge_state row holding the DEFAULT 2000 is returned as-is.
+
+        Step 4 of compute_yield_per_color accepts any yield_per_page > 0, so the
+        brand/color fallback (step 5) is not reached when the row holds the
+        default. This test documents that behavior. See the audit report, R5,
+        for the open decision on whether step 4 should skip default rows.
+        """
+        self.conn.execute(
+            "INSERT INTO cartridge_state (printer_ip, color, printer_model, yield_per_page) VALUES (?, ?, ?, ?)",
+            ("192.168.1.60", "cyan", "Toshiba e-Studio", 2000),
+        )
+        self.conn.commit()
+
+        val = compute_yield_per_color("192.168.1.60", "cyan", conn=self.conn)
+        self.assertEqual(val, 2000.0)
+
+    def test_compute_yield_per_color_brand_fallback_when_state_yield_is_zero(self):
+        """A cartridge_state row with yield_per_page = 0 falls through to the brand/color fallback."""
         self.conn.execute(
             "INSERT INTO cartridge_state (printer_ip, color, printer_model, yield_per_page) VALUES (?, ?, ?, ?)",
             ("192.168.1.60", "cyan", "Toshiba e-Studio", 0),
@@ -114,6 +131,39 @@ class TestYieldEngineToshiba(unittest.TestCase):
         val = compute_yield_per_color("192.168.1.60", "cyan", conn=self.conn)
         self.assertEqual(val, 33600.0)
 
+    def test_compute_yield_per_color_reads_estimated_yield_from_samples(self):
+        """Step 2 reads estimated_yield from accepted yield_samples and ignores rejected rows."""
+        for val, accepted in ((30000, 1), (31000, 1), (32000, 1), (99999, 0)):
+            self.conn.execute(
+                "INSERT INTO yield_samples (printer_ip, color, accepted, estimated_yield) VALUES (?, ?, ?, ?)",
+                ("192.168.1.70", "magenta", accepted, val),
+            )
+        self.conn.commit()
+
+        val = compute_yield_per_color("192.168.1.70", "magenta", conn=self.conn)
+        self.assertEqual(val, 31000.0)
+
+    def test_compute_yield_per_color_logs_when_samples_query_fails(self):
+        """A failing yield_samples query is logged instead of being silently ignored."""
+        self.conn.execute("DROP TABLE yield_samples")
+        self.conn.execute(
+            """
+            CREATE TABLE yield_samples (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                printer_ip TEXT NOT NULL,
+                color TEXT NOT NULL,
+                accepted INTEGER NOT NULL,
+                yield_per_page REAL
+            )
+            """
+        )
+        self.conn.commit()
+
+        with self.assertLogs("PrinterMonitor", level="WARNING") as cm:
+            val = compute_yield_per_color("192.168.1.80", "black", conn=self.conn)
+
+        self.assertIsNone(val)
+        self.assertTrue(any("yield_samples query failed" in line for line in cm.output))
 
 if __name__ == "__main__":
     unittest.main()
