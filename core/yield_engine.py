@@ -898,12 +898,22 @@ def _maybe_close_cycle(conn, state: dict, *, ip: str, color: str, printer_model:
     }
 
 
+# Reject reason for a poll whose level is a display value, not a device reading (B-3).
+_REJECT_DISPLAY_ONLY = "status_coded_level"
+
+
 def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartridge_name: str,
                                level, raw_level=None, counters: dict, device_type: str,
                                timestamp: str = None, source: str = "poll",
                                device_capacity_pages: int = None,
+                               level_is_synthetic: bool = False,
                                _ensure_tables: bool = True) -> dict:
-    """Processes one cartridge and returns metadata that can be displayed in the API/UI."""
+    """Processes one cartridge and returns metadata that can be displayed in the API/UI.
+
+    level_is_synthetic=True means `level` is a display value, not a device reading (B-3, e.g. a Canon status
+    code shown as 15/70%). It is stored as current_level for the UI, but it never sets an anchor, never moves
+    last_valid_level or last_counter, and never learns a sample.
+    """
     if _ensure_tables:
         ensure_yield_tables()
     timestamp = timestamp or _now()
@@ -976,15 +986,33 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
                 "cycle_status": "active",
                 "updated_at": now,
             }
+            reject = None if level_i is not None and usage_counter is not None else "missing_level_or_counter"
+            if level_is_synthetic:
+                # B-3: a display value must not seed the baseline. The first real reading starts it.
+                state.update({"last_valid_level": None, "anchor_counter": None, "anchor_level": None,
+                              "anchor_timestamp": None, "cycle_start_counter": None, "cycle_start_level": None,
+                              "cycle_start_timestamp": None, "zero_reached_counter": None,
+                              "zero_reached_timestamp": None})
+                reject = _REJECT_DISPLAY_ONLY
             _upsert_state(conn, state)
             _record_snapshot(conn, ip, color, printer_model, cartridge_name, cartridge_key,
                              timestamp, counters, usage_counter, level_i, raw_level, source,
-                             valid=level_i is not None and usage_counter is not None,
-                             reject_reason=None if level_i is not None and usage_counter is not None else "missing_level_or_counter")
+                             valid=reject is None, reject_reason=reject)
             return _state_public_dict(state, profile)
 
         # Reference capacity (device-declared first, then catalog) — the "principled" capacity anchor
         rated_capacity = device_capacity or catalog_capacity
+
+        # B-3: a display value (Canon status code, manual-override estimate) is shown but never learned from.
+        # Nothing else is touched: anchor, last_valid_level, last_counter, cycle state and cartridge metadata stay
+        # as they are, so the next real reading is compared only with real readings.
+        if level_is_synthetic:
+            state.update({"current_level": level_i, "updated_at": now})
+            _record_snapshot(conn, ip, color, printer_model, cartridge_name, cartridge_key,
+                             timestamp, counters, usage_counter, level_i, raw_level, source,
+                             valid=False, reject_reason=_REJECT_DISPLAY_ONLY)
+            _upsert_state(conn, state)
+            return _state_public_dict(state, profile)
 
         # Must be read before the metadata update below overwrites the stored key (R2).
         swapped = _is_cartridge_swap(state, cartridge_key)
@@ -1338,8 +1366,13 @@ def process_printer_yield_snapshot(*, ip: str, printer_model: str, counters: dic
         toner = toners.get(color) or {}
         if not isinstance(toner, dict):
             continue
-        raw_level = toner.get("raw_level", toner.get("level"))
-        level = raw_level if raw_level is not None else toner.get("level")
+        # B-3: a toner that has a raw_level key but no device reading (Canon status code, manual-override estimate)
+        # is shown with its display level and must never be learned from. A toner without the key keeps the old
+        # meaning: `level` is the reading.
+        has_raw_key = "raw_level" in toner
+        raw_level = toner.get("raw_level") if has_raw_key else toner.get("level")
+        level_is_synthetic = has_raw_key and raw_level is None and toner.get("level") is not None
+        level = toner.get("level") if level_is_synthetic else raw_level
         name = toner.get("name") or color
         device_capacity_pages = toner.get("device_capacity_pages")
         try:
@@ -1355,6 +1388,7 @@ def process_printer_yield_snapshot(*, ip: str, printer_model: str, counters: dic
                 timestamp=timestamp,
                 source=source,
                 device_capacity_pages=device_capacity_pages,
+                level_is_synthetic=level_is_synthetic,
                 _ensure_tables=False,
             )
         except Exception as exc:

@@ -736,6 +736,21 @@ def _canon_display_percent(model: str, supply_name: str, percent: Optional[int])
     return percent
 
 
+def _legacy_learning_level(toners: Dict) -> tuple:
+    """Returns (legacy_toner_color, level) for the legacy learner and refill detection (B-3).
+
+    Only device readings count (raw_level). A display level without a reading (Canon status code shown as
+    0/15/70%, or a manual-override estimate) is never returned, so it cannot teach a yield or trigger a refill.
+    """
+    black = toners.get("black") or {}
+    if black.get("raw_level") is not None:
+        return "black", black["raw_level"]
+    for ck, t in toners.items():
+        if t.get("raw_level") is not None:
+            return ck, t["raw_level"]
+    return None, None
+
+
 # Regional names equivalent to Canon cartridges
 # CRG-137 (America) / CRG-337 (Asia) / CRG-737 (Europe) / CRG-937 (Pacific)
 # They are all the same physical cartridge with the same capacity and their number is only regional.
@@ -1430,27 +1445,13 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
     # Registration of PRINT / REFILL event
     # Bug #2: event registration BEFORE writing to the database
     prev = store._prev.get(ip) or {}
-    black_level = None
     # Yield learning and REFILL logic should use the raw surface of the device, not the
     # display value/override; Otherwise, the estimation-learning cycle becomes circular.
-    if toners.get("black", {}).get("raw_level") is not None:
-        legacy_toner_color = "black"
-        black_level = toners["black"]["raw_level"]
-        toners["black"]["level"] = toners["black"]["level"] if toners["black"].get("level") is not None else black_level
-    elif toners.get("black", {}).get("level") is not None:
-        legacy_toner_color = "black"
-        black_level = toners["black"]["level"]
-    else:
-        legacy_toner_color = None
-        for ck, t in toners.items():
-            if t.get("raw_level") is not None:
-                black_level = t["raw_level"]
-                legacy_toner_color = ck
-                break
-            if t.get("level") is not None:
-                black_level = t["level"]
-                legacy_toner_color = ck
-                break
+    # B-3: _legacy_learning_level returns device readings only, never a display level.
+    black_raw = (toners.get("black") or {}).get("raw_level")
+    if black_raw is not None:
+        toners["black"]["level"] = toners["black"]["level"] if toners["black"].get("level") is not None else black_raw
+    legacy_toner_color, black_level = _legacy_learning_level(toners)
 
     # Raw level of each color to automatically detect cartridge replacement/charging (event
     # CARTRIDGE_CHANGED in _counters_event). Only real data (raw_level) is entered
