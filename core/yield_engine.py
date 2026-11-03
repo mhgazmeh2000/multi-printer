@@ -1068,6 +1068,42 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
         toner_drop = anchor_level - level_i
         pages_delta = usage_counter - anchor_counter
 
+        # Stale anchor: a refill candidate was recorded (pending_refill_level is set) and the level is now at
+        # least REFILL_JUMP_PERCENT above the anchor, but the confirmation never ran. A single-step refill
+        # (e.g. 0% -> 100%) is recorded as a candidate and last_valid_level moves to 100, so the next poll sees
+        # no new jump and the confirmation never runs; the anchor then stays at the old level and learning
+        # freezes. Restart the cycle here and record the refill time. Gradual rises with no pending candidate
+        # do not match this branch. It returns early and never reaches the sample path, so the noise gate,
+        # the quantization gate and the rated-capacity band are unchanged.
+        pending_level = _to_int(state.get("pending_refill_level"))
+        if pending_level is not None and level_i - anchor_level >= REFILL_JUMP_PERCENT:
+            state.update({
+                "last_refill_at": timestamp,
+                "last_refill_counter": usage_counter,
+                "anchor_counter": usage_counter,
+                "anchor_level": level_i,
+                "anchor_timestamp": timestamp,
+                "cycle_start_counter": usage_counter,
+                "cycle_start_level": level_i,
+                "cycle_start_timestamp": timestamp,
+                "zero_reached_counter": None,
+                "zero_reached_timestamp": None,
+                "pages_after_zero": 0,
+                "cycle_status": "active",
+                "pending_refill_level": None,
+                "pending_refill_counter": None,
+                "pending_refill_timestamp": None,
+                "current_level": level_i,
+                "last_valid_level": level_i,
+                "last_counter": usage_counter,
+                "updated_at": now,
+            })
+            _record_snapshot(conn, ip, color, printer_model, cartridge_name, cartridge_key,
+                             timestamp, counters, usage_counter, level_i, raw_level, source,
+                             valid=True, reject_reason="stale_anchor_reset")
+            _upsert_state(conn, state)
+            return _state_public_dict(state, profile)
+
         # Stable level: keep the anchor so that low-usage printers also get cumulative calculations.
         if toner_drop <= 0:
             state.update({"current_level": level_i, "last_valid_level": level_i, "last_counter": usage_counter, "updated_at": now})

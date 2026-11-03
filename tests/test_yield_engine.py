@@ -15,6 +15,7 @@ import os
 import tempfile
 import unittest
 
+from core import database
 from core.yield_engine import (
     DEFAULT_YIELD_PER_PAGE,
     get_yield_status,
@@ -270,6 +271,129 @@ class YieldEngineTests(unittest.TestCase):
         )
         self.assertEqual(meta["yield_per_page"], 30300)
         self.assertEqual(meta["yield_source"], "auto_learn")
+
+    def test_single_step_refill_confirms_and_resumes_learning(self):
+        """A single-step refill (0% -> 100%) is confirmed on the next poll, and learning resumes.
+
+        Before the stale-anchor check, the anchor stayed at 0% after the candidate was recorded, so every
+        later poll took the stable-level branch and no sample was recorded.
+        """
+        ip, model, cart = "10.0.0.70", "Single Step", "SS"
+
+        def poll(level, total, ts):
+            """Runs one poll for the test cartridge."""
+            return process_cartridge_snapshot(
+                ip=ip, color="black", printer_model=model, cartridge_name=cart,
+                level=level, counters={"total": total}, device_type="mono", timestamp=ts,
+            )
+
+        meta = poll(100, 1000, "2026-01-01T00:00:00")
+        self.assertEqual(meta["anchor_level"], 100)
+
+        # (a) accepted sample at 0%: 400 pages over 100 points.
+        meta = poll(0, 1400, "2026-01-05T00:00:00")
+        self.assertEqual(meta["sample_count"], 1)
+        self.assertEqual(meta["anchor_level"], 0)
+
+        # (b) single-step refill is recorded as a candidate.
+        meta = poll(100, 1420, "2026-01-06T00:00:00")
+        self.assertEqual(meta["cycle_status"], "refill_pending")
+
+        # (c) the next poll confirms it: the anchor moves to the refilled level and counter.
+        meta = poll(100, 1425, "2026-01-07T00:00:00")
+        self.assertEqual(meta["cycle_status"], "active")
+        self.assertEqual(meta["anchor_level"], 100)
+        self.assertEqual(meta["anchor_counter"], 1425)
+
+        # (d) 75 pages after the confirmation, 5 points down: estimate 75 * 100 / 5 = 1500.
+        meta = poll(95, 1500, "2026-01-08T00:00:00")
+
+        # The refill time is recorded for UI/analytics.
+        stored = get_yield_status(ip=ip)[0]
+        self.assertEqual(stored["last_refill_at"], "2026-01-07T00:00:00")
+
+        # (e) learning resumed: the 1500 estimate was stored as an accepted sample, and the anchor moved.
+        # The displayed yield_per_page is a weighted median over recent samples, so it can stay at the
+        # earlier 400 until more samples arrive; that is existing behaviour and is not asserted here.
+        self.assertEqual(meta["sample_count"], 2)
+        self.assertEqual(meta["anchor_level"], 95)
+        self.assertEqual(meta["anchor_counter"], 1500)
+        self.assertEqual(meta["cycle_status"], "active")
+        with database.db_connection() as conn:
+            rows = conn.execute(
+                "SELECT estimated_yield, accepted FROM yield_samples WHERE printer_ip = ? AND color = ? ORDER BY id",
+                (ip, "black"),
+            ).fetchall()
+        accepted_estimates = [int(r[0]) for r in rows if r[1] and r[0] is not None]
+        self.assertEqual(accepted_estimates, [400, 1500])
+
+    def test_gradual_increase_without_pending_refill_does_not_reset(self):
+        """A gradual rise above the anchor with no refill candidate recorded does not reset the anchor.
+
+        The reset is tied to a pending refill candidate, so a slow climb (0 -> 10 -> 20) only moves the
+        anchor through the existing paths and never restarts the cycle by itself.
+        """
+        ip, model, cart = "10.0.0.73", "Gradual", "GR"
+
+        def poll(level, total, ts):
+            """Runs one poll for the test cartridge."""
+            return process_cartridge_snapshot(
+                ip=ip, color="black", printer_model=model, cartridge_name=cart,
+                level=level, counters={"total": total}, device_type="mono", timestamp=ts,
+            )
+
+        meta = poll(0, 1000, "2026-01-01T00:00:00")
+        self.assertEqual(meta["anchor_level"], 0)
+
+        for level, total, ts in ((10, 1100, "2026-01-02T00:00:00"),
+                                 (20, 1200, "2026-01-03T00:00:00")):
+            meta = poll(level, total, ts)
+            self.assertEqual(meta["anchor_level"], 0, msg=f"anchor reset at level {level}")
+            self.assertEqual(meta["anchor_counter"], 1000, msg=f"anchor counter moved at level {level}")
+            self.assertNotEqual(meta["cycle_status"], "refill_pending")
+
+    def test_small_level_noise_does_not_reset_anchor(self):
+        """Small upward bounces (under REFILL_JUMP_PERCENT above the anchor) keep the anchor in place."""
+        ip, model, cart = "10.0.0.71", "Noise Test", "NT"
+
+        def poll(level, total, ts):
+            """Runs one poll for the test cartridge."""
+            return process_cartridge_snapshot(
+                ip=ip, color="black", printer_model=model, cartridge_name=cart,
+                level=level, counters={"total": total}, device_type="mono", timestamp=ts,
+            )
+
+        meta = poll(60, 1000, "2026-01-01T00:00:00")
+        self.assertEqual(meta["anchor_level"], 60)
+
+        for level, total, ts in ((62, 1100, "2026-01-02T00:00:00"),
+                                 (64, 1200, "2026-01-03T00:00:00"),
+                                 (63, 1300, "2026-01-04T00:00:00")):
+            meta = poll(level, total, ts)
+            self.assertEqual(meta["anchor_level"], 60, msg=f"anchor moved at level {level}")
+            self.assertEqual(meta["anchor_counter"], 1000, msg=f"anchor counter moved at level {level}")
+
+    def test_two_step_refill_still_confirms_on_the_second_poll(self):
+        """A two-step refill (20 -> 40 -> 100) still goes through the existing confirmation path."""
+        ip, model, cart = "10.0.0.72", "Two Step", "TS"
+
+        def poll(level, total, ts):
+            """Runs one poll for the test cartridge."""
+            return process_cartridge_snapshot(
+                ip=ip, color="black", printer_model=model, cartridge_name=cart,
+                level=level, counters={"total": total}, device_type="mono", timestamp=ts,
+            )
+
+        meta = poll(20, 1000, "2026-01-01T00:00:00")
+        self.assertEqual(meta["anchor_level"], 20)
+
+        meta = poll(40, 1100, "2026-01-02T00:00:00")
+        self.assertEqual(meta["cycle_status"], "refill_pending")
+
+        meta = poll(100, 1150, "2026-01-03T00:00:00")
+        self.assertEqual(meta["cycle_status"], "active")
+        self.assertEqual(meta["anchor_level"], 100)
+        self.assertEqual(meta["anchor_counter"], 1150)
 
 
 if __name__ == "__main__":
