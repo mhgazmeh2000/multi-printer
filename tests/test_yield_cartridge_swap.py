@@ -21,6 +21,7 @@ from core import database
 from core.yield_engine import (
     DEFAULT_YIELD_PER_PAGE,
     _record_sample,
+    _is_cartridge_swap,
     _robust_learned_yield,
     build_cartridge_key,
     ensure_yield_tables,
@@ -189,6 +190,119 @@ class CartridgeSwapTests(unittest.TestCase):
         # The old cartridge's cycle was not closed under the new key.
         new_key = build_cartridge_key(MODEL, "Toner NEW2", "black")
         self.assertEqual(self._sample_estimates(ip, new_key), [])
+
+
+    # --- blank or placeholder identity on the incoming side -----------------
+
+    def _sample_keys(self, ip):
+        """Distinct cartridge_key values of accepted samples for one printer."""
+        with database.db_connection() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT cartridge_key FROM yield_samples WHERE printer_ip = ? AND accepted = ?",
+                (ip, True),
+            ).fetchall()
+        return {r[0] for r in rows}
+
+    def test_blank_model_poll_does_not_wipe_learned_yield(self):
+        """A blank printer_model on a stable reading keeps the learned yield and sample count."""
+        ip = "10.0.2.1"
+        before, level, total, day = self._build_learned(ip, "Toner BM")
+        self.assertEqual(before["yield_per_page"], 10000)
+        self.assertEqual(before["sample_count"], 8)
+        day += 1
+        # Stable reading (no toner drop): no sample is added, so sample_count must not change.
+        meta = self._poll(ip, "Toner BM", level, total + 100, day, model="")
+        self.assertEqual(meta["yield_per_page"], 10000)
+        self.assertEqual(meta["yield_source"], before["yield_source"])
+        self.assertEqual(meta["confidence"], "high")
+        self.assertEqual(meta["sample_count"], 8)
+
+    def test_blank_cartridge_name_poll_does_not_wipe_learned_yield(self):
+        """A blank cartridge_name on a stable reading keeps the learned yield and sample count."""
+        ip = "10.0.2.2"
+        before, level, total, day = self._build_learned(ip, "Toner BN")
+        self.assertEqual(before["sample_count"], 8)
+        day += 1
+        meta = self._poll(ip, "", level, total + 100, day)
+        self.assertEqual(meta["yield_per_page"], 10000)
+        self.assertEqual(meta["yield_source"], before["yield_source"])
+        self.assertEqual(meta["confidence"], "high")
+        self.assertEqual(meta["sample_count"], 8)
+
+    def test_blank_model_poll_with_drop_records_sample_under_stored_key(self):
+        """A blank-model poll with a real drop still learns, under the stored key (no placeholder key)."""
+        ip = "10.0.2.4"
+        _, level, total, day = self._build_learned(ip, "Toner SK")
+        stored_key = build_cartridge_key(MODEL, "Toner SK", "black")
+        day += 1
+        meta = self._poll(ip, "Toner SK", level - 5, total + 500, day, model="")
+        self.assertEqual(meta["cartridge_key"], stored_key)
+        self.assertEqual(meta["yield_per_page"], 10000)
+        self.assertEqual(meta["sample_count"], 9)
+        self.assertEqual(self._sample_keys(ip), {stored_key})
+
+    def test_model_recovers_after_blank_poll(self):
+        """After a blank poll, the next normal poll keeps the learned yield and continues learning."""
+        ip = "10.0.2.3"
+        _, level, total, day = self._build_learned(ip, "Toner RC")
+        day += 1
+        self._poll(ip, "Toner RC", level, total + 100, day, model="")
+        day += 1
+        meta = self._poll(ip, "Toner RC", level - 5, total + 500, day)
+        self.assertEqual(meta["yield_source"], "auto_learn")
+        self.assertEqual(meta["yield_per_page"], 10000)
+        self.assertEqual(meta["sample_count"], 9)
+        self.assertEqual(meta["cartridge_key"], build_cartridge_key(MODEL, "Toner RC", "black"))
+
+    def test_manual_reset_with_blank_model_does_not_wipe_learned_yield(self):
+        """A manual reset with an empty or 'Unknown' model gives the same result as the same reset with the real model."""
+        for idx, blank in enumerate(("", "Unknown")):
+            with self.subTest(model=blank):
+                counters = None
+                results = {}
+                for role, model, ip in (("blank", blank, f"10.0.3.{idx * 2 + 1}"),
+                                        ("control", MODEL, f"10.0.3.{idx * 2 + 2}")):
+                    _, level, total, day = self._build_learned(ip, "Toner MR")
+                    results[role] = register_manual_refill(
+                        ip=ip, color="black", printer_model=model, cartridge_name="Toner MR", new_level=100,
+                        counters={"total": total + 100}, device_type="mono",
+                        timestamp=f"2026-02-{day + 1:02d}T00:00:00",
+                    )
+                self.assertGreaterEqual(results["blank"]["sample_count"], 8)
+                for field in ("yield_per_page", "yield_source", "confidence", "sample_count"):
+                    self.assertEqual(results["blank"][field], results["control"][field], field)
+
+    def test_incoming_placeholder_key_is_not_a_swap(self):
+        """_is_cartridge_swap ignores a new key whose model or name is a placeholder."""
+        state = {"cartridge_key": build_cartridge_key(MODEL, "Toner IK", "black"),
+                 "printer_model": MODEL, "cartridge_name": "Toner IK", "color": "black"}
+        self.assertFalse(_is_cartridge_swap(state, build_cartridge_key("", "Toner IK", "black")))
+        self.assertFalse(_is_cartridge_swap(state, build_cartridge_key(MODEL, "", "black")))
+        self.assertTrue(_is_cartridge_swap(state, build_cartridge_key(MODEL, "Toner NEW", "black")))
+
+
+    def test_blank_model_with_new_cartridge_name_still_resets(self):
+        """A blank model does not hide a real swap: a new cartridge name in the same poll still resets."""
+        ip = "10.0.2.5"
+        _, level, total, day = self._build_learned(ip, "Toner OLD3")
+        day += 1
+        meta = self._poll(ip, "Toner NEW3", level, total + 100, day, model="")
+        self.assertEqual(meta["yield_per_page"], DEFAULT_YIELD_PER_PAGE)
+        self.assertEqual(meta["yield_source"], "default")
+        self.assertEqual(meta["sample_count"], 0)
+        self.assertEqual(meta["cartridge_key"], build_cartridge_key(MODEL, "Toner NEW3", "black"))
+
+    def test_manual_reset_with_blank_model_and_new_cartridge_name_still_resets(self):
+        """Same for a manual reset: blank model plus a new cartridge name is a swap."""
+        ip = "10.0.2.6"
+        _, level, total, day = self._build_learned(ip, "Toner OLD4")
+        day += 1
+        meta = register_manual_refill(
+            ip=ip, color="black", printer_model="Unknown", cartridge_name="Toner NEW4", new_level=100,
+            counters={"total": total + 100}, device_type="mono", timestamp=f"2026-02-{day:02d}T00:00:00",
+        )
+        self.assertEqual(meta["sample_count"], 0)
+        self.assertEqual(meta["yield_source"], "default")
 
 
 if __name__ == "__main__":

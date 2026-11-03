@@ -604,21 +604,57 @@ def _blend_yield(old_yield: int, old_weight: float, estimated_yield: int, sample
 _LEGACY_FALLBACK_WARNED: set = set()
 
 
+def _is_placeholder_model(model) -> bool:
+    """True when a printer model is missing or a placeholder ('', None, 'Unknown')."""
+    return _norm_text(model) == "unknown"
+
+
+def _is_placeholder_name(name, color) -> bool:
+    """True when a cartridge name is missing, 'Unknown', or only the colour fallback."""
+    norm = _norm_text(name)
+    return norm == "unknown" or norm == _norm_text(color)
+
+
+def _key_has_placeholder(cartridge_key: str) -> bool:
+    """True when a built cartridge_key ('model|name|color') has a placeholder model or name part."""
+    parts = (cartridge_key or "").split("|")
+    model_part = parts[0] if len(parts) > 0 else ""
+    name_part = parts[1] if len(parts) > 1 else ""
+    color_part = parts[2] if len(parts) > 2 else ""
+    return model_part == "unknown" or name_part in ("unknown", color_part)
+
+
+def _identity_from_stored(state: dict, printer_model: str, cartridge_name: str, color: str,
+                          model_missing: bool, name_missing: bool) -> tuple:
+    """Replaces a blank or placeholder model/name with the stored one, when the stored one is real.
+
+    A poll that reports no model or name carries no identity information, so it must not create a new
+    cartridge_key. A real new name on the same poll is kept, so a genuine name change is still a swap.
+    """
+    if model_missing and state.get("printer_model") and not _is_placeholder_model(state.get("printer_model")):
+        printer_model = state["printer_model"]
+    if name_missing and state.get("cartridge_name") and not _is_placeholder_name(
+            state.get("cartridge_name"), state.get("color") or color):
+        cartridge_name = state["cartridge_name"]
+    return printer_model, cartridge_name
+
+
 def _is_cartridge_swap(state: Optional[dict], cartridge_key: str) -> bool:
     """True when the slot's stored cartridge_key differs from the cartridge now reported in the same slot.
 
     Not a swap when:
     - the stored row has no cartridge_key (legacy row: keep today's behaviour, no reset), or
+    - the incoming key has a placeholder model or name (blank/'Unknown' metadata, not a new cartridge), or
     - the stored identity is a placeholder (model "Unknown", or the name equal to the colour fallback),
       which means the metadata is being completed, not that the cartridge changed.
     """
     old_key = (state or {}).get("cartridge_key")
     if not old_key or old_key == cartridge_key:
         return False
-    old_model = _norm_text(state.get("printer_model"))
-    old_color = _norm_text(state.get("color"))
-    old_name = _norm_text(state.get("cartridge_name"))
-    if old_model == "unknown" or old_name in ("unknown", old_color):
+    if _key_has_placeholder(cartridge_key):
+        return False
+    if _is_placeholder_model(state.get("printer_model")) or _is_placeholder_name(
+            state.get("cartridge_name"), state.get("color")):
         return False
     return True
 
@@ -872,6 +908,9 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
         ensure_yield_tables()
     timestamp = timestamp or _now()
     color = (color or "black").lower()
+    # Blank or placeholder identity is judged on the raw input, before the defaults below (R2 fix).
+    model_missing = _is_placeholder_model(printer_model)
+    name_missing = _is_placeholder_name(cartridge_name, color)
     printer_model = printer_model or "Unknown"
     cartridge_name = cartridge_name or color
     cartridge_key = build_cartridge_key(printer_model, cartridge_name, color)
@@ -884,6 +923,14 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
 
     with db_connection(commit=True) as conn:
         state = _load_state(conn, ip, color)
+        # Incomplete identity on this poll: keep the stored model/name, so the poll neither resets the learned
+        # state nor stores its sample or metadata under a placeholder key (R2 fix).
+        if state is not None and (model_missing or name_missing):
+            printer_model, cartridge_name = _identity_from_stored(
+                state, printer_model, cartridge_name, color, model_missing, name_missing)
+            cartridge_key = build_cartridge_key(printer_model, cartridge_name, color)
+            catalog_match = _catalog_lookup(printer_model, cartridge_name, color)
+            catalog_capacity = _valid_device_capacity((catalog_match or {}).get("yield_per_page"))
         profile = _load_profile(conn, cartridge_key)
         now = _now()
 
@@ -1321,6 +1368,9 @@ def register_manual_refill(*, ip: str, color: str, printer_model: str, cartridge
     ensure_yield_tables()
     timestamp = timestamp or _now()
     color = (color or "black").lower()
+    # Same rule as process_cartridge_snapshot: a blank or 'Unknown' model/name keeps the stored identity (R2 fix).
+    model_missing = _is_placeholder_model(printer_model)
+    name_missing = _is_placeholder_name(cartridge_name, color)
     printer_model = printer_model or "Unknown"
     cartridge_name = cartridge_name or color
     cartridge_key = build_cartridge_key(printer_model, cartridge_name, color)
@@ -1333,6 +1383,12 @@ def register_manual_refill(*, ip: str, color: str, printer_model: str, cartridge
 
     with db_connection(commit=True) as conn:
         state = _load_state(conn, ip, color) or {}
+        if state and (model_missing or name_missing):
+            printer_model, cartridge_name = _identity_from_stored(
+                state, printer_model, cartridge_name, color, model_missing, name_missing)
+            cartridge_key = build_cartridge_key(printer_model, cartridge_name, color)
+            catalog_match = _catalog_lookup(printer_model, cartridge_name, color)
+            catalog_capacity = _valid_device_capacity((catalog_match or {}).get("yield_per_page"))
         profile = _load_profile(conn, cartridge_key)
         if _is_cartridge_swap(state, cartridge_key):
             # Manual reset with a different cartridge: start from an empty state (R2). The old cycle is not
