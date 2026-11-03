@@ -1311,8 +1311,9 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
                 })
             state.update(update_payload)
         else:
-            # For not_enough_pages_yet we deliberately do not change the anchor, so that the next drop accumulates.
-            if reject_reason != "not_enough_pages_yet":
+            # For not_enough_pages_yet and quantization_1pct_noise we deliberately do not change the anchor, so that
+            # the next poll accumulates pages and toner drop against the same anchor (B-2). Other rejects re-anchor.
+            if reject_reason not in ("not_enough_pages_yet", "quantization_1pct_noise"):
                 state.update({"anchor_counter": usage_counter, "anchor_level": level_i, "anchor_timestamp": timestamp})
 
         state.update({"current_level": level_i, "last_valid_level": level_i, "last_counter": usage_counter, "updated_at": now})
