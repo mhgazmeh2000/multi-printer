@@ -140,6 +140,18 @@ def _load_yield_catalog() -> list:
         return []
 
 
+# Needles this short that contain a digit (e.g. "87a", "83a", "737") must match whole tokens.
+# As plain substrings, "87a" is found inside "cf387a", so an unrelated cartridge could select
+# the CF287A entry. Longer needles keep plain substring matching.
+_SHORT_DIGIT_NEEDLE_MAX_LEN = 3
+
+
+def _needle_found(haystack: str, needle_norm: str) -> bool:
+    if len(needle_norm) <= _SHORT_DIGIT_NEEDLE_MAX_LEN and any(ch.isdigit() for ch in needle_norm):
+        return re.search(r"(?<!\w)" + re.escape(needle_norm) + r"(?!\w)", haystack) is not None
+    return needle_norm in haystack
+
+
 def _contains_any(haystack: str, needles) -> bool:
     if not needles:
         return True
@@ -148,7 +160,7 @@ def _contains_any(haystack: str, needles) -> bool:
         needles = [needles]
     for needle in needles:
         needle_norm = _norm_text(str(needle))
-        if needle_norm and needle_norm != "unknown" and needle_norm in haystack:
+        if needle_norm and needle_norm != "unknown" and _needle_found(haystack, needle_norm):
             return True
     return False
 
@@ -187,16 +199,26 @@ def _catalog_entry_yield(entry: dict) -> Optional[int]:
     return _valid_device_capacity(ypp)
 
 
+def _catalog_priority(entry: dict) -> int:
+    """Optional explicit tie-break for equal-score catalog matches; a higher value wins. Defaults to 0."""
+    try:
+        return int(entry.get("priority") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _catalog_lookup(printer_model: str, cartridge_name: str, color: str) -> Optional[dict]:
     """Finds the best match in the catalog.
 
     Conservative matching: if the model/cartridge/color condition is present in the entry, it must match.
+    Ranking: score first, then the optional "priority" field. A tie on both keeps the entry that
+    comes first in the catalog file (logged at DEBUG).
     """
     model_norm = _norm_text(printer_model)
     cart_norm = _norm_text(cartridge_name)
     color_norm = _norm_text(color)
     best = None
-    best_score = -1
+    best_key = None
     for entry in _load_yield_catalog():
         if not isinstance(entry, dict) or entry.get("enabled") is False:
             continue
@@ -218,13 +240,21 @@ def _catalog_lookup(printer_model: str, cartridge_name: str, color: str) -> Opti
             score += 3
         if match.get("cartridge_contains"):
             score += 5
-        if score > best_score:
-            best_score = score
+        # Model plus cartridge is the most specific rule: the bonus keeps it ahead of any single-field rule.
+        if match.get("model_contains") and match.get("cartridge_contains"):
+            score += 10
+        key = (score, _catalog_priority(entry))
+        if best is None or key > best_key:
+            best_key = key
             best = {
                 "yield_per_page": ypp,
                 "confidence": entry.get("confidence") or "medium",
                 "catalog_id": entry.get("id") or entry.get("cartridge") or "catalog",
             }
+        elif key == best_key:
+            log.debug("catalog tie for %s|%s|%s: keeping %s over %s (score=%s, priority=%s)",
+                      model_norm, cart_norm, color_norm, best["catalog_id"], entry.get("id"),
+                      score, key[1])
     return best
 
 
