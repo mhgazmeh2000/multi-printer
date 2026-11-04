@@ -307,6 +307,7 @@ let sortableInstance = null;
 let currentPrinters = [];
 const STORAGE_KEY = 'printer_order';
 const EXTRA_COUNTERS_ACCORDION_KEY = 'printer_extra_counters_open';
+const PAPER_SIZE_ACCORDION_KEY = 'printer_paper_size_open';
 
 function getDefaultPrinterOrder(printers) {
   const groups = {};
@@ -1342,6 +1343,89 @@ function renderAllPrinterPanels(printers) {
     }
   });
 }
+// ── Paper size block (Toshiba) ───────────────────────────────────────────────
+// The device reports size *classes*, not exact sizes. SNMP branches:
+//   207 = every page on large paper (A3/B4)  -> pz.A3
+//   208 = every page on small paper (A4/A5)  -> pz.A4
+//   209 = prints from a computer, large      -> pz.A4R  (subset of 207)
+//   210 = prints from a computer, small      -> pz.A5   (subset of 208)
+//   227 = unknown counter                    -> pz.B4
+// The keys keep their legacy names because the poller, rollups and exports use them.
+// "Copy and other" is derived (class total - computer prints) and is only shown when the
+// numbers are consistent (0 < prints <= total); otherwise nothing is guessed.
+// Collapsible like "سایر شمارنده‌ها": opts.ip builds the element ids / click handler and
+// opts.open sets the initial state (the caller reads it from localStorage; default closed).
+function buildPaperSizeBlock(pz, opts) {
+  pz = pz || {};
+  const ip = String((opts && opts.ip) || '').replace(/[^0-9A-Za-z.:_-]/g, '');
+  const safeIp = ip.replace(/\./g, '-');
+  const open = !!(opts && opts.open);
+  const n = v => { const x = Number(v); return Number.isFinite(x) && x > 0 ? x : 0; };
+  const pct = (part, whole, d = 0) => whole > 0 ? Number((part * 100 / whole).toFixed(d)) : 0;
+  const classes = [
+    { key: 'small', title: 'کاغذ کوچک', label: 'کوچک (A4/A5)', cls: pz.A4, printed: pz.A5 },
+    { key: 'large', title: 'کاغذ بزرگ', label: 'بزرگ (A3/B4)', cls: pz.A3, printed: pz.A4R },
+  ].map(c => {
+    const total = n(c.cls && c.cls.total), print = n(c.printed && c.printed.total);
+    const hasPrint = print > 0 && print <= total;
+    return {
+      key: c.key, title: c.title, label: c.label, total,
+      hasPrint, print, other: hasPrint ? total - print : 0,
+      fc: n(c.cls && c.cls.fc), bw: n(c.cls && c.cls.bw),
+    };
+  }).filter(c => c.total > 0);
+  if (!classes.length) return '';
+
+  const sum = classes.reduce((a, c) => a + c.total, 0);
+  const shares = classes.map(c => pct(c.total, sum, 1));
+  if (shares.length === 2) shares[1] = Number((100 - shares[0]).toFixed(1));   // always adds up to 100
+  const seg = (w, cls) => w > 0 ? `<span class="${cls}" style="flex:${w} 1 0"></span>` : '';
+  const bar = parts => `<div class="ps-bar" aria-hidden="true">${parts.map(([w, k]) => seg(w, k)).join('')}</div>`;
+
+  const legend = classes.map((c, i) => `
+      <span class="ps-key ps-${c.key}"><i class="ps-dot"></i>${c.label} <b>${fmtN(c.total)}</b> <span class="ps-sep">·</span> <em>${shares[i]}%</em></span>`).join('');
+  const share = `<div class="ps-share" aria-hidden="true">${classes.map((c, i) => seg(shares[i], 'ps-seg ps-' + c.key)).join('')}</div>`;
+
+  const card = c => {
+    const colorBase = c.fc + c.bw;
+    return `
+    <div class="ps-card ps-${c.key}">
+      <div class="ps-card-head"><span class="ps-card-title">${c.title}</span><span class="ps-big">${fmtN(c.total)}</span></div>
+      ${c.hasPrint ? `
+      <div class="ps-sub">منبع چاپ</div>
+      ${bar([[pct(c.print, c.total, 1), 'main'], [pct(c.other, c.total, 1), 'soft']])}
+      <div class="ps-vals"><span>چاپ از رایانه <b>${fmtN(c.print)}</b> <em>${pct(c.print, c.total)}%</em></span><span>کپی و سایر <b>${fmtN(c.other)}</b> <em>${pct(c.other, c.total)}%</em></span></div>` : ''}
+      ${c.fc > 0 ? `
+      <div class="ps-sub">نوع رنگ</div>
+      ${bar([[pct(c.fc, colorBase, 1), 'fc'], [pct(c.bw, colorBase, 1), 'bw']])}
+      <div class="ps-vals"><span>رنگی <b>${fmtN(c.fc)}</b> <em>${pct(c.fc, colorBase)}%</em></span><span>سیاه‌سفید <b>${fmtN(c.bw)}</b> <em>${pct(c.bw, colorBase)}%</em></span></div>` : ''}
+    </div>`;
+  };
+
+  const unknown = n(pz.B4 && pz.B4.total);
+  // Short summary in the header, so the closed state still tells the story.
+  const summary = classes.map((c, i) => `<span>${c.title.replace('کاغذ ', '')} <em>${shares[i]}%</em></span>`).join('<span class="ps-sep">·</span>');
+  return `
+    <div class="ps-block extra-counters-accordion">
+      <button type="button" id="paper-size-header-${safeIp}" class="extra-counters-accordion-header${open ? ' open' : ''}" aria-expanded="${open}" aria-controls="paper-size-body-${safeIp}" onclick="togglePaperSizeAccordion('${ip}')">
+        <span class="extra-counters-accordion-title">📄 چاپ بر اساس اندازه کاغذ</span>
+        <span class="ps-acc-end">
+          <span class="ps-acc-summary">${summary}</span>
+          <span class="extra-counters-accordion-icon">⌄</span>
+        </span>
+      </button>
+      <div id="paper-size-body-${safeIp}" class="extra-counters-accordion-body ps-acc-body${open ? ' open' : ''}">
+        <div class="ps-body-inner">
+          <div class="ps-note">دستگاه فقط دسته‌ی بزرگ و کوچک را گزارش می‌کند، نه اندازه‌ی دقیق (A3 یا B4).</div>
+          ${share}
+          <div class="ps-legend">${legend}</div>
+          <div class="ps-cards">${classes.map(card).join('')}</div>
+          ${unknown ? `<div class="ps-foot">شمارنده‌ی ناشناخته‌ی دستگاه (شاخه ۲۲۷): <b>${fmtN(unknown)}</b> — در تفکیک بالا استفاده نشده است.</div>` : ''}
+        </div>
+      </div>
+    </div>`;
+}
+
 
 function buildPrinterDetail(p) {
   if (!p.online && p.online !== null) return `
@@ -1364,36 +1448,7 @@ function buildPrinterDetail(p) {
   const bwPct = total > 0 ? Math.round((bw / total) * 100) : 0;
   const hasPagesSinceReset = typeof c.pages_since_last_reset === 'number' && Number.isFinite(c.pages_since_last_reset);
 
-  const maxP = Math.max(...Object.values(pz).map(v => v.total || 0), 1);
-  const paperSizeStyles = {
-    A4: { cls: 'pb-a4', color: '#00d4ff' },
-    A3: { cls: 'pb-a3', color: '#ff7043' },
-    A4R: { cls: 'pb-a4r', color: '#ffd740' },
-    A5: { cls: 'pb-a5', color: '#00e676' },
-    B4: { cls: 'pb-b4', color: '#ea80fc' },
-  };
-  // Toshiba branches 208/207 are broad small/large totals; 209/210 are print-job subsets.
-  const paperSizeLabels = {
-    A4: { short: 'کوچک', hint: 'کل چاپ روی کاغذ کوچک (A4/A5/A4R...)' },
-    A3: { short: 'بزرگ', hint: 'کل چاپ روی کاغذ بزرگ (A3/B4...)' },
-    A4R: { short: 'چاپ·بزرگ', hint: 'زیرگروه: فقط jobهای چاپ از رایانه روی کاغذ بزرگ' },
-    A5: { short: 'چاپ·کوچک', hint: 'زیرگروه: فقط jobهای چاپ از رایانه روی کاغذ کوچک' },
-    B4: { short: 'نامشخص', hint: 'شمارنده‌ی ناشناخته‌ی Toshiba (شاخه ۲۲۷)' },
-  };
-  const paperRows = Object.entries(pz).map(([size, detail]) => {
-    if (!detail.total) return '';
-    const percent = Math.round(detail.total / maxP * 100);
-    const style = paperSizeStyles[size] || paperSizeStyles.A4;
-    const label = paperSizeLabels[size] || { short: size, hint: size };
-    return `<div class="psize-row" title="${escapeHtml(label.hint)}">
-      <span class="pb ${style.cls}">${escapeHtml(label.short)}</span>
-      <div class="pbar-wrap"><div class="pbar-fill" style="width:${percent}%;background:${style.color}"></div></div>
-      <div>
-        <div class="pbar-count num">${fmtN(detail.total)}</div>
-        <div class="pbar-sub">FC:${fmtN(detail.fc)} BW:${fmtN(detail.bw)}</div>
-      </div>
-    </div>`;
-  }).join('');
+  const paperBlock = buildPaperSizeBlock(pz, { ip: p.ip, open: getPaperSizeAccordionState(p.ip) });
 
 
   const TCOLORS = {cyan:'#00d4ff',magenta:'#ea80fc',yellow:'#ffd740',black:'#9e9e9e'};
@@ -1595,7 +1650,7 @@ function buildPrinterDetail(p) {
           </div>
           <div class="stat-value">${fmtN(bw)} <span class="stat-percent">(${bwPct}%)</span></div>
         </div>
-        ${paperRows ? `<div style="margin-top:12px"><div class="stat-label" style="margin-bottom:6px">تفکیک اندازه کاغذ</div><div class="psize-rows">${paperRows}</div></div>` : ''}
+        ${paperBlock}
       </div>
       <div class="stats-footer">
         <div class="stats-note">آخرین به‌روزرسانی: ${new Date(p.last_poll).toLocaleTimeString('fa-IR')}</div>
@@ -3091,15 +3146,42 @@ function setExtraCountersAccordionState(ip, isOpen) {
   }
 }
 
-function toggleExtraCountersAccordion(ip) {
+// Shared by every accordion section of the printer detail panel.
+// `prefix` is the id prefix: "<prefix>-header-<ip>" / "<prefix>-body-<ip>".
+function toggleAccordionSection(prefix, ip, persist) {
   const safeIp = String(ip || '').replace(/\./g, '-');
-  const body = document.getElementById(`extra-counters-body-${safeIp}`);
-  const header = document.getElementById(`extra-counters-header-${safeIp}`);
+  const body = document.getElementById(`${prefix}-body-${safeIp}`);
+  const header = document.getElementById(`${prefix}-header-${safeIp}`);
   if (!body || !header) return;
   const shouldOpen = !body.classList.contains('open');
   body.classList.toggle('open', shouldOpen);
   header.classList.toggle('open', shouldOpen);
-  setExtraCountersAccordionState(ip, shouldOpen);
+  header.setAttribute('aria-expanded', String(shouldOpen));
+  persist(ip, shouldOpen);
+}
+
+function toggleExtraCountersAccordion(ip) {
+  toggleAccordionSection('extra-counters', ip, setExtraCountersAccordionState);
+}
+
+function getPaperSizeAccordionState(ip) {
+  try {
+    return localStorage.getItem(`${PAPER_SIZE_ACCORDION_KEY}:${ip}`) === '1';
+  } catch (e) {
+    return false;
+  }
+}
+
+function setPaperSizeAccordionState(ip, isOpen) {
+  try {
+    localStorage.setItem(`${PAPER_SIZE_ACCORDION_KEY}:${ip}`, isOpen ? '1' : '0');
+  } catch (e) {
+    console.warn('paper size accordion state not persisted:', e);
+  }
+}
+
+function togglePaperSizeAccordion(ip) {
+  toggleAccordionSection('paper-size', ip, setPaperSizeAccordionState);
 }
 
 const EXTRA_COUNTER_HELP = {
