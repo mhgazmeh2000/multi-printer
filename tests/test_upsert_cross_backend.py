@@ -370,7 +370,9 @@ class _UpsertBehaviourMixin:
         self.conn.execute("DELETE FROM cartridge_yield_profiles WHERE cartridge_key = ?", (key,))
         self.conn.commit()
 
-        yield_engine._upsert_profile_if_high(self.conn, self._state(confidence="high",
+        # Fix 1: a shared profile is written only from at least 4 samples for black (8 for CMY),
+        # see _min_samples_for_high in core/yield_engine.py. The fixtures therefore use sample_count=4.
+        yield_engine._upsert_profile_if_high(self.conn, self._state(confidence="high", sample_count=4,
                                                                     yield_per_page=1500))
         self.conn.commit()
         prof = yield_engine._load_profile(self.conn, key)
@@ -378,7 +380,7 @@ class _UpsertBehaviourMixin:
         self.assertEqual(prof["yield_per_page"], 1500)
         self.assertEqual(prof["confidence"], "high")
 
-        yield_engine._upsert_profile_if_high(self.conn, self._state(confidence="high",
+        yield_engine._upsert_profile_if_high(self.conn, self._state(confidence="high", sample_count=4,
                                                                     yield_per_page=1700))
         self.conn.commit()
         prof2 = yield_engine._load_profile(self.conn, key)

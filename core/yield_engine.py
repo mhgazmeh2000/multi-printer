@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 from pathlib import Path
@@ -57,6 +58,18 @@ QUANT_MIN_PAGES_1PCT = 150
 # (self-heal for old poisoned states such as yield=23800 on T-4590).
 LEARNED_DEVIATION_LIMIT = 0.40
 CYCLE_RATED_BAND = (0.30, 2.5)
+
+# ─── Fix 2: reference-scaled 1% gate ─────────────────────────────────────────
+# A 1% step needs at least 1.5% of the reference capacity in pages. 1.5 is a margin chosen for this fix,
+# not a derived constant. QUANT_MIN_PAGES_1PCT (150) stays the floor, so small cartridges are unchanged.
+QUANT_1PCT_REFERENCE_FACTOR = 1.5
+# Without any reference capacity a 1% step needs 300 pages (the value requested for this fix; not derived).
+QUANT_1PCT_NO_REFERENCE_PAGES = 300
+
+# ─── Fix 1: variance caps on confidence (coefficient of variation of recent accepted estimates) ─────────
+CONFIDENCE_CV_MEDIUM = 0.20    # CV above this caps confidence at medium
+CONFIDENCE_CV_LOW = 0.40       # CV above this caps confidence at low
+CONFIDENCE_CV_MIN_SAMPLES = 3  # with fewer estimates no variance cap is applied
 
 _COLOR_ORDER = ("black", "cyan", "magenta", "yellow", "drum")
 
@@ -577,6 +590,54 @@ def _sample_weight(pages_delta: int, toner_drop: int, counter_quality: float) ->
     return round(page_factor * drop_factor * counter_quality, 3)
 
 
+def _min_samples_for_high(color) -> int:
+    """Accepted samples needed before a learned value may be labelled high: 4 for black, 8 for CMY."""
+    return 8 if str(color or "").lower() in ("cyan", "magenta", "yellow") else 4
+
+
+def _profile_is_trusted(profile: dict, color) -> bool:
+    """A shared profile can only be inherited when it was learned from enough samples (Fix 1)."""
+    return int(profile.get("sample_count") or 0) >= _min_samples_for_high(color)
+
+
+def _sample_cv(estimates) -> Optional[float]:
+    """Coefficient of variation (sample std / mean) of positive estimates; None with too few values."""
+    vals = [float(v) for v in estimates if v and float(v) > 0]
+    n = len(vals)
+    if n < CONFIDENCE_CV_MIN_SAMPLES:
+        return None
+    mean = sum(vals) / n
+    if mean <= 0:
+        return None
+    var = sum((v - mean) ** 2 for v in vals) / (n - 1)
+    return math.sqrt(var) / mean
+
+
+_CONFIDENCE_ORDER = {"low": 0, "medium": 1, "high": 2}
+
+
+def _cap_confidence_by_variance(confidence: str, estimates) -> str:
+    """Lowers confidence when the recent accepted samples disagree with each other (Fix 1)."""
+    cv = _sample_cv(estimates)
+    if cv is None:
+        return confidence
+    if cv > CONFIDENCE_CV_LOW:
+        cap = "low"
+    elif cv > CONFIDENCE_CV_MEDIUM:
+        cap = "medium"
+    else:
+        return confidence
+    return cap if _CONFIDENCE_ORDER.get(confidence, 0) > _CONFIDENCE_ORDER[cap] else confidence
+
+
+def _quant_min_pages_1pct(rated_capacity) -> int:
+    """Pages needed before a 1% step is trusted: scaled by the reference capacity (Fix 2)."""
+    if rated_capacity and rated_capacity > 0:
+        scaled = round(rated_capacity * 0.01 * QUANT_1PCT_REFERENCE_FACTOR, 6)  # round first: avoid float ceil drift
+        return max(QUANT_MIN_PAGES_1PCT, int(math.ceil(scaled)))
+    return QUANT_1PCT_NO_REFERENCE_PAGES
+
+
 def _derive_confidence(sample_count: int, total_weight: float, counter_basis: str = "") -> str:
     # Low-usage printers may have each sample drop only 1% and about 50 pages;
     # so for mono/black with an acceptable counter, 4 independent samples are enough for high.
@@ -753,6 +814,23 @@ _PROFILE_UPSERT_COLUMNS = (
 _PROFILE_UPSERT_VALUES = "?, ?, ?, ?, ?, 'high', ?, ?, ?, ?"
 
 
+def _recent_accepted_estimates(conn, ip: str, color: str, cartridge_key: str, limit: int = 12) -> list:
+    """Estimated yields of the most recent accepted samples of this slot (same selection as _robust_learned_yield)."""
+    try:
+        rows = conn.execute(
+            """SELECT estimated_yield FROM yield_samples
+               WHERE accepted = ? AND estimated_yield IS NOT NULL
+                 AND (cartridge_key = ?
+                      OR ((cartridge_key IS NULL OR cartridge_key = '') AND printer_ip = ? AND color = ?))
+               ORDER BY id DESC LIMIT ?""",
+            (True, cartridge_key, ip, color, int(limit)),
+        ).fetchall()
+    except Exception as exc:
+        log.debug("recent estimates query failed: %s", exc)
+        return []
+    return [int(r[0]) for r in rows if r[0]]
+
+
 def _upsert_profile_sql(conn) -> str:
     """Profile table upsert statement, using the backend of **the same connection** (not the environment)."""
     return _upsert_sql(
@@ -762,6 +840,8 @@ def _upsert_profile_sql(conn) -> str:
 
 def _upsert_profile_if_high(conn, state: dict) -> None:
     if state.get("confidence") != "high":
+        return
+    if int(state.get("sample_count") or 0) < _min_samples_for_high(state.get("color")):
         return
     ypp = _to_int(state.get("yield_per_page"))
     if not ypp or ypp <= 0 or ypp == DEFAULT_YIELD_PER_PAGE:
@@ -890,7 +970,8 @@ def _maybe_close_cycle(conn, state: dict, *, ip: str, color: str, printer_model:
     return {
         "yield_per_page": estimated_yield,
         "yield_source": "cycle_learn",
-        "confidence": "high",
+        "confidence": _derive_confidence(int(state.get("sample_count") or 0) + 1,
+                                         float(state.get("total_weight") or 0.0) + weight, counter_basis),
         "sample_count": int(state.get("sample_count") or 0) + 1,
         "total_weight": float(state.get("total_weight") or 0.0) + weight,
         "learned_at": timestamp,
@@ -956,7 +1037,7 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
                 inherited_yield = device_capacity
                 inherited_source = "device_capacity"
                 inherited_conf = "medium"
-            if profile and profile.get("confidence") == "high":
+            if profile and profile.get("confidence") == "high" and _profile_is_trusted(profile, color):
                 inherited_yield = int(profile.get("yield_per_page") or DEFAULT_YIELD_PER_PAGE)
                 inherited_source = "shared_profile"
                 inherited_conf = "high"
@@ -1270,7 +1351,7 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
         if pages_delta < MIN_PAGES_FOR_SAMPLE:
             accepted = False
             reject_reason = "not_enough_pages_yet"
-        elif toner_drop == 1 and pages_delta < QUANT_MIN_PAGES_1PCT:
+        elif toner_drop == 1 and pages_delta < _quant_min_pages_1pct(rated_capacity):
             # A quantized sample of "1% with few pages" has a large relative error (real example:
             # 11 pages → estimate of 1100 for Cartridge 737 with a rating of 2400). Wait until
             # enough good pages accumulate or the drop reaches 2%+; then the ratio is reliable.
@@ -1300,6 +1381,8 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
             _rb, _rb_w = _robust_learned_yield(conn, ip, color, cartridge_key, rated=rated_capacity)
             new_yield = _rb if _rb else _blend_yield(old_yield, old_weight, estimated_yield, weight)
             confidence = _derive_confidence(sample_count, new_weight, counter_basis)
+            confidence = _cap_confidence_by_variance(
+                confidence, _recent_accepted_estimates(conn, ip, color, cartridge_key))
 
             # A low-confidence sample, especially for colors or toners that have just
             # reached 0/1%, can create an unrealistic jump. So if a better baseline exists, such as
@@ -1438,7 +1521,8 @@ def register_manual_refill(*, ip: str, color: str, printer_model: str, cartridge
             inherited_yield = catalog_capacity
             inherited_source = "catalog"
             inherited_conf = (catalog_match or {}).get("confidence") or "medium"
-        if inherited_yield == DEFAULT_YIELD_PER_PAGE and profile and profile.get("confidence") == "high":
+        if inherited_yield == DEFAULT_YIELD_PER_PAGE and profile and profile.get("confidence") == "high" \
+                and _profile_is_trusted(profile, color):
             inherited_yield = int(profile.get("yield_per_page") or DEFAULT_YIELD_PER_PAGE)
             inherited_source = "shared_profile"
             inherited_conf = "high"

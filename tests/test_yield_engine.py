@@ -135,28 +135,32 @@ class YieldEngineTests(unittest.TestCase):
         self.assertEqual(meta["confidence"], "medium")
 
     def test_device_reported_capacity_replaces_default_until_auto_learn(self):
-        # ✅ Commit 17: with large device_capacity (copies), ≥150p/1% samples are possible
-        # are learning; A sample with low confidence does not override the baseline, but with
-        # The second sample (medium confidence) is replaced by auto_learn.
-        """Verifies device reported capacity replaces default until auto learn."""
+        """Verifies device reported capacity replaces default until auto learn.
+
+        Fix 2 (scaled 1% gate): with a 32,000 reference a 1% step needs at least 480 pages (1.5% of 32,000).
+        A 1% step of 480 pages estimates 48,000, which is outside the ±40% guard around the reference, so it
+        would still not replace the device value. This test therefore learns from 2% steps of 600 pages each
+        (estimate 30,000), which the 1% gate does not apply to. The first sample (low confidence) does not
+        replace device_capacity; the second sample (medium confidence) does.
+        """
         process_cartridge_snapshot(
             ip="10.0.0.25", color="black", printer_model="HP Capacity", cartridge_name="Device Toner",
             level=75, counters={"total": 1000}, device_type="mono", device_capacity_pages=32000,
             timestamp="2026-01-01T00:00:00",
         )
-        # A sample with low confidence should not override a better baseline such as device_capacity.
+        # 2% step, 600 pages: one sample with low confidence does not override device_capacity.
         meta = process_cartridge_snapshot(
             ip="10.0.0.25", color="black", printer_model="HP Capacity", cartridge_name="Device Toner",
-            level=74, counters={"total": 1300}, device_type="mono", device_capacity_pages=32000,
+            level=73, counters={"total": 1600}, device_type="mono", device_capacity_pages=32000,
             timestamp="2026-01-02T00:00:00",
         )
         self.assertEqual(meta["yield_per_page"], 32000)
         self.assertEqual(meta["yield_source"], "device_capacity")
 
-        # With sufficient sample and moderate confidence, auto_learn can be replaced.
+        # Second 2% step, 600 pages: two samples, medium confidence, auto_learn replaces device_capacity.
         meta = process_cartridge_snapshot(
             ip="10.0.0.25", color="black", printer_model="HP Capacity", cartridge_name="Device Toner",
-            level=73, counters={"total": 1600}, device_type="mono", device_capacity_pages=32000,
+            level=71, counters={"total": 2200}, device_type="mono", device_capacity_pages=32000,
             timestamp="2026-01-03T00:00:00",
         )
         self.assertEqual(meta["yield_source"], "auto_learn")
@@ -221,7 +225,10 @@ class YieldEngineTests(unittest.TestCase):
             new_level=100, counters={"total": 6800}, device_type="mono", timestamp="2026-01-20T00:00:00",
         )
         self.assertEqual(meta["yield_source"], "cycle_learn")
-        self.assertEqual(meta["confidence"], "high")
+        # Fix 1: a closed cycle is no longer hard-coded to high. The zero-plateau polls above leave one accepted
+        # sample on this cartridge, so the closed cycle is its second sample, which gives medium. A closed cycle
+        # that is the first sample of a cartridge gives low (see tests/test_yield_confidence_gates.py).
+        self.assertEqual(meta["confidence"], "medium")
         self.assertEqual(meta["yield_per_page"], 5800)
 
     def test_cmy_with_full_color_counter_is_conservative_before_high_confidence(self):
