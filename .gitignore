@@ -24,6 +24,7 @@ printers.json
 oid_profiles.json
 oid_validation_errors.txt
 toner_report.txt
+toner_report.txt.*
 missing_yield_printers.txt
 yield_status_report.txt
 *.sqlite
@@ -85,9 +86,10 @@ backups/
 caches_readiness.json
 
 # ===== Local scratch files & delivery-bundle artifacts — never commit =====
-# Stray shell/cmd capture files
+# Stray shell/cmd capture files & temporary git patches
 \!TEMP_LOG!
 *.log.txt
+*.patch
 *--default-timeout*
 # Patch dumps (changes belong in commits, not .patch files)
 *.patch

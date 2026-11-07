@@ -27,6 +27,8 @@ Advanced data collection using test_toner.py methods:
 """
 
 import logging
+import os
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
@@ -216,12 +218,47 @@ def _merge_scraped_toners(toners: Dict, scraped: Dict, source: str) -> int:
             merged += 1
     return merged
 
-# Auxiliary functions
-def _log_to_toner_report(content: str):
-    """Add line to toner_report.txt file"""
+TONER_REPORT_FILE = "toner_report.txt"
+
+
+def _resolve_toner_report_max_bytes() -> int:
+    """Resolve max bytes for toner_report.txt before rotating to .1 (default: 20 MB)."""
+    raw = os.getenv("TONER_REPORT_MAX_MB", "20").strip()
     try:
-        with open("toner_report.txt", "a", encoding="utf-8") as f:
-            f.write(content + "\n")
+        mb = float(raw)
+    except ValueError:
+        mb = 20.0
+    if mb <= 0:
+        return 20 * 1024 * 1024
+    return int(mb * 1024 * 1024)
+
+
+TONER_REPORT_MAX_BYTES = _resolve_toner_report_max_bytes()
+_toner_report_lock = threading.Lock()
+
+
+# Auxiliary functions
+def _log_to_toner_report(
+    content: str,
+    report_path: Optional[str] = None,
+    max_bytes: Optional[int] = None,
+):
+    """Append a line to toner_report.txt, rotating to .1 when file exceeds 20 MB."""
+    target = report_path or TONER_REPORT_FILE
+    limit = TONER_REPORT_MAX_BYTES if max_bytes is None else max_bytes
+    line = content + "\n"
+    encoded_len = len(line.encode("utf-8"))
+    try:
+        with _toner_report_lock:
+            if limit > 0 and os.path.exists(target):
+                try:
+                    current_size = os.path.getsize(target)
+                except OSError:
+                    current_size = 0
+                if current_size >= limit or (current_size > 0 and current_size + encoded_len > limit):
+                    os.replace(target, f"{target}.1")
+            with open(target, "a", encoding="utf-8") as f:
+                f.write(line)
     except Exception as e:
         log.error(f"خطا در نوشتن toner_report: {e}")
 

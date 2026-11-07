@@ -90,7 +90,20 @@ MODULE_BY_FILE: Dict[str, str] = {
 }
 
 #: These are not OIDs; Branding prefix.
-NOT_AN_OID = {prefix for prefix, _mod in ENTERPRISE_MAP} | {"1.3.6.1.2.1", "1.3.6.1.4.1"}
+NOT_AN_OID = (
+    {prefix for prefix, _mod in ENTERPRISE_MAP}
+    | {
+        "1.3.6.1.2.1",
+        "1.3.6.1.4.1",
+        # Multi-brand enterprise prefixes used for vendor identity detection only
+        "1.3.6.1.4.1.1347",  # Kyocera
+        "1.3.6.1.4.1.367",   # Ricoh
+        "1.3.6.1.4.1.253",   # Xerox
+        "1.3.6.1.4.1.641",   # Lexmark
+        "1.3.6.1.4.1.236",   # Samsung
+        "1.3.6.1.4.1.1248",  # Epson
+    }
+)
 
 #: auxiliary files — read only for orphan metrics, not for matrices.
 AUX_FILES: Sequence[str] = (
