@@ -75,8 +75,17 @@ def test_generator_is_valid_yaml_with_exactly_six_modules():
 
 def test_coverage_gate_passes_and_reports_full_matrix():
     """Verifies coverage gate passes and reports full matrix."""
-    proc = subprocess.run([sys.executable, str(CHECKER), "--json"], cwd=ROOT,
-                          capture_output=True, text=True)
+    import os
+    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+    proc = subprocess.run(
+        [sys.executable, str(CHECKER), "--json"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+    )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     import json
     report = json.loads(proc.stdout)

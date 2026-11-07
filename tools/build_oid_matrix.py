@@ -736,6 +736,13 @@ def _report(modules, stats) -> str:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Command-line entry point: write or check docs/oid-matrix.md."""
 
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            try:
+                _stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
     ap = argparse.ArgumentParser(description="تولید docs/oid-matrix.md از کد (مرجع G.1)")
     ap.add_argument("--write", action="store_true", help="سند را بنویس")
     ap.add_argument("--check", action="store_true", help="بررسی تازگی سند")
@@ -755,7 +762,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.json_path:
         Path(args.json_path).write_text(json.dumps(
             {"stats": {k: v for k, v in stats.items()}, "modules": modules},
-            ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
         print(f"🧾 JSON: {args.json_path}")
     if args.check:
         if not MATRIX_DOC.is_file():
@@ -767,7 +774,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print("✔ docs/oid-matrix.md برابرِ خروجی کد است")
         return EXIT_OK
     if args.write:
-        MATRIX_DOC.write_text(doc, encoding="utf-8")
+        MATRIX_DOC.write_text(doc, encoding="utf-8", newline="\n")
         print(f"✔ نوشته شد: {MATRIX_DOC.relative_to(PROJECT_ROOT).as_posix()} — {stats['unique_oids']} OID "
               f"یکتا، {len(doc.splitlines())} خط")
         return EXIT_OK

@@ -325,6 +325,13 @@ def check(doc_path: Path, gen_path: Path) -> Tuple[List[str], Dict[str, object]]
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Command-line entry point of the OID coverage gate."""
 
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            try:
+                _stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
     ap = argparse.ArgumentParser(description="گیت پوشش generator.yml در برابر docs/oid-matrix.md")
     ap.add_argument("--matrix", default=str(MATRIX_DOC))
     ap.add_argument("--generator", default=str(GENERATOR))

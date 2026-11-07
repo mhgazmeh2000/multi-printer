@@ -58,6 +58,37 @@ from pathlib import Path
 
 import pytest
 
+# Windows + Python 3.12+/3.14 workaround: pytest's `pytest-current` is an NTFS
+# directory junction. Calling `os.unlink()` on a dangling junction raises
+# `PermissionError: [WinError 5] Access is denied`; Windows requires `os.rmdir()`.
+if sys.platform == "win32":
+    try:
+        import _pytest.pathlib as _pytest_pathlib
+
+        def _win32_safe_cleanup_dead_symlinks(root: Path) -> None:
+            try:
+                entries = list(root.iterdir())
+            except OSError:
+                return
+            for left_dir in entries:
+                is_link = left_dir.is_symlink() or (
+                    hasattr(left_dir, "is_junction") and left_dir.is_junction()
+                )
+                if is_link and not left_dir.resolve().exists():
+                    try:
+                        left_dir.unlink()
+                    except PermissionError:
+                        try:
+                            os.rmdir(left_dir)
+                        except OSError:
+                            pass
+                    except OSError:
+                        pass
+
+        _pytest_pathlib.cleanup_dead_symlinks = _win32_safe_cleanup_dead_symlinks
+    except Exception:
+        pass
+
 ENV_PG_DSN = "PG_DSN"
 ENV_DB_BACKEND = "DB_BACKEND"
 ENV_SWITCH = "PRINTGUARD_PG_ISOLATE"

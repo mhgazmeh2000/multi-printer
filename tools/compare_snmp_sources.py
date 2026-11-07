@@ -334,6 +334,13 @@ def load_snapshot(path, brand_override):
 def main(argv=None):
     """Command-line entry point of the comparison tool."""
 
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            try:
+                _stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
     ap = argparse.ArgumentParser(
         description="مقایسهٔ خروجیِ snmp_exporter با snapshotِ collectorِ legacy")
     ap.add_argument("--exporter-capture", action="append", required=True,

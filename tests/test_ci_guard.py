@@ -9,6 +9,7 @@ tests/test_ci_guard.py — تست راستی‌آزمایی گارد ضد دوب
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import unittest
@@ -20,10 +21,11 @@ class CiGuardParityTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         # استخراج شناسه‌های آزمون‌های کشف‌شده توسط pytest
+        env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
         out = subprocess.run(
             [sys.executable, "-m", "pytest", "tests/",
              "--collect-only", "-q", "--color=no"],
-            capture_output=True, text=True,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
         )
         if out.returncode != 0:
             raise RuntimeError(f"pytest --collect-only failed:\n{out.stdout}\n{out.stderr}")

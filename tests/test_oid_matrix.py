@@ -22,6 +22,7 @@ OID matrix tests (G.1 prerequisite) — Locks three things:
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -36,8 +37,16 @@ ROW_RE = re.compile(r"^\|\s*`(\d+(?:\.\d+){6,})`\s*\|\s*(?:get|walk)\s*\|", re.M
 
 def _run(*args: str) -> subprocess.CompletedProcess:
     """Helper: run."""
-    return subprocess.run([sys.executable, str(TOOL), *args], cwd=ROOT,
-                          capture_output=True, text=True)
+    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+    return subprocess.run(
+        [sys.executable, str(TOOL), *args],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+    )
 
 
 def _json(tmp_path: Path) -> dict:
@@ -62,7 +71,7 @@ def test_tool_is_deterministic(tmp_path):
     for dest in (a, b):
         proc = _run("--write")
         assert proc.returncode == 0, proc.stderr
-        dest.write_text(DOC.read_text(encoding="utf-8"), encoding="utf-8")
+        dest.write_text(DOC.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
     assert a.read_bytes() == b.read_bytes(), "خروجی ابزار قطعی نیست"
     # And the total number of the document must be stable
     assert re.search(r"\*\*\d+\*\* OID یکتا در ماتریس", a.read_text(encoding="utf-8"))

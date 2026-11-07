@@ -414,12 +414,13 @@ class VolatileAndDeterminismTests(CompareToolTestCase):
         """Verifies cli entry point returns the documented exit code."""
         doc = self.fixture("ok")
         exp, snap = self.write_pair(doc)
-        env = dict(os.environ, PYTHONPATH=str(REPO_ROOT))
+        env = dict(os.environ, PYTHONPATH=str(REPO_ROOT), PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
         for args, expected in ((self._args(exp, snap, ("--json", str(self.tmp / "r.json"))), 0),
                                (self._args(self.tmp / "nope", snap), 2),
                                (["--help"], 0)):
             proc = subprocess.run([sys.executable, str(TOOL), *args], cwd=str(REPO_ROOT),
-                                  capture_output=True, text=True, timeout=120, env=env)
+                                  capture_output=True, text=True, encoding="utf-8",
+                                  errors="replace", timeout=120, env=env)
             self.assertEqual(proc.returncode, expected,
                              f"args={args}\n{proc.stdout}\n{proc.stderr}")
 

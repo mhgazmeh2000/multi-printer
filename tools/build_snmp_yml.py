@@ -293,6 +293,13 @@ def measure(text: str) -> dict:
 def main(argv=None) -> int:
     """Command-line entry point: build or check monitoring/snmp.yml."""
 
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            try:
+                _stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
     ap = argparse.ArgumentParser(description="build/verify monitoring/snmp.yml from monitoring/generator.yml")
     ap.add_argument("--generator", default=str(DEFAULT_SPEC), help="مسیر spec (پیش‌فرض: monitoring/generator.yml)")
     ap.add_argument("--out", default=str(DEFAULT_OUT), help="مسیر خروجی (پیش‌فرض: monitoring/snmp.yml)")
@@ -334,7 +341,7 @@ def main(argv=None) -> int:
         return 0
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(text, encoding="utf-8")
+    out_path.write_text(text, encoding="utf-8", newline="\n")
     print(f"wrote {out_path.name}: {got['metrics']} metrics, {got['unique_oids']} unique OIDs, "
           f"{got['walk_tables']} walk tables, {got['ignore_values']} ignore_values comments")
     return 0

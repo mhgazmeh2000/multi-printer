@@ -29,6 +29,7 @@ The three things that are established here are what make snmp.yml "manual".
 from __future__ import annotations
 
 import importlib.util
+import os
 import re
 import subprocess
 import sys
@@ -54,7 +55,15 @@ def _tool():
 
 def _run(*args: str) -> subprocess.CompletedProcess:
     """Helper: run."""
-    return subprocess.run([sys.executable, str(TOOL), *args], capture_output=True, text=True)
+    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+    return subprocess.run(
+        [sys.executable, str(TOOL), *args],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+    )
 
 
 # ── 1) Stable output
