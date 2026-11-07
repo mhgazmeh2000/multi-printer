@@ -73,7 +73,7 @@
               "toner_overrides": "{}",
               "updated_at": "<TS_UTC>",
               "yield_learning_failures": 0,
-              "yield_per_page": 2000
+              "yield_per_page": 25000
             }
           ],
           "toner_snapshots_v2": [],
@@ -110,10 +110,10 @@
             "scan_net_fc": null,
             "total": 152300,
             "twin": 0,
-            "yield_confidence": "low",
+            "yield_confidence": "medium",
             "yield_learning_failures": 0,
-            "yield_per_page": 2000,
-            "yield_source": "default"
+            "yield_per_page": 25000,
+            "yield_source": "catalog"
           },
           "device": {
             "firmware": "N/A",
@@ -152,8 +152,8 @@
           "poll_ms": 2000,
           "toners": {
             "black": {
-              "capacity_pages": 2000,
-              "capacity_source": "default",
+              "capacity_pages": 25000,
+              "capacity_source": "catalog",
               "cycle_start_counter": 152300,
               "cycle_start_level": 77,
               "cycle_status": "active",
@@ -168,14 +168,14 @@
               "usage": 8400000000,
               "usage_m": 8400.0,
               "yield_cartridge_key": "e-studio3515ac|black toner|black",
-              "yield_confidence": "low",
-              "yield_per_page": 2000,
+              "yield_confidence": "medium",
+              "yield_per_page": 25000,
               "yield_sample_count": 0,
               "yield_total_weight": 0.0
             },
             "cyan": {
-              "capacity_pages": 2000,
-              "capacity_source": "default",
+              "capacity_pages": 21800,
+              "capacity_source": "catalog",
               "cycle_start_counter": 41200,
               "cycle_start_level": 44,
               "cycle_status": "active",
@@ -190,14 +190,14 @@
               "usage": 1200000000,
               "usage_m": 1200.0,
               "yield_cartridge_key": "e-studio3515ac|cyan toner|cyan",
-              "yield_confidence": "low",
-              "yield_per_page": 2000,
+              "yield_confidence": "medium",
+              "yield_per_page": 21800,
               "yield_sample_count": 0,
               "yield_total_weight": 0.0
             },
             "magenta": {
-              "capacity_pages": 2000,
-              "capacity_source": "default",
+              "capacity_pages": 21800,
+              "capacity_source": "catalog",
               "cycle_start_counter": 41200,
               "cycle_start_level": 58,
               "cycle_status": "active",
@@ -212,14 +212,14 @@
               "usage": 1500000000,
               "usage_m": 1500.0,
               "yield_cartridge_key": "e-studio3515ac|magenta toner|magenta",
-              "yield_confidence": "low",
-              "yield_per_page": 2000,
+              "yield_confidence": "medium",
+              "yield_per_page": 21800,
               "yield_sample_count": 0,
               "yield_total_weight": 0.0
             },
             "yellow": {
-              "capacity_pages": 2000,
-              "capacity_source": "default",
+              "capacity_pages": 21800,
+              "capacity_source": "catalog",
               "cycle_start_counter": 41200,
               "cycle_start_level": 61,
               "cycle_status": "active",
@@ -234,8 +234,8 @@
               "usage": 2100000000,
               "usage_m": 2100.0,
               "yield_cartridge_key": "e-studio3515ac|yellow toner|yellow",
-              "yield_confidence": "low",
-              "yield_per_page": 2000,
+              "yield_confidence": "medium",
+              "yield_per_page": 21800,
               "yield_sample_count": 0,
               "yield_total_weight": 0.0
             }

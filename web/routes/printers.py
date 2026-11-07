@@ -56,8 +56,8 @@ def _debug_forbidden():
     return jsonify({"error": "not found"}), 404
 
 
-def _attach_yield_metadata(printer_data: dict) -> dict:
-    """Add yield/capacity to API output even if the current snapshot is old."""
+def _attach_yield_metadata(printer_data: dict, preloaded_states: dict = None) -> dict:
+    """Add per-color yield/capacity & interval CI95 metadata to API output."""
     if not isinstance(printer_data, dict):
         return printer_data
     ip = printer_data.get("ip")
@@ -72,20 +72,113 @@ def _attach_yield_metadata(printer_data: dict) -> dict:
     if prev.get("force_estimate"):
         ysrc = "forced_estimate"
 
-    counters = printer_data.setdefault("counters", {})
-    if isinstance(counters, dict):
-        counters.setdefault("yield_per_page", ypp)
-        counters.setdefault("yield_source", ysrc)
-        counters.setdefault("force_estimate", prev.get("force_estimate", 0))
-        counters.setdefault("yield_learning_failures", prev.get("yield_learning_failures", 0))
-
     toners = printer_data.get("toners") or {}
+    counters = dict(printer_data.get("counters") or {})
+    printer_data["counters"] = counters
+    needs_engine_lookup = preloaded_states is None and (
+        ("yield_per_page" not in counters or "yield_source" not in counters)
+        or (isinstance(toners, dict) and any(
+            isinstance(t, dict) and (
+                "capacity_pages" not in t
+                or "capacity_source" not in t
+                or "capacity_ci95" not in t
+            )
+            for t in toners.values()
+        ))
+    )
+
+    state_by_color = dict((preloaded_states or {}).get(ip) or {})
+    if needs_engine_lookup:
+        try:
+            from core.yield_engine import get_yield_status
+            for row in get_yield_status(ip=ip):
+                c_key = str(row.get("color") or "").lower()
+                if c_key:
+                    state_by_color[c_key] = row
+        except Exception:
+            state_by_color = {}
+
+    black_state = state_by_color.get("black")
+    eff_black_ypp = int((black_state or {}).get("yield_per_page") or ypp)
+    eff_black_src = (black_state or {}).get("yield_source") or ysrc
+    eff_black_conf = (black_state or {}).get("confidence") or ("low" if eff_black_src == "default" else "medium")
+
+    counters.setdefault("yield_per_page", eff_black_ypp)
+    counters.setdefault("yield_source", eff_black_src)
+    counters.setdefault("yield_confidence", eff_black_conf)
+    counters.setdefault("force_estimate", prev.get("force_estimate", 0))
+    counters.setdefault("yield_learning_failures", prev.get("yield_learning_failures", 0))
+
     if isinstance(toners, dict):
-        for color, toner in toners.items():
-            if isinstance(toner, dict):
+        from core.collectors.base import _normalize_overrides as _norm_ov, evaluate_override_quarantine
+        active_ov = _norm_ov(prev)
+        cur_tot = counters.get("total")
+        enriched_toners = {}
+        for color, raw_toner in toners.items():
+            if not isinstance(raw_toner, dict):
+                enriched_toners[color] = raw_toner
+                continue
+            toner = dict(raw_toner)
+            color_lc = str(color).lower()
+            c_state = state_by_color.get(color_lc)
+            if c_state:
+                c_ypp = int(c_state.get("yield_per_page") or ypp)
+                c_src = c_state.get("yield_source") or "default"
+                c_conf = c_state.get("confidence") or "low"
+                toner.setdefault("capacity_pages", c_ypp)
+                toner.setdefault("capacity_source", c_src)
+                toner.setdefault("yield_per_page", c_ypp)
+                toner.setdefault("yield_confidence", c_conf)
+                for k in (
+                    "capacity_ci95",
+                    "capacity_method",
+                    "learning_state",
+                    "nominal_capacity_pages",
+                    "coverage_index",
+                    "eta_pages",
+                    "sensor_state",
+                    "chip_quarantined",
+                    "frozen_chip_level",
+                    "overrun_pages",
+                    "unregistered_refill_suspected",
+                    "last_reset_reason",
+                ):
+                    if k in c_state:
+                        toner.setdefault(k, c_state[k])
+            else:
                 toner.setdefault("capacity_pages", ypp)
                 toner.setdefault("capacity_source", ysrc if color == "black" else f"{ysrc}_global")
                 toner.setdefault("yield_per_page", ypp)
+
+            ov_entry = active_ov.get(color_lc)
+            if isinstance(ov_entry, dict) and ov_entry and cur_tot is not None:
+                ev = evaluate_override_quarantine(
+                    ov_entry,
+                    cur_tot,
+                    snmp_level=toner.get("raw_level"),
+                    swapped=False,
+                    fallback_yield=toner.get("yield_per_page") or ypp,
+                )
+                if not ev.get("release"):
+                    if ev.get("unregistered_refill_suspected"):
+                        toner["sensor_state"] = "overrun_alert"
+                        toner["unregistered_refill_suspected"] = True
+                    elif str(ov_entry.get("mode") or "") == "auto_frozen_chip":
+                        toner["sensor_state"] = "frozen_chip"
+                    elif ev.get("chip_quarantined"):
+                        toner.setdefault("sensor_state", "chip_quarantined")
+                        if toner.get("sensor_state") == "healthy":
+                            toner["sensor_state"] = "chip_quarantined"
+                    toner["chip_quarantined"] = bool(ev.get("chip_quarantined"))
+                    toner["overrun_pages"] = max(int(toner.get("overrun_pages") or 0), int(ev.get("overrun_pages") or 0))
+                    if toner.get("frozen_chip_level") is None:
+                        raw_cand = toner.get("raw_level", ov_entry.get("chip_level_at_reset"))
+                        if isinstance(raw_cand, (int, float)) and 0 <= int(raw_cand) <= 100:
+                            toner["frozen_chip_level"] = int(raw_cand)
+                    if not toner.get("last_reset_reason") and ov_entry.get("reset_reason") in ("empty", "dirty"):
+                        toner["last_reset_reason"] = ov_entry.get("reset_reason")
+            enriched_toners[color] = toner
+        printer_data["toners"] = enriched_toners
     return printer_data
 
 
@@ -122,7 +215,17 @@ def api_printers():
                 "community": p.get("community", "public"),
                 "online": None, "last_poll": None
             })
-    snap = [_attach_yield_metadata(d) for d in snap]
+    preloaded_states = {}
+    try:
+        from core.yield_engine import get_yield_status
+        for row in get_yield_status():
+            r_ip = row.get("printer_ip")
+            r_color = str(row.get("color") or "").lower()
+            if r_ip and r_color:
+                preloaded_states.setdefault(r_ip, {})[r_color] = row
+    except Exception:
+        preloaded_states = {}
+    snap = [_attach_yield_metadata(d, preloaded_states=preloaded_states) for d in snap]
     return jsonify({"printers": snap, "meta": {
         "total": len(cfg),
         "online": sum(1 for d in snap if d.get("online")),
@@ -545,9 +648,23 @@ def toner_reset(ip):
         if new_level < 0 or new_level > 100:
             return jsonify({"error": "new_level must be between 0 and 100"}), 400
 
+        raw_reason = data.get('reason', data.get('replacement_reason'))
+        reason_norm = None
+        if raw_reason is not None and str(raw_reason).strip() != '':
+            r_txt = str(raw_reason).strip().lower()
+            if r_txt == 'auto':
+                reason_norm = None
+            elif r_txt in ('empty', 'depleted', 'low_toner', 'faded'):
+                reason_norm = 'empty'
+            elif r_txt in ('dirty', 'defect', 'streaks', 'smudge', 'drum', 'preventive', 'partial'):
+                reason_norm = 'dirty'
+            else:
+                return jsonify({"error": "invalid reason (expected 'empty' or 'dirty')"}), 400
+
         warning_threshold = TONER_ALERT_THRESHOLDS.get('warning', 15)
         critical_threshold = TONER_ALERT_THRESHOLDS.get('critical', 5)
         toner_alert_codes = set()
+        raw_chip_before_reset = None
 
         with store.data_lock:
             printer = store.printer_data.get(ip)
@@ -556,6 +673,7 @@ def toner_reset(ip):
             toners = printer.get('toners')
             if not isinstance(toners, dict) or color not in toners:
                 return jsonify({"error": "color not available"}), 400
+            raw_chip_before_reset = (toners.get(color) or {}).get('raw_level')
             toners[color]['level'] = new_level
             if new_level == 0:
                 status = 'empty'
@@ -566,6 +684,13 @@ def toner_reset(ip):
             else:
                 status = 'ok'
             toners[color]['status'] = status
+            toners[color]['pages_after_zero'] = 0
+            toners[color]['overrun_pages'] = 0
+            toners[color]['unregistered_refill_suspected'] = False
+            toners[color]['sensor_state'] = 'chip_quarantined'
+            toners[color]['chip_quarantined'] = True
+            if reason_norm:
+                toners[color]['last_reset_reason'] = reason_norm
 
             if isinstance(printer.get('counters'), dict):
                 printer['counters']['pages_since_last_reset'] = 0
@@ -577,6 +702,7 @@ def toner_reset(ip):
                     for toner_color, toner_data in toners.items()
                 }
                 toner_alert_code_strs = {str(code) for code in toner_alert_codes}
+                toner_alert_code_strs.add(f"toner:{color}")
                 printer['alerts'] = [
                     alert for alert in (printer.get('alerts') or [])
                     if str(alert.get('code')) not in toner_alert_code_strs
@@ -589,13 +715,15 @@ def toner_reset(ip):
         current_black_white = counters.get('black_white')
 
         learned_yield = prev.get('yield_per_page', 2000)
-        if prev.get('force_estimate') and prev.get('override_start_total') is not None:
+        if reason_norm != 'dirty' and prev.get('force_estimate') and prev.get('override_start_total') is not None:
             try:
                 pages_since_last_override = int(current_total) - int(prev.get('override_start_total'))
-                consumed_pct = int(prev.get('override_start_toner', 100) or 100) - int(prev.get('toner_level') or 0)
+                consumed_pct = int(prev.get('override_start_toner', 100) or 100) - (
+                    0 if reason_norm == 'empty' else int(prev.get('toner_level') or 0)
+                )
                 if pages_since_last_override > 0 and consumed_pct > 0:
                     estimated_yield = int(round(pages_since_last_override * 100.0 / consumed_pct))
-                    if 300 <= estimated_yield <= 20000:
+                    if 300 <= estimated_yield <= 600000:
                         current_yield = int(prev.get('yield_per_page', 2000) or 2000)
                         if current_yield == 2000:
                             learned_yield = estimated_yield
@@ -608,6 +736,40 @@ def toner_reset(ip):
             except Exception as exc:
                 log.exception("manual toner reset yield learning failed for %s: %s", ip, exc)
 
+        # Register manual refill in Yield Engine first so per-color cycle_learn/catalog yield
+        # is immediately reflected in both toner_overrides[color] and API/UI state.
+        refill_meta = {}
+        try:
+            from core.yield_engine import register_manual_refill
+            device_info = printer.get('device') if isinstance(printer.get('device'), dict) else {}
+            toner_info = toners.get(color) if isinstance(toners, dict) else {}
+            refill_meta = register_manual_refill(
+                ip=ip,
+                color=color,
+                printer_model=device_info.get('model') or 'Unknown',
+                cartridge_name=(toner_info or {}).get('name') or color,
+                new_level=new_level,
+                counters={
+                    'total': current_total,
+                    'full_color': current_full_color,
+                    'black_white': current_black_white,
+                },
+                device_type=printer.get('device_type', 'unknown'),
+                replacement_reason=reason_norm,
+                quarantine_chip=True,
+            ) or {}
+        except Exception as exc:
+            log.exception('yield_engine manual refill registration failed for %s/%s: %s', ip, color, exc)
+
+        color_yield = int(refill_meta.get('yield_per_page') or (toners.get(color) or {}).get('capacity_pages') or learned_yield or 2000)
+        if color == 'black' and refill_meta.get('yield_per_page'):
+            learned_yield = color_yield
+        if isinstance(toners, dict) and isinstance(toners.get(color), dict) and refill_meta:
+            toners[color]['capacity_pages'] = color_yield
+            toners[color]['yield_per_page'] = color_yield
+            toners[color]['capacity_source'] = refill_meta.get('yield_source') or toners[color].get('capacity_source', 'default')
+            toners[color]['yield_confidence'] = refill_meta.get('confidence') or toners[color].get('yield_confidence', 'low')
+
         toner_alert_code_strs = {str(code) for code in toner_alert_codes}
         if new_level > warning_threshold:
             cleared_alert_codes = [
@@ -618,14 +780,25 @@ def toner_reset(ip):
             cleared_alert_codes = prev.get('alert_codes', [])
 
         # ✅ Bug fix "manual value return to default after a few seconds":
-        # Each color has its own independent override slot (toner_overrides). reset one
-        # Another color override will not destroy the previous colors and the next poll value
-        # It continues to display all the reset colors from the printed pages.
+        # Each color has its own independent override slot (toner_overrides), including its own per-color yield_per_page
+        # and chip quarantine metadata (protecting Yield Engine when refilled without installing a new chip).
         from core.collectors.base import _normalize_overrides as _norm_ov
         overrides = _norm_ov(prev)
+        chip_aligned = (
+            raw_chip_before_reset is not None
+            and isinstance(raw_chip_before_reset, (int, float))
+            and 0 <= int(raw_chip_before_reset) <= 100
+            and abs(int(raw_chip_before_reset) - new_level) <= 2
+        )
         overrides[color] = {
             'start_total': current_total,
             'start_toner': new_level,
+            'yield_per_page': color_yield,
+            'mode': 'manual_reset',
+            'reset_reason': reason_norm or 'auto',
+            'chip_level_at_reset': raw_chip_before_reset,
+            'chip_aligned_at_reset': bool(chip_aligned),
+            'chip_quarantined': True,
         }
 
         new_prev = {
@@ -650,42 +823,32 @@ def toner_reset(ip):
         }
         store._prev.set(ip, new_prev)
 
-        # The new Yield Engine must also record the manual reset as a valid per-cartridge anchor;
-        # Otherwise, if the device does not produce raw toner, the new layer will remain unaware of the user's reset.
-        try:
-            from core.yield_engine import register_manual_refill
-            device_info = printer.get('device') if isinstance(printer.get('device'), dict) else {}
-            toner_info = toners.get(color) if isinstance(toners, dict) else {}
-            register_manual_refill(
-                ip=ip,
-                color=color,
-                printer_model=device_info.get('model') or 'Unknown',
-                cartridge_name=(toner_info or {}).get('name') or color,
-                new_level=new_level,
-                counters={
-                    'total': current_total,
-                    'full_color': current_full_color,
-                    'black_white': current_black_white,
-                },
-                device_type=printer.get('device_type', 'unknown'),
-            )
-        except Exception as exc:
-            log.exception('yield_engine manual refill registration failed for %s/%s: %s', ip, color, exc)
-
         username = current_user.username if current_user.is_authenticated else 'سیستم'
+        reason_fa_map = {
+            'empty': 'خالی شدن تونر',
+            'dirty': 'کثیف بودن چاپ / خرابی قطعات کارتریج',
+        }
+        reason_suffix = f" (علت: {reason_fa_map[reason_norm]})" if reason_norm in reason_fa_map else ""
         add_event(ip, 'REFILL', {
-            'message': f'تنظیم دستی: کارتریج {color} به {new_level}% تنظیم شد',
+            'message': f'تنظیم دستی: کارتریج {color} به {new_level}% تنظیم شد{reason_suffix}',
             'severity': 'info',
             'username': username,
             'manual_reset': True,
             'auto_detected': False,
             'reset_color': color,
+            'replacement_reason': reason_norm or 'auto',
             'set_level': new_level,
             'total_at_reset': current_total,
-            'yield_per_page_at_reset': learned_yield,
+            'yield_per_page_at_reset': color_yield,
+            'chip_level_at_reset': raw_chip_before_reset,
         })
 
-        return jsonify({'status': 'ok'})
+        return jsonify({
+            'status': 'ok',
+            'reason': reason_norm or 'auto',
+            'yield_per_page': color_yield,
+            'chip_quarantined': True,
+        })
     except Exception:
         log.exception('toner_reset failed for %s', ip)
         return jsonify({"error": "internal server error"}), 500

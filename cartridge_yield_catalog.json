@@ -982,6 +982,1472 @@
    "yield_per_page_local": 5200,
    "source_url": "https://www.brother.com",
    "source_verified": "2026-08-11"
+  },
+  {
+   "id": "hp-508a-cf361a-cf031a-cyan",
+   "vendor": "HP",
+   "cartridge": "HP 508A / 646A Cyan (CF361A / CF031A)",
+   "color": "cyan",
+   "yield_per_page": 5000,
+   "confidence": "medium",
+   "source_note": "HP 508A CF361A = 5,000 ISO/IEC 19798 (M552/M553/M577); local mixed baseline ~65%.",
+   "match": {
+    "color": "cyan",
+    "cartridge_contains": [
+     "cf361a",
+     "cf031a",
+     "508a"
+    ]
+   },
+   "yield_per_page_oem": 5000,
+   "yield_per_page_compatible": 3750,
+   "yield_per_page_refill": 3000,
+   "yield_per_page_local": 3250
+  },
+  {
+   "id": "hp-508a-cf362a-cf032a-yellow",
+   "vendor": "HP",
+   "cartridge": "HP 508A / 646A Yellow (CF362A / CF032A)",
+   "color": "yellow",
+   "yield_per_page": 5000,
+   "confidence": "medium",
+   "source_note": "HP 508A CF362A = 5,000 ISO/IEC 19798 (M552/M553/M577); local mixed baseline ~65%.",
+   "match": {
+    "color": "yellow",
+    "cartridge_contains": [
+     "cf362a",
+     "cf032a",
+     "508a"
+    ]
+   },
+   "yield_per_page_oem": 5000,
+   "yield_per_page_compatible": 3750,
+   "yield_per_page_refill": 3000,
+   "yield_per_page_local": 3250
+  },
+  {
+   "id": "hp-508a-cf363a-cf033a-magenta",
+   "vendor": "HP",
+   "cartridge": "HP 508A / 646A Magenta (CF363A / CF033A)",
+   "color": "magenta",
+   "yield_per_page": 5000,
+   "confidence": "medium",
+   "source_note": "HP 508A CF363A = 5,000 ISO/IEC 19798 (M552/M553/M577); local mixed baseline ~65%.",
+   "match": {
+    "color": "magenta",
+    "cartridge_contains": [
+     "cf363a",
+     "cf033a",
+     "508a"
+    ]
+   },
+   "yield_per_page_oem": 5000,
+   "yield_per_page_compatible": 3750,
+   "yield_per_page_refill": 3000,
+   "yield_per_page_local": 3250
+  },
+  {
+   "id": "hp-508x-cf360x-black",
+   "vendor": "HP",
+   "cartridge": "HP 508X Black (CF360X)",
+   "color": "black",
+   "yield_per_page": 12500,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "cartridge_contains": [
+     "cf360x",
+     "508x"
+    ]
+   },
+   "yield_per_page_oem": 12500,
+   "yield_per_page_compatible": 9400,
+   "yield_per_page_refill": 7500,
+   "yield_per_page_local": 8100
+  },
+  {
+   "id": "hp-508x-cf361x-cyan",
+   "vendor": "HP",
+   "cartridge": "HP 508X Cyan (CF361X)",
+   "color": "cyan",
+   "yield_per_page": 9500,
+   "confidence": "medium",
+   "match": {
+    "color": "cyan",
+    "cartridge_contains": [
+     "cf361x",
+     "508x"
+    ]
+   },
+   "yield_per_page_oem": 9500,
+   "yield_per_page_compatible": 7100,
+   "yield_per_page_refill": 5700,
+   "yield_per_page_local": 6200
+  },
+  {
+   "id": "hp-508x-cf362x-yellow",
+   "vendor": "HP",
+   "cartridge": "HP 508X Yellow (CF362X)",
+   "color": "yellow",
+   "yield_per_page": 9500,
+   "confidence": "medium",
+   "match": {
+    "color": "yellow",
+    "cartridge_contains": [
+     "cf362x",
+     "508x"
+    ]
+   },
+   "yield_per_page_oem": 9500,
+   "yield_per_page_compatible": 7100,
+   "yield_per_page_refill": 5700,
+   "yield_per_page_local": 6200
+  },
+  {
+   "id": "hp-508x-cf363x-magenta",
+   "vendor": "HP",
+   "cartridge": "HP 508X Magenta (CF363X)",
+   "color": "magenta",
+   "yield_per_page": 9500,
+   "confidence": "medium",
+   "match": {
+    "color": "magenta",
+    "cartridge_contains": [
+     "cf363x",
+     "508x"
+    ]
+   },
+   "yield_per_page_oem": 9500,
+   "yield_per_page_compatible": 7100,
+   "yield_per_page_refill": 5700,
+   "yield_per_page_local": 6200
+  },
+  {
+   "id": "hp-cf226a-26a-black",
+   "vendor": "HP",
+   "cartridge": "HP 26A (CF226A)",
+   "color": "black",
+   "yield_per_page": 3100,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "cartridge_contains": [
+     "cf226a",
+     "26a"
+    ]
+   },
+   "yield_per_page_oem": 3100,
+   "yield_per_page_compatible": 2300,
+   "yield_per_page_refill": 1860,
+   "yield_per_page_local": 2000
+  },
+  {
+   "id": "hp-cf226x-26x-black",
+   "vendor": "HP",
+   "cartridge": "HP 26X (CF226X)",
+   "color": "black",
+   "yield_per_page": 9000,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "cartridge_contains": [
+     "cf226x",
+     "26x"
+    ]
+   },
+   "yield_per_page_oem": 9000,
+   "yield_per_page_compatible": 6750,
+   "yield_per_page_refill": 5400,
+   "yield_per_page_local": 5850
+  },
+  {
+   "id": "hp-cf258a-cf259a-58a-59a-black",
+   "vendor": "HP",
+   "cartridge": "HP 58A / 59A (CF258A / CF259A)",
+   "color": "black",
+   "yield_per_page": 3000,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "cartridge_contains": [
+     "cf258a",
+     "cf259a",
+     "58a",
+     "59a"
+    ]
+   },
+   "yield_per_page_oem": 3000,
+   "yield_per_page_compatible": 2250,
+   "yield_per_page_refill": 1800,
+   "yield_per_page_local": 1950
+  },
+  {
+   "id": "hp-cf258x-cf259x-58x-59x-black",
+   "vendor": "HP",
+   "cartridge": "HP 58X / 59X (CF258X / CF259X)",
+   "color": "black",
+   "yield_per_page": 10000,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "cartridge_contains": [
+     "cf258x",
+     "cf259x",
+     "58x",
+     "59x"
+    ]
+   },
+   "yield_per_page_oem": 10000,
+   "yield_per_page_compatible": 7500,
+   "yield_per_page_refill": 6000,
+   "yield_per_page_local": 6500
+  },
+  {
+   "id": "hp-ce285a-85a-black",
+   "vendor": "HP",
+   "cartridge": "HP 85A (CE285A)",
+   "color": "black",
+   "yield_per_page": 1600,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "cartridge_contains": [
+     "ce285a",
+     "85a"
+    ]
+   },
+   "yield_per_page_oem": 1600,
+   "yield_per_page_compatible": 1200,
+   "yield_per_page_refill": 960,
+   "yield_per_page_local": 1050
+  },
+  {
+   "id": "hp-ce278a-78a-black",
+   "vendor": "HP",
+   "cartridge": "HP 78A (CE278A)",
+   "color": "black",
+   "yield_per_page": 2100,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "cartridge_contains": [
+     "ce278a",
+     "78a"
+    ]
+   },
+   "yield_per_page_oem": 2100,
+   "yield_per_page_compatible": 1575,
+   "yield_per_page_refill": 1260,
+   "yield_per_page_local": 1365
+  },
+  {
+   "id": "hp-cf280a-80a-black",
+   "vendor": "HP",
+   "cartridge": "HP 80A (CF280A)",
+   "color": "black",
+   "yield_per_page": 2700,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "cartridge_contains": [
+     "cf280a",
+     "80a"
+    ]
+   },
+   "yield_per_page_oem": 2700,
+   "yield_per_page_compatible": 2025,
+   "yield_per_page_refill": 1620,
+   "yield_per_page_local": 1755
+  },
+  {
+   "id": "hp-cf280x-80x-black",
+   "vendor": "HP",
+   "cartridge": "HP 80X (CF280X)",
+   "color": "black",
+   "yield_per_page": 6900,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "cartridge_contains": [
+     "cf280x",
+     "80x"
+    ]
+   },
+   "yield_per_page_oem": 6900,
+   "yield_per_page_compatible": 5175,
+   "yield_per_page_refill": 4140,
+   "yield_per_page_local": 4500
+  },
+  {
+   "id": "hp-ce255x-55x-black",
+   "vendor": "HP",
+   "cartridge": "HP 55X (CE255X)",
+   "color": "black",
+   "yield_per_page": 12500,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "cartridge_contains": [
+     "ce255x",
+     "55x"
+    ]
+   },
+   "yield_per_page_oem": 12500,
+   "yield_per_page_compatible": 9400,
+   "yield_per_page_refill": 7500,
+   "yield_per_page_local": 8100
+  },
+  {
+   "id": "toshiba-estudio-2515ac-5015ac-black",
+   "vendor": "Toshiba",
+   "cartridge": "Toshiba T-FC415 Black (e-STUDIO 2515AC/3015AC/3515AC/4515AC/5015AC)",
+   "color": "black",
+   "yield_per_page": 38400,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "model_contains": [
+     "e-studio2515ac",
+     "e-studio3015ac",
+     "e-studio3515ac",
+     "e-studio4515ac",
+     "e-studio5015ac",
+     "e-studio 2515ac",
+     "e-studio 3015ac",
+     "e-studio 3515ac",
+     "e-studio 4515ac",
+     "e-studio 5015ac",
+     "2515ac",
+     "3015ac",
+     "3515ac",
+     "4515ac",
+     "5015ac"
+    ]
+   },
+   "yield_per_page_oem": 38400,
+   "yield_per_page_compatible": 28800,
+   "yield_per_page_refill": 23000,
+   "yield_per_page_local": 25000
+  },
+  {
+   "id": "toshiba-estudio-2515ac-5015ac-cyan",
+   "vendor": "Toshiba",
+   "cartridge": "Toshiba T-FC415 Cyan (e-STUDIO 2515AC/3015AC/3515AC/4515AC/5015AC)",
+   "color": "cyan",
+   "yield_per_page": 33600,
+   "confidence": "medium",
+   "match": {
+    "color": "cyan",
+    "model_contains": [
+     "e-studio2515ac",
+     "e-studio3015ac",
+     "e-studio3515ac",
+     "e-studio4515ac",
+     "e-studio5015ac",
+     "e-studio 2515ac",
+     "e-studio 3015ac",
+     "e-studio 3515ac",
+     "e-studio 4515ac",
+     "e-studio 5015ac",
+     "2515ac",
+     "3015ac",
+     "3515ac",
+     "4515ac",
+     "5015ac"
+    ]
+   },
+   "yield_per_page_oem": 33600,
+   "yield_per_page_compatible": 25200,
+   "yield_per_page_refill": 20200,
+   "yield_per_page_local": 21800
+  },
+  {
+   "id": "toshiba-estudio-2515ac-5015ac-magenta",
+   "vendor": "Toshiba",
+   "cartridge": "Toshiba T-FC415 Magenta (e-STUDIO 2515AC/3015AC/3515AC/4515AC/5015AC)",
+   "color": "magenta",
+   "yield_per_page": 33600,
+   "confidence": "medium",
+   "match": {
+    "color": "magenta",
+    "model_contains": [
+     "e-studio2515ac",
+     "e-studio3015ac",
+     "e-studio3515ac",
+     "e-studio4515ac",
+     "e-studio5015ac",
+     "e-studio 2515ac",
+     "e-studio 3015ac",
+     "e-studio 3515ac",
+     "e-studio 4515ac",
+     "e-studio 5015ac",
+     "2515ac",
+     "3015ac",
+     "3515ac",
+     "4515ac",
+     "5015ac"
+    ]
+   },
+   "yield_per_page_oem": 33600,
+   "yield_per_page_compatible": 25200,
+   "yield_per_page_refill": 20200,
+   "yield_per_page_local": 21800
+  },
+  {
+   "id": "toshiba-estudio-2515ac-5015ac-yellow",
+   "vendor": "Toshiba",
+   "cartridge": "Toshiba T-FC415 Yellow (e-STUDIO 2515AC/3015AC/3515AC/4515AC/5015AC)",
+   "color": "yellow",
+   "yield_per_page": 33600,
+   "confidence": "medium",
+   "match": {
+    "color": "yellow",
+    "model_contains": [
+     "e-studio2515ac",
+     "e-studio3015ac",
+     "e-studio3515ac",
+     "e-studio4515ac",
+     "e-studio5015ac",
+     "e-studio 2515ac",
+     "e-studio 3015ac",
+     "e-studio 3515ac",
+     "e-studio 4515ac",
+     "e-studio 5015ac",
+     "2515ac",
+     "3015ac",
+     "3515ac",
+     "4515ac",
+     "5015ac"
+    ]
+   },
+   "yield_per_page_oem": 33600,
+   "yield_per_page_compatible": 25200,
+   "yield_per_page_refill": 20200,
+   "yield_per_page_local": 21800
+  },
+  {
+   "id": "toshiba-tfc415-cartridge-black",
+   "vendor": "Toshiba",
+   "cartridge": "Toshiba T-FC415 Black",
+   "color": "black",
+   "yield_per_page": 38400,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "cartridge_contains": [
+     "t-fc415",
+     "tfc415"
+    ]
+   },
+   "yield_per_page_oem": 38400,
+   "yield_per_page_compatible": 28800,
+   "yield_per_page_refill": 23000,
+   "yield_per_page_local": 25000
+  },
+  {
+   "id": "toshiba-tfc415-cartridge-cyan",
+   "vendor": "Toshiba",
+   "cartridge": "Toshiba T-FC415 Cyan",
+   "color": "cyan",
+   "yield_per_page": 33600,
+   "confidence": "medium",
+   "match": {
+    "color": "cyan",
+    "cartridge_contains": [
+     "t-fc415",
+     "tfc415"
+    ]
+   },
+   "yield_per_page_oem": 33600,
+   "yield_per_page_compatible": 25200,
+   "yield_per_page_refill": 20200,
+   "yield_per_page_local": 21800
+  },
+  {
+   "id": "toshiba-tfc415-cartridge-magenta",
+   "vendor": "Toshiba",
+   "cartridge": "Toshiba T-FC415 Magenta",
+   "color": "magenta",
+   "yield_per_page": 33600,
+   "confidence": "medium",
+   "match": {
+    "color": "magenta",
+    "cartridge_contains": [
+     "t-fc415",
+     "tfc415"
+    ]
+   },
+   "yield_per_page_oem": 33600,
+   "yield_per_page_compatible": 25200,
+   "yield_per_page_refill": 20200,
+   "yield_per_page_local": 21800
+  },
+  {
+   "id": "toshiba-tfc415-cartridge-yellow",
+   "vendor": "Toshiba",
+   "cartridge": "Toshiba T-FC415 Yellow",
+   "color": "yellow",
+   "yield_per_page": 33600,
+   "confidence": "medium",
+   "match": {
+    "color": "yellow",
+    "cartridge_contains": [
+     "t-fc415",
+     "tfc415"
+    ]
+   },
+   "yield_per_page_oem": 33600,
+   "yield_per_page_compatible": 25200,
+   "yield_per_page_refill": 20200,
+   "yield_per_page_local": 21800
+  },
+  {
+   "id": "toshiba-estudio-3005ac-5005ac-2525ac-6525ac-black",
+   "vendor": "Toshiba",
+   "cartridge": "Toshiba T-FC505 / T-FC425 Black",
+   "color": "black",
+   "yield_per_page": 38400,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "model_contains": [
+     "3005ac",
+     "3505ac",
+     "4505ac",
+     "5005ac",
+     "2525ac",
+     "3025ac",
+     "3525ac",
+     "4525ac",
+     "5525ac",
+     "6525ac"
+    ]
+   },
+   "yield_per_page_oem": 38400,
+   "yield_per_page_compatible": 28800,
+   "yield_per_page_refill": 23000,
+   "yield_per_page_local": 25000
+  },
+  {
+   "id": "toshiba-estudio-3005ac-5005ac-2525ac-6525ac-cyan",
+   "vendor": "Toshiba",
+   "cartridge": "Toshiba T-FC505 / T-FC425 Cyan",
+   "color": "cyan",
+   "yield_per_page": 33600,
+   "confidence": "medium",
+   "match": {
+    "color": "cyan",
+    "model_contains": [
+     "3005ac",
+     "3505ac",
+     "4505ac",
+     "5005ac",
+     "2525ac",
+     "3025ac",
+     "3525ac",
+     "4525ac",
+     "5525ac",
+     "6525ac"
+    ]
+   },
+   "yield_per_page_oem": 33600,
+   "yield_per_page_compatible": 25200,
+   "yield_per_page_refill": 20200,
+   "yield_per_page_local": 21800
+  },
+  {
+   "id": "toshiba-estudio-3005ac-5005ac-2525ac-6525ac-magenta",
+   "vendor": "Toshiba",
+   "cartridge": "Toshiba T-FC505 / T-FC425 Magenta",
+   "color": "magenta",
+   "yield_per_page": 33600,
+   "confidence": "medium",
+   "match": {
+    "color": "magenta",
+    "model_contains": [
+     "3005ac",
+     "3505ac",
+     "4505ac",
+     "5005ac",
+     "2525ac",
+     "3025ac",
+     "3525ac",
+     "4525ac",
+     "5525ac",
+     "6525ac"
+    ]
+   },
+   "yield_per_page_oem": 33600,
+   "yield_per_page_compatible": 25200,
+   "yield_per_page_refill": 20200,
+   "yield_per_page_local": 21800
+  },
+  {
+   "id": "toshiba-estudio-3005ac-5005ac-2525ac-6525ac-yellow",
+   "vendor": "Toshiba",
+   "cartridge": "Toshiba T-FC505 / T-FC425 Yellow",
+   "color": "yellow",
+   "yield_per_page": 33600,
+   "confidence": "medium",
+   "match": {
+    "color": "yellow",
+    "model_contains": [
+     "3005ac",
+     "3505ac",
+     "4505ac",
+     "5005ac",
+     "2525ac",
+     "3025ac",
+     "3525ac",
+     "4525ac",
+     "5525ac",
+     "6525ac"
+    ]
+   },
+   "yield_per_page_oem": 33600,
+   "yield_per_page_compatible": 25200,
+   "yield_per_page_refill": 20200,
+   "yield_per_page_local": 21800
+  },
+  {
+   "id": "toshiba-estudio-2008a-5018a-black",
+   "vendor": "Toshiba",
+   "cartridge": "Toshiba T-3008 / T-5018 Black",
+   "color": "black",
+   "yield_per_page": 43900,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "model_contains": [
+     "2008a",
+     "2508a",
+     "3008a",
+     "3508a",
+     "4508a",
+     "5008a",
+     "2518a",
+     "3018a",
+     "3518a",
+     "4518a",
+     "5018a"
+    ]
+   },
+   "yield_per_page_oem": 43900,
+   "yield_per_page_compatible": 32900,
+   "yield_per_page_refill": 26300,
+   "yield_per_page_local": 28500
+  },
+  {
+   "id": "toshiba-estudio-5508a-8518a-high-volume-black",
+   "vendor": "Toshiba",
+   "cartridge": "Toshiba T-6518 / T-8518 High-Capacity Black (>100k)",
+   "color": "black",
+   "yield_per_page": 106600,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "model_contains": [
+     "5508a",
+     "6508a",
+     "7508a",
+     "8508a",
+     "5518a",
+     "6518a",
+     "7518a",
+     "8518a"
+    ]
+   },
+   "yield_per_page_oem": 106600,
+   "yield_per_page_compatible": 80000,
+   "yield_per_page_refill": 64000,
+   "yield_per_page_local": 69300
+  },
+  {
+   "id": "brother-tn2430-tn2420-tn2450-tn760-black",
+   "vendor": "Brother",
+   "cartridge": "Brother TN-2430 / TN-2420 / TN-2450 / TN-760",
+   "color": "black",
+   "yield_per_page": 3000,
+   "confidence": "medium",
+   "source_note": "Brother TN-2430/TN-2420/TN-2450/TN-760 = 3,000 ISO/IEC 19752; local mixed baseline ~65%.",
+   "match": {
+    "color": "black",
+    "cartridge_contains": [
+     "tn-2430",
+     "tn2430",
+     "tn-2420",
+     "tn2420",
+     "tn-2450",
+     "tn2450",
+     "tn-760",
+     "tn760"
+    ]
+   },
+   "yield_per_page_oem": 3000,
+   "yield_per_page_compatible": 2250,
+   "yield_per_page_refill": 1800,
+   "yield_per_page_local": 1950
+  },
+  {
+   "id": "brother-tn2410-tn730-black",
+   "vendor": "Brother",
+   "cartridge": "Brother TN-2410 / TN-730",
+   "color": "black",
+   "yield_per_page": 1200,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "cartridge_contains": [
+     "tn-2410",
+     "tn2410",
+     "tn-730",
+     "tn730"
+    ]
+   },
+   "yield_per_page_oem": 1200,
+   "yield_per_page_compatible": 900,
+   "yield_per_page_refill": 720,
+   "yield_per_page_local": 800
+  },
+  {
+   "id": "brother-dr2400-dr2425-dr730-drum",
+   "vendor": "Brother",
+   "cartridge": "Brother DR-2400 / DR-2425 / DR-730 Drum",
+   "color": "drum",
+   "yield_per_page": 12000,
+   "confidence": "medium",
+   "match": {
+    "color": "drum",
+    "cartridge_contains": [
+     "dr-2400",
+     "dr2400",
+     "dr-2425",
+     "dr-730",
+     "dr-2300",
+     "dr-630"
+    ]
+   },
+   "yield_per_page_oem": 12000,
+   "yield_per_page_compatible": 10000,
+   "yield_per_page_refill": 9000,
+   "yield_per_page_local": 9600
+  },
+  {
+   "id": "brother-tn2320-tn2350-tn660-black",
+   "vendor": "Brother",
+   "cartridge": "Brother TN-2320 / TN-2350 / TN-660",
+   "color": "black",
+   "yield_per_page": 2600,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "cartridge_contains": [
+     "tn-2320",
+     "tn-2350",
+     "tn-660"
+    ]
+   },
+   "yield_per_page_oem": 2600,
+   "yield_per_page_compatible": 1950,
+   "yield_per_page_refill": 1560,
+   "yield_per_page_local": 1700
+  },
+  {
+   "id": "brother-tn3480-tn850-black",
+   "vendor": "Brother",
+   "cartridge": "Brother TN-3480 / TN-850",
+   "color": "black",
+   "yield_per_page": 8000,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "cartridge_contains": [
+     "tn-3480",
+     "tn-850"
+    ]
+   },
+   "yield_per_page_oem": 8000,
+   "yield_per_page_compatible": 6000,
+   "yield_per_page_refill": 4800,
+   "yield_per_page_local": 5200
+  },
+  {
+   "id": "brother-tn247-color-black",
+   "vendor": "Brother",
+   "cartridge": "Brother TN-247BK",
+   "color": "black",
+   "yield_per_page": 3000,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "cartridge_contains": [
+     "tn-247",
+     "tn247"
+    ]
+   },
+   "yield_per_page_oem": 3000,
+   "yield_per_page_compatible": 2250,
+   "yield_per_page_refill": 1800,
+   "yield_per_page_local": 1950
+  },
+  {
+   "id": "brother-tn247-color-cyan",
+   "vendor": "Brother",
+   "cartridge": "Brother TN-247C",
+   "color": "cyan",
+   "yield_per_page": 2300,
+   "confidence": "medium",
+   "match": {
+    "color": "cyan",
+    "cartridge_contains": [
+     "tn-247",
+     "tn247"
+    ]
+   },
+   "yield_per_page_oem": 2300,
+   "yield_per_page_compatible": 1725,
+   "yield_per_page_refill": 1380,
+   "yield_per_page_local": 1500
+  },
+  {
+   "id": "brother-tn247-color-magenta",
+   "vendor": "Brother",
+   "cartridge": "Brother TN-247M",
+   "color": "magenta",
+   "yield_per_page": 2300,
+   "confidence": "medium",
+   "match": {
+    "color": "magenta",
+    "cartridge_contains": [
+     "tn-247",
+     "tn247"
+    ]
+   },
+   "yield_per_page_oem": 2300,
+   "yield_per_page_compatible": 1725,
+   "yield_per_page_refill": 1380,
+   "yield_per_page_local": 1500
+  },
+  {
+   "id": "brother-tn247-color-yellow",
+   "vendor": "Brother",
+   "cartridge": "Brother TN-247Y",
+   "color": "yellow",
+   "yield_per_page": 2300,
+   "confidence": "medium",
+   "match": {
+    "color": "yellow",
+    "cartridge_contains": [
+     "tn-247",
+     "tn247"
+    ]
+   },
+   "yield_per_page_oem": 2300,
+   "yield_per_page_compatible": 1725,
+   "yield_per_page_refill": 1380,
+   "yield_per_page_local": 1500
+  },
+  {
+   "id": "canon-cartridge-725-325-925-black",
+   "vendor": "Canon",
+   "cartridge": "Canon Cartridge 725 / 325 / 925",
+   "color": "black",
+   "yield_per_page": 1600,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "cartridge_contains": [
+     "cartridge 725",
+     "cartridge 325",
+     "cartridge 925",
+     "crg-725",
+     "crg-325"
+    ]
+   },
+   "yield_per_page_oem": 1600,
+   "yield_per_page_compatible": 1200,
+   "yield_per_page_refill": 960,
+   "yield_per_page_local": 1050
+  },
+  {
+   "id": "canon-cartridge-728-328-black",
+   "vendor": "Canon",
+   "cartridge": "Canon Cartridge 728 / 328",
+   "color": "black",
+   "yield_per_page": 2100,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "cartridge_contains": [
+     "cartridge 728",
+     "cartridge 328",
+     "crg-728",
+     "crg-328"
+    ]
+   },
+   "yield_per_page_oem": 2100,
+   "yield_per_page_compatible": 1575,
+   "yield_per_page_refill": 1260,
+   "yield_per_page_local": 1365
+  },
+  {
+   "id": "canon-cartridge-719-519-black",
+   "vendor": "Canon",
+   "cartridge": "Canon Cartridge 719 / 519",
+   "color": "black",
+   "yield_per_page": 2100,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "cartridge_contains": [
+     "cartridge 719",
+     "cartridge 519",
+     "crg-719",
+     "crg-519"
+    ]
+   },
+   "yield_per_page_oem": 2100,
+   "yield_per_page_compatible": 1575,
+   "yield_per_page_refill": 1260,
+   "yield_per_page_local": 1365
+  },
+  {
+   "id": "canon-cartridge-052-057-black",
+   "vendor": "Canon",
+   "cartridge": "Canon Cartridge 052 / 057",
+   "color": "black",
+   "yield_per_page": 3100,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "cartridge_contains": [
+     "cartridge 052",
+     "cartridge 057",
+     "crg-052",
+     "crg-057"
+    ]
+   },
+   "yield_per_page_oem": 3100,
+   "yield_per_page_compatible": 2325,
+   "yield_per_page_refill": 1860,
+   "yield_per_page_local": 2000
+  },
+  {
+   "id": "canon-cexv49-gpr53-npg67-black",
+   "vendor": "Canon",
+   "cartridge": "Canon C-EXV 49 / GPR-53 / NPG-67 Black",
+   "color": "black",
+   "yield_per_page": 36000,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "cartridge_contains": [
+     "c-exv 49",
+     "c-exv49",
+     "gpr-53",
+     "npg-67"
+    ]
+   },
+   "yield_per_page_oem": 36000,
+   "yield_per_page_compatible": 27000,
+   "yield_per_page_refill": 21600,
+   "yield_per_page_local": 23400
+  },
+  {
+   "id": "canon-cexv49-gpr53-npg67-cyan",
+   "vendor": "Canon",
+   "cartridge": "Canon C-EXV 49 / GPR-53 / NPG-67 Cyan",
+   "color": "cyan",
+   "yield_per_page": 19000,
+   "confidence": "medium",
+   "match": {
+    "color": "cyan",
+    "cartridge_contains": [
+     "c-exv 49",
+     "c-exv49",
+     "gpr-53",
+     "npg-67"
+    ]
+   },
+   "yield_per_page_oem": 19000,
+   "yield_per_page_compatible": 14250,
+   "yield_per_page_refill": 11400,
+   "yield_per_page_local": 12350
+  },
+  {
+   "id": "canon-cexv49-gpr53-npg67-magenta",
+   "vendor": "Canon",
+   "cartridge": "Canon C-EXV 49 / GPR-53 / NPG-67 Magenta",
+   "color": "magenta",
+   "yield_per_page": 19000,
+   "confidence": "medium",
+   "match": {
+    "color": "magenta",
+    "cartridge_contains": [
+     "c-exv 49",
+     "c-exv49",
+     "gpr-53",
+     "npg-67"
+    ]
+   },
+   "yield_per_page_oem": 19000,
+   "yield_per_page_compatible": 14250,
+   "yield_per_page_refill": 11400,
+   "yield_per_page_local": 12350
+  },
+  {
+   "id": "canon-cexv49-gpr53-npg67-yellow",
+   "vendor": "Canon",
+   "cartridge": "Canon C-EXV 49 / GPR-53 / NPG-67 Yellow",
+   "color": "yellow",
+   "yield_per_page": 19000,
+   "confidence": "medium",
+   "match": {
+    "color": "yellow",
+    "cartridge_contains": [
+     "c-exv 49",
+     "c-exv49",
+     "gpr-53",
+     "npg-67"
+    ]
+   },
+   "yield_per_page_oem": 19000,
+   "yield_per_page_compatible": 14250,
+   "yield_per_page_refill": 11400,
+   "yield_per_page_local": 12350
+  },
+  {
+   "id": "kyocera-tk1160-tk1170-ecosys-black",
+   "vendor": "Kyocera",
+   "cartridge": "Kyocera TK-1160 / TK-1170",
+   "color": "black",
+   "yield_per_page": 7200,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "cartridge_contains": [
+     "tk-1160",
+     "tk-1170",
+     "tk1160",
+     "tk1170"
+    ]
+   },
+   "yield_per_page_oem": 7200,
+   "yield_per_page_compatible": 5400,
+   "yield_per_page_refill": 4320,
+   "yield_per_page_local": 4680
+  },
+  {
+   "id": "kyocera-tk3160-tk3170-tk3190-black",
+   "vendor": "Kyocera",
+   "cartridge": "Kyocera TK-3160 / TK-3170 / TK-3190",
+   "color": "black",
+   "yield_per_page": 15500,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "cartridge_contains": [
+     "tk-3160",
+     "tk-3170",
+     "tk-3190"
+    ]
+   },
+   "yield_per_page_oem": 15500,
+   "yield_per_page_compatible": 11600,
+   "yield_per_page_refill": 9300,
+   "yield_per_page_local": 10100
+  },
+  {
+   "id": "kyocera-tk5240-color-black",
+   "vendor": "Kyocera",
+   "cartridge": "Kyocera TK-5240K",
+   "color": "black",
+   "yield_per_page": 4000,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "cartridge_contains": [
+     "tk-5240",
+     "tk5240"
+    ]
+   },
+   "yield_per_page_oem": 4000,
+   "yield_per_page_compatible": 3000,
+   "yield_per_page_refill": 2400,
+   "yield_per_page_local": 2600
+  },
+  {
+   "id": "kyocera-tk5240-color-cyan",
+   "vendor": "Kyocera",
+   "cartridge": "Kyocera TK-5240C",
+   "color": "cyan",
+   "yield_per_page": 3000,
+   "confidence": "medium",
+   "match": {
+    "color": "cyan",
+    "cartridge_contains": [
+     "tk-5240",
+     "tk5240"
+    ]
+   },
+   "yield_per_page_oem": 3000,
+   "yield_per_page_compatible": 2250,
+   "yield_per_page_refill": 1800,
+   "yield_per_page_local": 1950
+  },
+  {
+   "id": "kyocera-tk5240-color-magenta",
+   "vendor": "Kyocera",
+   "cartridge": "Kyocera TK-5240M",
+   "color": "magenta",
+   "yield_per_page": 3000,
+   "confidence": "medium",
+   "match": {
+    "color": "magenta",
+    "cartridge_contains": [
+     "tk-5240",
+     "tk5240"
+    ]
+   },
+   "yield_per_page_oem": 3000,
+   "yield_per_page_compatible": 2250,
+   "yield_per_page_refill": 1800,
+   "yield_per_page_local": 1950
+  },
+  {
+   "id": "kyocera-tk5240-color-yellow",
+   "vendor": "Kyocera",
+   "cartridge": "Kyocera TK-5240Y",
+   "color": "yellow",
+   "yield_per_page": 3000,
+   "confidence": "medium",
+   "match": {
+    "color": "yellow",
+    "cartridge_contains": [
+     "tk-5240",
+     "tk5240"
+    ]
+   },
+   "yield_per_page_oem": 3000,
+   "yield_per_page_compatible": 2250,
+   "yield_per_page_refill": 1800,
+   "yield_per_page_local": 1950
+  },
+  {
+   "id": "ricoh-mp2554-3054-3554-im2500-3500-black",
+   "vendor": "Ricoh",
+   "cartridge": "Ricoh MP 3554 / IM 3500 Black",
+   "color": "black",
+   "yield_per_page": 24000,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "model_contains": [
+     "mp 2554",
+     "mp 3054",
+     "mp 3554",
+     "mp 3055",
+     "im 2500",
+     "im 3000",
+     "im 3500"
+    ]
+   },
+   "yield_per_page_oem": 24000,
+   "yield_per_page_compatible": 18000,
+   "yield_per_page_refill": 14400,
+   "yield_per_page_local": 15600
+  },
+  {
+   "id": "ricoh-mpc3003-3504-imc3000-3500-black",
+   "vendor": "Ricoh",
+   "cartridge": "Ricoh MP C3504 / IM C3500 Black",
+   "color": "black",
+   "yield_per_page": 29500,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "model_contains": [
+     "mp c3003",
+     "mp c3503",
+     "mp c3004",
+     "mp c3504",
+     "im c3000",
+     "im c3500"
+    ]
+   },
+   "yield_per_page_oem": 29500,
+   "yield_per_page_compatible": 22100,
+   "yield_per_page_refill": 17700,
+   "yield_per_page_local": 19200
+  },
+  {
+   "id": "ricoh-mpc3003-3504-imc3000-3500-cyan",
+   "vendor": "Ricoh",
+   "cartridge": "Ricoh MP C3504 / IM C3500 Cyan",
+   "color": "cyan",
+   "yield_per_page": 18000,
+   "confidence": "medium",
+   "match": {
+    "color": "cyan",
+    "model_contains": [
+     "mp c3003",
+     "mp c3503",
+     "mp c3004",
+     "mp c3504",
+     "im c3000",
+     "im c3500"
+    ]
+   },
+   "yield_per_page_oem": 18000,
+   "yield_per_page_compatible": 13500,
+   "yield_per_page_refill": 10800,
+   "yield_per_page_local": 11700
+  },
+  {
+   "id": "ricoh-mpc3003-3504-imc3000-3500-magenta",
+   "vendor": "Ricoh",
+   "cartridge": "Ricoh MP C3504 / IM C3500 Magenta",
+   "color": "magenta",
+   "yield_per_page": 18000,
+   "confidence": "medium",
+   "match": {
+    "color": "magenta",
+    "model_contains": [
+     "mp c3003",
+     "mp c3503",
+     "mp c3004",
+     "mp c3504",
+     "im c3000",
+     "im c3500"
+    ]
+   },
+   "yield_per_page_oem": 18000,
+   "yield_per_page_compatible": 13500,
+   "yield_per_page_refill": 10800,
+   "yield_per_page_local": 11700
+  },
+  {
+   "id": "ricoh-mpc3003-3504-imc3000-3500-yellow",
+   "vendor": "Ricoh",
+   "cartridge": "Ricoh MP C3504 / IM C3500 Yellow",
+   "color": "yellow",
+   "yield_per_page": 18000,
+   "confidence": "medium",
+   "match": {
+    "color": "yellow",
+    "model_contains": [
+     "mp c3003",
+     "mp c3503",
+     "mp c3004",
+     "mp c3504",
+     "im c3000",
+     "im c3500"
+    ]
+   },
+   "yield_per_page_oem": 18000,
+   "yield_per_page_compatible": 13500,
+   "yield_per_page_refill": 10800,
+   "yield_per_page_local": 11700
+  },
+  {
+   "id": "xerox-versalink-b400-b405-black",
+   "vendor": "Xerox",
+   "cartridge": "Xerox VersaLink B400 / B405 High Capacity",
+   "color": "black",
+   "yield_per_page": 13900,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "model_contains": [
+     "versalink b400",
+     "versalink b405"
+    ]
+   },
+   "yield_per_page_oem": 13900,
+   "yield_per_page_compatible": 10400,
+   "yield_per_page_refill": 8300,
+   "yield_per_page_local": 9000
+  },
+  {
+   "id": "xerox-altalink-c8030-c8155-black",
+   "vendor": "Xerox",
+   "cartridge": "Xerox AltaLink C8000 / C8100 Black",
+   "color": "black",
+   "yield_per_page": 26000,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "model_contains": [
+     "altalink c8030",
+     "altalink c8035",
+     "altalink c8045",
+     "altalink c8055",
+     "altalink c8130",
+     "altalink c8135",
+     "altalink c8145",
+     "altalink c8155"
+    ]
+   },
+   "yield_per_page_oem": 26000,
+   "yield_per_page_compatible": 19500,
+   "yield_per_page_refill": 15600,
+   "yield_per_page_local": 16900
+  },
+  {
+   "id": "xerox-altalink-c8030-c8155-cyan",
+   "vendor": "Xerox",
+   "cartridge": "Xerox AltaLink C8000 / C8100 Cyan",
+   "color": "cyan",
+   "yield_per_page": 15000,
+   "confidence": "medium",
+   "match": {
+    "color": "cyan",
+    "model_contains": [
+     "altalink c8030",
+     "altalink c8035",
+     "altalink c8045",
+     "altalink c8055",
+     "altalink c8130",
+     "altalink c8135",
+     "altalink c8145",
+     "altalink c8155"
+    ]
+   },
+   "yield_per_page_oem": 15000,
+   "yield_per_page_compatible": 11250,
+   "yield_per_page_refill": 9000,
+   "yield_per_page_local": 9750
+  },
+  {
+   "id": "xerox-altalink-c8030-c8155-magenta",
+   "vendor": "Xerox",
+   "cartridge": "Xerox AltaLink C8000 / C8100 Magenta",
+   "color": "magenta",
+   "yield_per_page": 15000,
+   "confidence": "medium",
+   "match": {
+    "color": "magenta",
+    "model_contains": [
+     "altalink c8030",
+     "altalink c8035",
+     "altalink c8045",
+     "altalink c8055",
+     "altalink c8130",
+     "altalink c8135",
+     "altalink c8145",
+     "altalink c8155"
+    ]
+   },
+   "yield_per_page_oem": 15000,
+   "yield_per_page_compatible": 11250,
+   "yield_per_page_refill": 9000,
+   "yield_per_page_local": 9750
+  },
+  {
+   "id": "xerox-altalink-c8030-c8155-yellow",
+   "vendor": "Xerox",
+   "cartridge": "Xerox AltaLink C8000 / C8100 Yellow",
+   "color": "yellow",
+   "yield_per_page": 15000,
+   "confidence": "medium",
+   "match": {
+    "color": "yellow",
+    "model_contains": [
+     "altalink c8030",
+     "altalink c8035",
+     "altalink c8045",
+     "altalink c8055",
+     "altalink c8130",
+     "altalink c8135",
+     "altalink c8145",
+     "altalink c8155"
+    ]
+   },
+   "yield_per_page_oem": 15000,
+   "yield_per_page_compatible": 11250,
+   "yield_per_page_refill": 9000,
+   "yield_per_page_local": 9750
+  },
+  {
+   "id": "lexmark-ms-mx-310-610-50f0ha0-black",
+   "vendor": "Lexmark",
+   "cartridge": "Lexmark 501H / 50F0HA0 (MS/MX 310/410/510/610)",
+   "color": "black",
+   "yield_per_page": 5000,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "cartridge_contains": [
+     "50f0ha0",
+     "501h",
+     "50f2h00"
+    ]
+   },
+   "yield_per_page_oem": 5000,
+   "yield_per_page_compatible": 3750,
+   "yield_per_page_refill": 3000,
+   "yield_per_page_local": 3250
+  },
+  {
+   "id": "samsung-mltd116l-d203l-black",
+   "vendor": "Samsung",
+   "cartridge": "Samsung MLT-D116L / MLT-D203S",
+   "color": "black",
+   "yield_per_page": 3000,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "cartridge_contains": [
+     "mlt-d116l",
+     "mlt-d203s",
+     "d116l"
+    ]
+   },
+   "yield_per_page_oem": 3000,
+   "yield_per_page_compatible": 2250,
+   "yield_per_page_refill": 1800,
+   "yield_per_page_local": 1950
+  },
+  {
+   "id": "samsung-mltd203l-black",
+   "vendor": "Samsung",
+   "cartridge": "Samsung MLT-D203L",
+   "color": "black",
+   "yield_per_page": 5000,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "cartridge_contains": [
+     "mlt-d203l",
+     "d203l"
+    ]
+   },
+   "yield_per_page_oem": 5000,
+   "yield_per_page_compatible": 3750,
+   "yield_per_page_refill": 3000,
+   "yield_per_page_local": 3250
+  },
+  {
+   "id": "epson-workforce-alm300-black",
+   "vendor": "Epson",
+   "cartridge": "Epson AL-M300 / M310 / M320 / WorkForce Pro Black",
+   "color": "black",
+   "yield_per_page": 6000,
+   "confidence": "medium",
+   "match": {
+    "color": "black",
+    "model_contains": [
+     "al-m300",
+     "al-m310",
+     "al-m320",
+     "wf-c5790",
+     "wf-m5799"
+    ]
+   },
+   "yield_per_page_oem": 6000,
+   "yield_per_page_compatible": 4800,
+   "yield_per_page_refill": 3900,
+   "yield_per_page_local": 4500
   }
  ],
  "local_policy": {

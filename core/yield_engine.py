@@ -30,13 +30,26 @@ from core.db import BACKEND_POSTGRESQL
 from core.db import upsert_sql as _upsert_sql
 from core.db.schema import YIELD_TABLES as _PG_YIELD_TABLES, verify_postgres_tables
 from core.time_utils import as_utc_datetime, utc_now_iso
+from core.yield_estimator import (
+    PosteriorYieldDecision,
+    SupplyReading,
+    estimate_supply_series,
+    get_brand_spec,
+)
 
 log = logging.getLogger("PrinterMonitor")
+
+YIELD_ESTIMATOR_ENV_VAR = "YIELD_ESTIMATOR"
+
+
+def _is_v2_estimator_enabled() -> bool:
+    """Return True when interval-censored v2 estimator drives cartridge_state persistence."""
+    return os.environ.get(YIELD_ESTIMATOR_ENV_VAR, "").strip().lower() == "v2"
 
 DEFAULT_YIELD_PER_PAGE = 2000
 MIN_PAGES_FOR_SAMPLE = 10
 MIN_ESTIMATED_YIELD = 300
-MAX_ESTIMATED_YIELD = 100000
+MAX_ESTIMATED_YIELD = 600000
 REFILL_JUMP_PERCENT = 20
 SMALL_LEVEL_BOUNCE_PERCENT = 5
 SNAPSHOT_MIN_SECONDS = 6 * 3600
@@ -54,10 +67,15 @@ LEVEL_NOISE_MAX_PAGES = 5
 # (real case: Δp=11 / Δt=1 → yield=1100 for Cartridge 737 with a real capacity of 2400).
 QUANT_MIN_PAGES_1PCT = 150
 # When we have a "reference" capacity (catalog/declared by the device), the learned value is only shown
-# within this band; outside it the data is poisoned/noisy and we return the reference value
-# (self-heal for old poisoned states such as yield=23800 on T-4590).
+# within this band unless a multi-sample low-variance regime shift (e.g. non-OEM/XL cartridge) is proven.
 LEARNED_DEVIATION_LIMIT = 0.40
 CYCLE_RATED_BAND = (0.30, 2.5)
+REGIME_SHIFT_MIN_SAMPLES = 6
+REGIME_SHIFT_MIN_DROP_PCT = 25
+MIN_PARTIAL_CYCLE_DROP_PCT = 20
+MIN_ZERO_CYCLE_DROP_PCT = 15
+COARSE_STEP_MEDIUM_DROP_PCT = 10
+COARSE_STEP_MEDIUM_MIN_PAGES = 250
 
 # ─── Fix 2: reference-scaled 1% gate ─────────────────────────────────────────
 # A 1% step needs at least 1.5% of the reference capacity in pages. 1.5 is a margin chosen for this fix,
@@ -71,7 +89,47 @@ CONFIDENCE_CV_MEDIUM = 0.20    # CV above this caps confidence at medium
 CONFIDENCE_CV_LOW = 0.40       # CV above this caps confidence at low
 CONFIDENCE_CV_MIN_SAMPLES = 3  # with fewer estimates no variance cap is applied
 
+# ─── Frozen-chip detection, chip quarantine, overrun alert & replacement reasons ───
+FROZEN_CHIP_FINE_PCT = 0.20
+FROZEN_CHIP_FINE_MIN_PAGES = 250
+FROZEN_CHIP_COARSE_PCT = 0.35
+FROZEN_CHIP_COARSE_MIN_PAGES = 400
+OVERRUN_ALERT_PCT = 0.15
+OVERRUN_ALERT_MIN_PAGES = 150
+DIRTY_PARTIAL_MIN_DROP_PCT = 25
+
+_REJECT_QUARANTINED_CHIP = "quarantined_chip"
+_REJECT_FROZEN_CHIP = "frozen_chip"
+_CYCLE_SOURCES_FOR_MEDIAN = ("cycle_learn", "cycle_manual_empty", "cycle_dirty_partial")
+
 _COLOR_ORDER = ("black", "cyan", "magenta", "yellow", "drum")
+
+
+def _frozen_chip_page_threshold(printer_model: str, ref_capacity: Optional[int]) -> int:
+    """Pages without any raw_level change above 0% before a chip is flagged as frozen."""
+    spec = get_brand_spec(printer_model or "")
+    cap = max(int(ref_capacity or DEFAULT_YIELD_PER_PAGE), MIN_ESTIMATED_YIELD)
+    if spec.typical_step_pct >= 5.0:
+        return max(FROZEN_CHIP_COARSE_MIN_PAGES, int(round(FROZEN_CHIP_COARSE_PCT * cap)))
+    return max(FROZEN_CHIP_FINE_MIN_PAGES, int(round(FROZEN_CHIP_FINE_PCT * cap)))
+
+
+def _normalize_replacement_reason(reason: Optional[str]) -> Optional[str]:
+    """Normalize manual cartridge reset/replacement reason ('empty' | 'dirty' | None)."""
+    if reason is None:
+        return None
+    r = str(reason).strip().lower()
+    if not r or r == "auto":
+        return None
+    if r in ("empty", "depleted", "low_toner", "faded"):
+        return "empty"
+    if r in ("dirty", "defect", "streaks", "smudge", "drum", "preventive", "partial"):
+        return "dirty"
+    return None
+
+# Sub-percent anchor cache for devices reporting high-resolution supply capacities (max > 100):
+# maps (ip, color) -> (anchor_counter, exact_level_pct, cartridge_key)
+_EXACT_ANCHOR_CACHE: Dict[Tuple[str, str], Tuple[int, float, str]] = {}
 
 
 def _now() -> str:
@@ -553,12 +611,20 @@ def _record_sample(conn, *, ip: str, color: str, printer_model: str, cartridge_n
 
 
 def _compute_usage_counter(color: str, counters: dict, device_type: str) -> Tuple[Optional[int], str, float]:
-    """Chooses the right counter for each color + confidence factor."""
-    total = _to_int(counters.get("total"))
-    full_color = _to_int(counters.get("full_color"))
-    black_white = _to_int(counters.get("black_white"))
+    """Chooses the right counter for each color + confidence factor, validating counter consistency."""
+    raw_total = _to_int(counters.get("total"))
+    raw_fc = _to_int(counters.get("full_color"))
+    raw_bw = _to_int(counters.get("black_white"))
+    total = raw_total if raw_total is not None and raw_total >= 0 else None
+    full_color = raw_fc if raw_fc is not None and raw_fc >= 0 else None
+    black_white = raw_bw if raw_bw is not None and raw_bw >= 0 else None
     color = (color or "black").lower()
     device_type = (device_type or "unknown").lower()
+
+    # Guard against corrupted full_color counter exceeding total counter on color MFPs
+    if full_color is not None and total is not None and full_color > int(total * 1.02) + 25:
+        log.debug("counter consistency guard: full_color=%s exceeds total=%s; falling back", full_color, total)
+        full_color = None
 
     if color in ("cyan", "magenta", "yellow"):
         if full_color is not None:
@@ -568,21 +634,25 @@ def _compute_usage_counter(color: str, counters: dict, device_type: str) -> Tupl
         return None, "missing", 0.0
 
     if color == "black":
-        # For black, total is more conservative and usually more available; on mono printers it is exact.
+        # For black, total is exact on mono printers and conservative on color printers.
         if total is not None:
             quality = 1.0 if device_type != "color" else 0.75
             return total, "total_for_black", quality
         if black_white is not None:
-            return black_white, "black_white", 0.9
+            quality = 1.0 if device_type != "color" else 0.9
+            return black_white, "black_white", quality
         return None, "missing", 0.0
 
-    # drum/opc and non-toner consumables: if they have a level, they are tracked with low confidence via total.
+    # drum/opc/imaging/developer and other long-life consumables: tracked via total counter.
     if total is not None:
-        return total, "total_for_supply", 0.5
+        quality = 0.65 if device_type != "color" else 0.55
+        return total, "total_for_supply", quality
+    if black_white is not None:
+        return black_white, "total_for_supply", 0.5
     return None, "missing", 0.0
 
 
-def _sample_weight(pages_delta: int, toner_drop: int, counter_quality: float) -> float:
+def _sample_weight(pages_delta: int, toner_drop: float, counter_quality: float) -> float:
     if pages_delta <= 0 or toner_drop <= 0 or counter_quality <= 0:
         return 0.0
     page_factor = min(1.0, max(0.2, pages_delta / 100.0))
@@ -638,7 +708,8 @@ def _quant_min_pages_1pct(rated_capacity) -> int:
     return QUANT_1PCT_NO_REFERENCE_PAGES
 
 
-def _derive_confidence(sample_count: int, total_weight: float, counter_basis: str = "") -> str:
+def _derive_confidence(sample_count: int, total_weight: float, counter_basis: str = "",
+                       *, max_single_drop: float = 0.0, max_single_pages: int = 0) -> str:
     # Low-usage printers may have each sample drop only 1% and about 50 pages;
     # so for mono/black with an acceptable counter, 4 independent samples are enough for high.
     # For CMY colors when we only have total_for_color, we do not give high because the counter is not dedicated.
@@ -650,6 +721,12 @@ def _derive_confidence(sample_count: int, total_weight: float, counter_basis: st
     elif sample_count >= 4 and total_weight >= 2.0 and not basis.startswith("total_for_color"):
         return "high"
     if sample_count >= 2 and total_weight >= 1.0:
+        return "medium"
+    # Coarse-step printers (10%/20%/25% increments on Kyocera/Brother/Lexmark/Ricoh/Canon) or closed cycles:
+    # a single large, high-page drop has low quantization error (<5%) and qualifies for medium (never high).
+    if (sample_count >= 1 and total_weight >= 2.5
+            and max_single_drop >= COARSE_STEP_MEDIUM_DROP_PCT
+            and max_single_pages >= COARSE_STEP_MEDIUM_MIN_PAGES):
         return "medium"
     return "low"
 
@@ -753,26 +830,59 @@ def _swap_reset_fields(level_i: Optional[int], usage_counter: Optional[int], tim
     }
 
 
+def _interpolated_weighted_median(pts: list) -> float:
+    """Exact midpoint-interpolated weighted median for sorted (value, weight) pairs.
+
+    Fixes systematic downward bias on even-sized/symmetric sample sets where naive
+    cumulative threshold `acc >= total_w / 2` returned the lower element (e.g. 8000
+    for [(8000, 2.0), (12000, 2.0)] instead of 10000).
+    """
+    clean = [(float(y), max(1e-6, float(w))) for y, w in pts if y is not None and float(y) > 0]
+    if not clean:
+        return 0.0
+    clean.sort(key=lambda p: p[0])
+    if len(clean) == 1:
+        return clean[0][0]
+    total_w = sum(w for _, w in clean)
+    half_w = total_w / 2.0
+    centers = []
+    running = 0.0
+    for y, w in clean:
+        centers.append((running + 0.5 * w, y))
+        running += w
+    if half_w <= centers[0][0]:
+        return centers[0][1]
+    if half_w >= centers[-1][0]:
+        return centers[-1][1]
+    for idx in range(len(centers) - 1):
+        c0, y0 = centers[idx]
+        c1, y1 = centers[idx + 1]
+        if c0 <= half_w <= c1:
+            if c1 - c0 <= 1e-9:
+                return 0.5 * (y0 + y1)
+            frac = (half_w - c0) / (c1 - c0)
+            return y0 + frac * (y1 - y0)
+    return centers[-1][1]
+
+
 def _robust_learned_yield(conn, ip: str, color: str, cartridge_key: str,
                           rated: Optional[int] = None, limit: int = 12):
-    """Robust yield estimate from accepted samples — weighted median of the N most recent samples.
+    """Two-stage robust estimator: Midpoint Weighted Median + MAD/Huber Telescoping M-Estimator.
 
-    Why median: a moving weighted average stays skewed for weeks by one outlier sample (like a fake 320-page cycle
-    or a quantized 38,600); a weighted median neutralizes such samples. If a reference capacity (catalog/device)
-    exists, samples that are far from it are not used at all:
-    those outside the 0.25× to 2.5× band are excluded from the calculation.
+    Stage 1 computes the outlier-resistant midpoint weighted median `M` and MAD scale `sigma`
+    (50% breakdown point against blips, fake cycles, or missed swaps).
+    Stage 2 trims hard outliers (> 3 * sigma) and combines inliers weighted by `toner_drop * huber_w`,
+    which algebraically cancels quantization rounding boundary jitter across consecutive steps:
+    (sum_inliers delta_L_i * y_i) / (sum_inliers delta_L_i) == (sum_inliers delta_p_i * 100) / (sum_inliers delta_L_i).
 
-    Output: (yield or None, total weight of these mini-samples)
+    Output: (yield or None, total weight of inlier samples)
     """
     try:
-        # Samples of another cartridge that used the same slot must not feed this median (R2).
-        # Legacy rows written before cartridge_key existed have NULL/'' keys; they are still matched by slot
-        # so that existing learning is not lost. Migration note: once legacy rows have been re-keyed (or have
-        # aged out of the LIMIT window), the slot fallback below can be removed.
+        # Samples of another cartridge that used the same slot must not feed this estimator (R2).
+        # Legacy rows written before cartridge_key existed have NULL/'' keys; they are still matched by slot.
         rows = conn.execute(
-            # Phase E.4.1: "accepted=1" on PG (BOOLEAN column) gives a type error ⇒
-            # comparison with a bool parameter; it has the same meaning on both backends.
-            """SELECT estimated_yield, confidence_weight,
+            # Phase E.4.1: "accepted=1" on PG (BOOLEAN column) gives a type error ⇒ bool parameter.
+            """SELECT estimated_yield, confidence_weight, pages_delta, toner_drop,
                       CASE WHEN cartridge_key IS NULL OR cartridge_key = '' THEN 1 ELSE 0 END
                FROM yield_samples
                WHERE accepted = ? AND estimated_yield IS NOT NULL
@@ -784,24 +894,129 @@ def _robust_learned_yield(conn, ip: str, color: str, cartridge_key: str,
     except Exception as exc:
         log.debug("robust yield query failed: %s", exc)
         return None, 0.0
-    if any(r[2] for r in rows) and (ip, color) not in _LEGACY_FALLBACK_WARNED:
+    if any(r[4] for r in rows) and (ip, color) not in _LEGACY_FALLBACK_WARNED:
         _LEGACY_FALLBACK_WARNED.add((ip, color))
         log.warning("yield %s/%s: using legacy samples without cartridge_key for this slot (matched by slot)",
                     ip, color)
-    pts = [(int(r[0]), max(0.1, float(r[1] or 0.1))) for r in rows if r[0]]
-    if rated:
-        lo, hi = rated * 0.25, rated * 2.5
-        pts = [p for p in pts if lo <= p[0] <= hi]
-    if not pts:
+
+    records = []
+    for r in rows:
+        if not r[0]:
+            continue
+        y_int = int(r[0])
+        w_conf = max(0.1, float(r[1] or 0.1))
+        p_delta = float(r[2]) if r[2] is not None and float(r[2]) > 0 else None
+        t_drop = float(r[3]) if r[3] is not None and float(r[3]) > 0 else None
+        if rated:
+            lo, hi = rated * 0.25, rated * 2.5
+            if not (lo <= y_int <= hi):
+                continue
+        # Preserve exact ratio when y_int was rounded from pages_delta * 100 / toner_drop,
+        # while respecting synthetic estimated_yield values in unit tests.
+        y_exact = float(y_int)
+        if p_delta is not None and t_drop is not None:
+            raw_ratio = (p_delta * 100.0) / t_drop
+            if abs(raw_ratio - y_int) <= 1.0:
+                y_exact = raw_ratio
+        records.append((y_exact, w_conf, t_drop))
+
+    if not records:
         return None, 0.0
-    pts.sort(key=lambda p: p[0])
-    total_w = sum(w for _, w in pts)
-    acc = 0.0
-    for y, w in pts:
-        acc += w
-        if acc >= total_w / 2.0:
-            return y, total_w
-    return pts[-1]
+    total_w = sum(w for _, w, _ in records)
+    if len(records) == 1:
+        return int(round(records[0][0])), total_w
+
+    # Stage 1: Midpoint weighted median & weighted MAD scale
+    med = _interpolated_weighted_median([(y, w) for y, w, _ in records])
+    abs_devs = [(abs(y - med), w) for y, w, _ in records]
+    mad = _interpolated_weighted_median(abs_devs)
+    sigma = max(1.4826 * mad, 0.08 * med, 1.0)
+
+    # Stage 2: Hard outlier rejection (> 3.0 * sigma) + Huber telescoping drop-weighted fusion
+    num = 0.0
+    den = 0.0
+    inlier_w = 0.0
+    for y_exact, w_conf, t_drop in records:
+        dev = abs(y_exact - med)
+        if dev > 3.0 * sigma:
+            continue
+        huber = 1.0 if dev <= 1.5 * sigma else (1.5 * sigma) / dev
+        # Weighting by real toner_drop cancels quantization boundary noise across consecutive segments
+        tele_w = (max(0.5, t_drop) if t_drop is not None else w_conf) * huber
+        num += y_exact * tele_w
+        den += tele_w
+        inlier_w += w_conf
+
+    if den <= 0:
+        return int(round(med)), total_w
+    return int(round(num / den)), (inlier_w if inlier_w > 0 else total_w)
+
+
+def _detect_regime_shift(conn, ip: str, color: str, cartridge_key: str,
+                         rated_capacity: Optional[int], limit: int = 12) -> Optional[Tuple[int, float]]:
+    """Detects a verified physical capacity regime shift (e.g. refilled/compatible/XL cartridge in OEM slot).
+
+    Prevents both permanent blend-freeze (M8) and premature jump on short noisy runs (ToshibaBug3):
+    accepts an out-of-band capacity when either:
+      1. >= REGIME_SHIFT_MIN_SAMPLES consistent samples covering >= REGIME_SHIFT_MIN_DROP_PCT
+         cumulative toner drop agree with low variance (CV <= CONFIDENCE_CV_MEDIUM), OR
+      2. technician-attested full cycle(s) (`cycle_manual_empty` within CYCLE_RATED_BAND) or >= 2
+         completed full `cycle_learn` cycles (>= 140% cumulative drop, CV <= CONFIDENCE_CV_MEDIUM) exist.
+    """
+    if not rated_capacity or rated_capacity <= 0:
+        return None
+    min_needed = max(REGIME_SHIFT_MIN_SAMPLES, _min_samples_for_high(color))
+    try:
+        rows = conn.execute(
+            """SELECT estimated_yield, toner_drop, source
+               FROM yield_samples
+               WHERE accepted = ? AND estimated_yield IS NOT NULL
+                 AND (cartridge_key = ?
+                      OR ((cartridge_key IS NULL OR cartridge_key = '') AND printer_ip = ? AND color = ?))
+               ORDER BY id DESC LIMIT ?""",
+            (True, cartridge_key, ip, color, int(limit)),
+        ).fetchall()
+    except Exception:
+        return None
+    valid_rows = [
+        (int(r[0]), max(0.0, float(r[1] or 0.0)), str(r[2] or ""))
+        for r in rows
+        if r[0] and MIN_ESTIMATED_YIELD <= int(r[0]) <= MAX_ESTIMATED_YIELD
+    ]
+    if not valid_rows:
+        return None
+
+    band_lo = CYCLE_RATED_BAND[0] * rated_capacity
+    band_hi = CYCLE_RATED_BAND[1] * rated_capacity
+    manual_empty_rows = [
+        (y, d) for y, d, src in valid_rows
+        if src == "cycle_manual_empty" and d >= 50.0 and band_lo <= y <= band_hi
+    ]
+    if manual_empty_rows:
+        if len(manual_empty_rows) == 1:
+            return manual_empty_rows[0][0], max(4.0, manual_empty_rows[0][1] * 0.1)
+        cv_m = _sample_cv([y for y, _ in manual_empty_rows])
+        if cv_m is not None and cv_m <= CONFIDENCE_CV_MEDIUM:
+            return _robust_learned_yield(conn, ip, color, cartridge_key, rated=None, limit=limit)
+
+    full_cycles = [
+        (y, d) for y, d, src in valid_rows
+        if src in ("cycle_learn", "cycle_manual_empty") and d >= 70.0 and band_lo <= y <= band_hi
+    ]
+    if len(full_cycles) >= 2 and sum(d for _, d in full_cycles) >= 140.0:
+        cv_c = _sample_cv([y for y, _ in full_cycles])
+        if cv_c is not None and cv_c <= CONFIDENCE_CV_MEDIUM:
+            return _robust_learned_yield(conn, ip, color, cartridge_key, rated=None, limit=limit)
+
+    if len(valid_rows) < min_needed:
+        return None
+    cum_drop = sum(d for _, d, _ in valid_rows)
+    if cum_drop < REGIME_SHIFT_MIN_DROP_PCT:
+        return None
+    cv = _sample_cv([y for y, _, _ in valid_rows])
+    if cv is None or cv > CONFIDENCE_CV_MEDIUM:
+        return None
+    return _robust_learned_yield(conn, ip, color, cartridge_key, rated=None, limit=limit)
 
 
 #: columns of ``cartridge_yield_profiles`` written by ``_upsert_profile_if_high``
@@ -881,20 +1096,187 @@ def _upsert_profile_if_high(conn, state: dict) -> None:
         ),
     )
 
-    # Record for the other cartridges with the same model and name; learned/high themselves are not overwritten.
+    # Propagate to peer printers sharing this cartridge_key; never overwrite the source printer
+    # or peers that already reached high confidence via auto_learn or cycle_learn.
     conn.execute(
         """
         UPDATE cartridge_state
         SET yield_per_page = ?, yield_source = 'shared_profile', confidence = 'high', updated_at = ?
         WHERE cartridge_key = ?
-          AND NOT (yield_source = 'auto_learn' AND confidence = 'high')
+          AND printer_ip != ?
+          AND NOT (yield_source IN ('auto_learn', 'cycle_learn') AND confidence = 'high')
         """,
-        (ypp, _now(), cartridge_key),
+        (ypp, _now(), cartridge_key, state.get("printer_ip") or ""),
     )
 
 
-def _state_public_dict(state: dict, profile: Optional[dict] = None) -> dict:
+def _resolve_interval_prior(
+    state: dict,
+    profile: Optional[dict] = None,
+    device_capacity_pages: Optional[int] = None,
+) -> Tuple[Optional[int], str, Optional[int]]:
+    """Resolve (prior_yield, prior_source, nominal_capacity) for Empirical Bayes interval estimation."""
+    model = state.get("printer_model") or ""
+    cart_name = state.get("cartridge_name") or ""
+    color = state.get("color") or "black"
+    cat = _catalog_lookup(model, cart_name, color)
+    cat_cap = _valid_device_capacity((cat or {}).get("yield_per_page"))
+    dev_cap = _valid_device_capacity(device_capacity_pages)
+    if dev_cap is None and state.get("yield_source") == "device_capacity":
+        dev_cap = _valid_device_capacity(state.get("yield_per_page"))
+    nom_cap = dev_cap or cat_cap
+
+    if profile and profile.get("confidence") == "high" and _profile_is_trusted(profile, color):
+        prof_y = _valid_device_capacity(profile.get("yield_per_page"))
+        if prof_y:
+            return prof_y, "shared_profile", nom_cap
+    if dev_cap:
+        return dev_cap, "device_capacity", nom_cap
+    if cat_cap:
+        return cat_cap, "catalog", nom_cap
+    fb = estimate_yield_fallback(model, color, default_pages=-1)
+    if fb and fb > 0:
+        return int(fb), "catalog", None
+    cur_src = state.get("yield_source") or "default"
+    cur_y = _to_int(state.get("yield_per_page"), DEFAULT_YIELD_PER_PAGE)
+    return cur_y, cur_src, None
+
+
+def estimate_cartridge_interval(
+    conn,
+    *,
+    ip: str,
+    color: str,
+    state: Optional[dict] = None,
+    profile: Optional[dict] = None,
+    device_capacity_pages: Optional[int] = None,
+    counter_basis: str = "",
+    snap_rows: Optional[list] = None,
+    limit: int = 400,
+) -> PosteriorYieldDecision:
+    """Compute interval-censored Empirical Bayes yield & CI95 for (ip, color) from `toner_snapshots_v2`."""
+    state = state or {}
+    model_txt = state.get("printer_model") or ""
+    color_norm = (color or state.get("color") or "black").lower()
+    prior_y, prior_src, nom_cap = _resolve_interval_prior(
+        state, profile=profile, device_capacity_pages=device_capacity_pages
+    )
+
+    if snap_rows is None:
+        try:
+            fetched = conn.execute(
+                """
+                SELECT usage_counter, toner_level, raw_level, source, valid,
+                       reject_reason, timestamp, cartridge_key, full_color, print_total
+                FROM toner_snapshots_v2
+                WHERE printer_ip = ? AND color = ?
+                ORDER BY id DESC LIMIT ?
+                """,
+                (ip, color_norm, int(limit)),
+            ).fetchall()
+            snap_rows = list(reversed(fetched))
+        except Exception as exc:
+            log.debug("estimate_cartridge_interval snapshot query failed for %s/%s: %s", ip, color_norm, exc)
+            snap_rows = []
+
+    readings = []
+    inferred_basis = counter_basis
+    for r in snap_rows:
+        u_cnt = r[0]
+        if u_cnt is None:
+            continue
+        rej = str(r[5] or "")
+        if rej in ("synthetic_level", _REJECT_DISPLAY_ONLY, _REJECT_QUARANTINED_CHIP, _REJECT_FROZEN_CHIP):
+            continue
+        raw_lv = r[2] if r[2] is not None else r[1]
+        src_txt = str(r[3] or "poll").lower()
+        lv_kind = "http_scrape" if ("http" in src_txt or "web" in src_txt) else "percent"
+        ckey = str(r[7] or "")
+        chip = ckey if (ckey and not _key_has_placeholder(ckey)) else None
+        if not inferred_basis and color_norm in ("cyan", "magenta", "yellow"):
+            if r[8] is None and r[9] is not None:
+                inferred_basis = "total_for_color"
+        readings.append(
+            SupplyReading(
+                usage_counter=int(u_cnt),
+                raw_level=float(raw_lv) if raw_lv is not None else None,
+                level_kind=lv_kind,
+                provenance="http_scrape" if lv_kind == "http_scrape" else "rfc3805",
+                observed_at=str(r[6] or ""),
+                vendor=model_txt,
+                color=color_norm,
+                chip_id=chip,
+            )
+        )
+
+    cur_lvl = state.get("current_level")
+    return estimate_supply_series(
+        readings,
+        vendor_or_model=model_txt,
+        prior_yield=prior_y,
+        prior_source=prior_src,
+        nominal_capacity=nom_cap,
+        current_level=float(cur_lvl) if cur_lvl is not None else None,
+        counter_basis=inferred_basis,
+    )
+
+
+def _apply_v2_state_decision(
+    conn,
+    state: dict,
+    *,
+    profile: Optional[dict] = None,
+    device_capacity_pages: Optional[int] = None,
+    counter_basis: str = "",
+    timestamp: Optional[str] = None,
+) -> PosteriorYieldDecision:
+    """Apply Layer 4/5 v2 estimator decision to `state` when `YIELD_ESTIMATOR=v2` is active."""
+    ip = state.get("printer_ip") or ""
+    color = state.get("color") or "black"
+    dec = estimate_cartridge_interval(
+        conn,
+        ip=ip,
+        color=color,
+        state=state,
+        profile=profile,
+        device_capacity_pages=device_capacity_pages,
+        counter_basis=counter_basis,
+    )
+    if state.get("force_estimate") or state.get("yield_source") == "forced_estimate":
+        return dec
+
+    if dec.learning_state in ("learning", "converged"):
+        old_src = state.get("yield_source") or "default"
+        # Do not overwrite a high-confidence shared fleet profile until this slot is medium/high
+        if old_src == "shared_profile" and dec.confidence == "low":
+            return dec
+        state["yield_per_page"] = dec.capacity_pages
+        state["confidence"] = dec.confidence
+        state["yield_source"] = "auto_learn"
+        state["sample_count"] = max(int(state.get("sample_count") or 0), dec.n_plateaus)
+        state["total_weight"] = max(float(state.get("total_weight") or 0.0), round(dec.drop_pct * 0.5, 2))
+        if timestamp:
+            state["learned_at"] = timestamp
+    elif dec.learning_state == "suspect":
+        state["confidence"] = "low"
+        if state.get("yield_source") == "auto_learn":
+            state["yield_per_page"] = dec.capacity_pages
+    return dec
+
+
+def _state_public_dict(
+    state: dict,
+    profile: Optional[dict] = None,
+    interval_decision: Optional[PosteriorYieldDecision] = None,
+    extra_meta: Optional[dict] = None,
+) -> dict:
+    cyc_status = state.get("cycle_status") or "active"
+    pages_after_z = _to_int(state.get("pages_after_zero"), 0)
+    sensor_state = "healthy"
+    if cyc_status in ("overrun_alert", "chip_quarantined", "frozen_chip"):
+        sensor_state = cyc_status
     result = {
+        "current_level": _valid_level(state.get("current_level")),
         "yield_per_page": _to_int(state.get("yield_per_page"), DEFAULT_YIELD_PER_PAGE),
         "yield_source": state.get("yield_source") or "default",
         "confidence": state.get("confidence") or "low",
@@ -906,10 +1288,16 @@ def _state_public_dict(state: dict, profile: Optional[dict] = None) -> dict:
         "cycle_start_counter": state.get("cycle_start_counter"),
         "cycle_start_level": state.get("cycle_start_level"),
         "zero_reached_counter": state.get("zero_reached_counter"),
-        "pages_after_zero": _to_int(state.get("pages_after_zero"), 0),
-        "cycle_status": state.get("cycle_status") or "active",
+        "pages_after_zero": pages_after_z,
+        "cycle_status": cyc_status,
+        "sensor_state": sensor_state,
+        "chip_quarantined": cyc_status in ("chip_quarantined", "overrun_alert"),
+        "overrun_pages": pages_after_z if cyc_status in ("overrun_alert", "chip_quarantined", "frozen_chip") else 0,
+        "unregistered_refill_suspected": cyc_status == "overrun_alert",
         "cartridge_key": state.get("cartridge_key"),
     }
+    if extra_meta:
+        result.update(extra_meta)
     if profile:
         result["shared_profile"] = {
             "yield_per_page": profile.get("yield_per_page"),
@@ -917,31 +1305,67 @@ def _state_public_dict(state: dict, profile: Optional[dict] = None) -> dict:
             "sample_count": profile.get("sample_count"),
             "source_printer_ip": profile.get("source_printer_ip"),
         }
+    if interval_decision is not None:
+        result.update({
+            "capacity_ci95": [interval_decision.capacity_ci95[0], interval_decision.capacity_ci95[1]],
+            "rel_ci95": interval_decision.rel_ci95,
+            "capacity_method": interval_decision.capacity_method,
+            "learning_state": interval_decision.learning_state,
+            "nominal_capacity_pages": interval_decision.nominal_capacity_pages,
+            "coverage_index": interval_decision.coverage_index,
+            "eta_pages": interval_decision.eta_pages,
+            "interval_capacity_pages": interval_decision.capacity_pages,
+            "n_plateaus": interval_decision.n_plateaus,
+        })
     return result
 
 
 def _maybe_close_cycle(conn, state: dict, *, ip: str, color: str, printer_model: str,
                        cartridge_name: str, cartridge_key: str, usage_counter: int,
                        timestamp: str, counter_basis: str, source: str,
-                       rated_capacity: Optional[int] = None) -> Optional[dict]:
-    """If the previous cycle is complete, build a real yield from the difference of the two charges' counters.
+                       rated_capacity: Optional[int] = None,
+                       end_level_before_refill: Optional[int] = None,
+                       weight_scale: float = 1.0,
+                       accepted_source: str = "cycle_learn") -> Optional[dict]:
+    """Closes a completed or substantial partial consumption cycle and records a cycle_learn sample.
 
-    This path is for cases where the toner stays at 0% but printing continues; when the
-    next reset/refill happens, all pages of the previous cycle become samples with high confidence.
+    Handles two physical scenarios cleanly (fixing M4):
+      1. Zero-reached / depleted cycle (`zero_reached_counter` set or `end_level_before_refill <= 0` or None):
+         all pages printed from `cycle_start_counter` through depletion (including `pages_after_zero` reserve)
+         are normalized by `min(start_level, 100)`.
+      2. Early pre-zero refill (`end_level_before_refill > 0` and `zero_reached_counter is None`):
+         requires at least `MIN_PARTIAL_CYCLE_DROP_PCT` (20%) real consumption and normalizes by
+         `(start_level - end_level_before_refill)` instead of `start_level`, preventing severe underestimation.
     """
     start_counter = _to_int(state.get("cycle_start_counter"))
     start_level = _to_int(state.get("cycle_start_level"), 100)
     if start_counter is None or usage_counter is None or usage_counter <= start_counter or start_level <= 0:
         return None
+
+    zero_reached = state.get("zero_reached_counter") is not None
+    capped_start = min(start_level, 100)
+    if not zero_reached and end_level_before_refill is not None and end_level_before_refill > 0:
+        toner_consumed = capped_start - min(int(end_level_before_refill), 100)
+        if toner_consumed < MIN_PARTIAL_CYCLE_DROP_PCT:
+            return None
+        recorded_end_level = int(end_level_before_refill)
+    else:
+        toner_consumed = capped_start
+        if end_level_before_refill is not None and toner_consumed < MIN_ZERO_CYCLE_DROP_PCT:
+            return None
+        recorded_end_level = 0 if (zero_reached or end_level_before_refill == 0) else 100
+
     pages_delta = usage_counter - start_counter
-    estimated_yield = int(round(pages_delta * 100.0 / min(start_level, 100)))
+    if pages_delta < MIN_PAGES_FOR_SAMPLE:
+        return None
+    estimated_yield = int(round(pages_delta * 100.0 / toner_consumed))
     if estimated_yield < MIN_ESTIMATED_YIELD or estimated_yield > MAX_ESTIMATED_YIELD:
         _record_sample(
             conn, ip=ip, color=color, printer_model=printer_model, cartridge_name=cartridge_name,
             cartridge_key=cartridge_key, start_counter=start_counter, end_counter=usage_counter,
-            start_level=start_level, end_level=100, pages_delta=pages_delta, toner_drop=start_level,
-            estimated_yield=estimated_yield, counter_basis=counter_basis, weight=0,
-            accepted=False, reject_reason="cycle_yield_out_of_range", source=source,
+            start_level=start_level, end_level=recorded_end_level, pages_delta=pages_delta,
+            toner_drop=toner_consumed, estimated_yield=estimated_yield, counter_basis=counter_basis,
+            weight=0, accepted=False, reject_reason="cycle_yield_out_of_range", source=source,
         )
         return None
     # ✅ Compatibility band with the reference rating (real case: a fake 320-page cycle on
@@ -954,26 +1378,57 @@ def _maybe_close_cycle(conn, state: dict, *, ip: str, color: str, printer_model:
         _record_sample(
             conn, ip=ip, color=color, printer_model=printer_model, cartridge_name=cartridge_name,
             cartridge_key=cartridge_key, start_counter=start_counter, end_counter=usage_counter,
-            start_level=start_level, end_level=100, pages_delta=pages_delta, toner_drop=start_level,
-            estimated_yield=estimated_yield, counter_basis=counter_basis, weight=0,
-            accepted=False, reject_reason="cycle_vs_rated_out_of_band", source=source,
+            start_level=start_level, end_level=recorded_end_level, pages_delta=pages_delta,
+            toner_drop=toner_consumed, estimated_yield=estimated_yield, counter_basis=counter_basis,
+            weight=0, accepted=False, reject_reason="cycle_vs_rated_out_of_band", source=source,
         )
         return None
-    weight = max(4.0, min(12.0, pages_delta / 100.0))
+    cycle_fraction = min(1.0, toner_consumed / 100.0)
+    min_cycle_w = 4.0 if toner_consumed >= 50 or zero_reached or end_level_before_refill is None else 2.5
+    raw_weight = max(min_cycle_w, min(12.0, (pages_delta / 100.0) * cycle_fraction if cycle_fraction < 1.0 else pages_delta / 100.0))
+    weight = round(max(1.0, raw_weight * max(0.2, float(weight_scale))), 3)
     _record_sample(
         conn, ip=ip, color=color, printer_model=printer_model, cartridge_name=cartridge_name,
         cartridge_key=cartridge_key, start_counter=start_counter, end_counter=usage_counter,
-        start_level=start_level, end_level=100, pages_delta=pages_delta, toner_drop=start_level,
-        estimated_yield=estimated_yield, counter_basis=counter_basis, weight=weight,
-        accepted=True, reject_reason=None, source="cycle_learn",
+        start_level=start_level, end_level=recorded_end_level, pages_delta=pages_delta,
+        toner_drop=toner_consumed, estimated_yield=estimated_yield, counter_basis=counter_basis,
+        weight=weight, accepted=True, reject_reason=None, source=accepted_source or "cycle_learn",
     )
+
+    # Combine multiple closed cycles robustly when prior cycle_learn samples exist for this cartridge_key
+    final_cycle_yield = estimated_yield
+    try:
+        cyc_rows = conn.execute(
+            """SELECT estimated_yield, confidence_weight FROM yield_samples
+               WHERE accepted = ?
+                 AND source IN ('cycle_learn', 'cycle_manual_empty', 'cycle_dirty_partial')
+                 AND estimated_yield IS NOT NULL
+                 AND cartridge_key = ?
+               ORDER BY id DESC LIMIT 8""",
+            (True, cartridge_key),
+        ).fetchall()
+        if len(cyc_rows) >= 2:
+            pts = [(int(r[0]), max(0.1, float(r[1] or 1.0))) for r in cyc_rows if r[0]]
+            if rated_capacity:
+                pts = [p for p in pts if CYCLE_RATED_BAND[0] * rated_capacity <= p[0] <= CYCLE_RATED_BAND[1] * rated_capacity]
+            if pts:
+                final_cycle_yield = int(round(_interpolated_weighted_median(pts)))
+    except Exception:
+        pass
+
+    new_sample_count = int(state.get("sample_count") or 0) + 1
+    new_total_weight = float(state.get("total_weight") or 0.0) + weight
+    conf = _derive_confidence(
+        new_sample_count, new_total_weight, counter_basis,
+        max_single_drop=toner_consumed, max_single_pages=pages_delta,
+    )
+    conf = _cap_confidence_by_variance(conf, _recent_accepted_estimates(conn, ip, color, cartridge_key))
     return {
-        "yield_per_page": estimated_yield,
+        "yield_per_page": final_cycle_yield,
         "yield_source": "cycle_learn",
-        "confidence": _derive_confidence(int(state.get("sample_count") or 0) + 1,
-                                         float(state.get("total_weight") or 0.0) + weight, counter_basis),
-        "sample_count": int(state.get("sample_count") or 0) + 1,
-        "total_weight": float(state.get("total_weight") or 0.0) + weight,
+        "confidence": conf,
+        "sample_count": new_sample_count,
+        "total_weight": new_total_weight,
         "learned_at": timestamp,
         "cycle_status": "closed",
     }
@@ -988,12 +1443,19 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
                                timestamp: str = None, source: str = "poll",
                                device_capacity_pages: int = None,
                                level_is_synthetic: bool = False,
+                               exact_level: Optional[float] = None,
+                               hardware_swap: bool = False,
+                               chip_quarantined: bool = False,
+                               virtual_display_level: Optional[int] = None,
                                _ensure_tables: bool = True) -> dict:
     """Processes one cartridge and returns metadata that can be displayed in the API/UI.
 
     level_is_synthetic=True means `level` is a display value, not a device reading (B-3, e.g. a Canon status
     code shown as 15/70%). It is stored as current_level for the UI, but it never sets an anchor, never moves
     last_valid_level or last_counter, and never learns a sample.
+    exact_level carries optional sub-percent precision (0.0..100.0) when SNMP max capacity > 100.
+    hardware_swap=True indicates chip_id/serial or supply_pages proved a physical cartridge replacement
+    even when model and cartridge_name are unchanged (M5).
     """
     if _ensure_tables:
         ensure_yield_tables()
@@ -1007,6 +1469,14 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
     cartridge_key = build_cartridge_key(printer_model, cartridge_name, color)
     counters = counters or {}
     level_i = _valid_level(level)
+    exact_f = None
+    if exact_level is not None and not level_is_synthetic:
+        try:
+            ef = float(exact_level)
+            if 0.0 <= ef <= 100.0:
+                exact_f = ef
+        except (TypeError, ValueError):
+            exact_f = None
     device_capacity = _valid_device_capacity(device_capacity_pages)
     catalog_match = _catalog_lookup(printer_model, cartridge_name, color)
     catalog_capacity = _valid_device_capacity((catalog_match or {}).get("yield_per_page"))
@@ -1075,6 +1545,9 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
                               "cycle_start_timestamp": None, "zero_reached_counter": None,
                               "zero_reached_timestamp": None})
                 reject = _REJECT_DISPLAY_ONLY
+                _EXACT_ANCHOR_CACHE.pop((ip, color), None)
+            elif exact_f is not None and usage_counter is not None and level_i is not None:
+                _EXACT_ANCHOR_CACHE[(ip, color)] = (usage_counter, exact_f, cartridge_key)
             _upsert_state(conn, state)
             _record_snapshot(conn, ip, color, printer_model, cartridge_name, cartridge_key,
                              timestamp, counters, usage_counter, level_i, raw_level, source,
@@ -1085,8 +1558,6 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
         rated_capacity = device_capacity or catalog_capacity
 
         # B-3: a display value (Canon status code, manual-override estimate) is shown but never learned from.
-        # Nothing else is touched: anchor, last_valid_level, last_counter, cycle state and cartridge metadata stay
-        # as they are, so the next real reading is compared only with real readings.
         if level_is_synthetic:
             state.update({"current_level": level_i, "updated_at": now})
             _record_snapshot(conn, ip, color, printer_model, cartridge_name, cartridge_key,
@@ -1112,6 +1583,10 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
             log.info("  [%s/%s] cartridge changed (%s -> %s): learned state for this slot restarts",
                      ip, color, old_key, cartridge_key)
             state.update(_swap_reset_fields(level_i, usage_counter, timestamp))
+            if exact_f is not None and usage_counter is not None and level_i is not None:
+                _EXACT_ANCHOR_CACHE[(ip, color)] = (usage_counter, exact_f, cartridge_key)
+            else:
+                _EXACT_ANCHOR_CACHE.pop((ip, color), None)
 
         # If we still only have the default and the device itself declares a valid capacity, we use it as a
         # better fallback. We do not override auto_learn/shared/high.
@@ -1134,23 +1609,113 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
             state["yield_source"] = "device_capacity"
             state["confidence"] = "medium"
 
-        # ✅ Self-healing of poisoned states (real data: Toshiba .40 with yield=23,800 from
-        # noise, while the catalog rating is 36,600; or .41 with a fake cycle of ~320):
-        # if the learned capacity is more than 40% away from the reference, the reference is shown
-        # and the contaminated counters are reset to zero so that fresh, clean learning starts.
+        # ✅ Self-healing of poisoned states, while preserving verified multi-sample regime shifts (M8 fix):
+        # if the learned capacity is >40% away from the reference AND NOT backed by a low-CV multi-sample
+        # regime shift (such as a consistent refilled/compatible/XL cartridge), snap back to reference.
         if rated_capacity and state.get("yield_source") in ("auto_learn", "cycle_learn", "learned"):
             cur_yield = _to_int(state.get("yield_per_page"), DEFAULT_YIELD_PER_PAGE)
             if cur_yield and abs(cur_yield - rated_capacity) > LEARNED_DEVIATION_LIMIT * rated_capacity:
-                log.warning(
-                    "  [%s/%s] ظرفیت یادگرفته‌ی ناسازگار (%s) با مرجع (%s) — snap به مرجع و reset یادگیری",
-                    ip, color, cur_yield, rated_capacity)
-                state.update({
-                    "yield_per_page": rated_capacity,
-                    "yield_source": "device_capacity" if device_capacity else "catalog",
-                    "confidence": (catalog_match or {}).get("confidence") or "medium",
-                    "sample_count": 0,
-                    "total_weight": 0.0,
-                })
+                regime_check = _detect_regime_shift(conn, ip, color, cartridge_key, rated_capacity)
+                if regime_check is None or abs(regime_check[0] - cur_yield) > 0.25 * max(regime_check[0], 1):
+                    log.warning(
+                        "  [%s/%s] ظرفیت یادگرفته‌ی ناسازگار (%s) با مرجع (%s) — snap به مرجع و reset یادگیری",
+                        ip, color, cur_yield, rated_capacity)
+                    state.update({
+                        "yield_per_page": rated_capacity,
+                        "yield_source": "device_capacity" if device_capacity else "catalog",
+                        "confidence": (catalog_match or {}).get("confidence") or "medium",
+                        "sample_count": 0,
+                        "total_weight": 0.0,
+                    })
+
+        # M5: Physical swap of a cartridge with the SAME model & name (detected via chip_id/serial or supply_pages)
+        if hardware_swap and not swapped and level_i is not None and usage_counter is not None:
+            pre_swap_lvl = _to_int(state.get("last_valid_level"))
+            if state.get("zero_reached_counter") is not None or (
+                pre_swap_lvl is not None
+                and (_to_int(state.get("cycle_start_level"), 100) - pre_swap_lvl) >= MIN_PARTIAL_CYCLE_DROP_PCT
+                and _to_int(state.get("cycle_start_counter")) == _to_int(state.get("anchor_counter"))
+            ):
+                end_lvl = 0 if state.get("zero_reached_counter") is not None else pre_swap_lvl
+                cyc_upd = _maybe_close_cycle(
+                    conn, state, ip=ip, color=color, printer_model=printer_model,
+                    cartridge_name=cartridge_name, cartridge_key=cartridge_key,
+                    usage_counter=usage_counter, timestamp=timestamp,
+                    counter_basis=counter_basis, source="cycle_hardware_swap",
+                    rated_capacity=rated_capacity, end_level_before_refill=end_lvl,
+                ) or {}
+                state.update(cyc_upd)
+            state.update({
+                "last_refill_at": timestamp,
+                "last_refill_counter": usage_counter,
+                "anchor_counter": usage_counter,
+                "anchor_level": level_i,
+                "anchor_timestamp": timestamp,
+                "cycle_start_counter": usage_counter,
+                "cycle_start_level": level_i,
+                "cycle_start_timestamp": timestamp,
+                "zero_reached_counter": usage_counter if level_i == 0 else None,
+                "zero_reached_timestamp": timestamp if level_i == 0 else None,
+                "pages_after_zero": 0,
+                "cycle_status": "zero_plateau" if level_i == 0 else "active",
+                "pending_refill_level": None,
+                "pending_refill_counter": None,
+                "pending_refill_timestamp": None,
+                "current_level": level_i,
+                "last_valid_level": level_i,
+                "last_counter": usage_counter,
+                "updated_at": now,
+            })
+            if exact_f is not None:
+                _EXACT_ANCHOR_CACHE[(ip, color)] = (usage_counter, exact_f, cartridge_key)
+            else:
+                _EXACT_ANCHOR_CACHE.pop((ip, color), None)
+            _record_snapshot(conn, ip, color, printer_model, cartridge_name, cartridge_key,
+                             timestamp, counters, usage_counter, level_i, raw_level, source,
+                             valid=True, reject_reason="hardware_cartridge_swap")
+            _upsert_state(conn, state)
+            _upsert_profile_if_high(conn, state)
+            profile = _load_profile(conn, cartridge_key)
+            return _state_public_dict(state, profile)
+
+        # Chip Quarantine after manual reset (e.g. refilled/reused cartridge without a new chip, stuck at 90%):
+        # keep anchor_level & cycle_start_level untouched so raw_level=90% never triggers a bogus 100%->90% sample,
+        # update current_level to the dead-reckoned virtual display level, and detect overrun past 0%.
+        if chip_quarantined:
+            disp_lv = _valid_level(virtual_display_level)
+            if disp_lv is None:
+                disp_lv = _valid_level(state.get("current_level"))
+            eff_ypp = _to_int(state.get("yield_per_page"), rated_capacity or DEFAULT_YIELD_PER_PAGE)
+            c_start = _to_int(state.get("cycle_start_counter"))
+            c_start_lv = _to_int(state.get("cycle_start_level"), 100)
+            overrun_p = 0
+            if usage_counter is not None and c_start is not None and usage_counter >= c_start:
+                pages_in_cycle = usage_counter - c_start
+                if disp_lv is None:
+                    est_d = int(round(pages_in_cycle * 100.0 / max(eff_ypp, 1)))
+                    disp_lv = max(0, min(100, c_start_lv - est_d))
+                if disp_lv == 0:
+                    exp_empty = int(round(eff_ypp * (min(max(c_start_lv, 1), 100) / 100.0)))
+                    overrun_p = max(0, pages_in_cycle - exp_empty)
+            overrun_thresh = max(OVERRUN_ALERT_MIN_PAGES, int(round(OVERRUN_ALERT_PCT * max(eff_ypp, 1))))
+            cyc_st = "overrun_alert" if overrun_p >= overrun_thresh else "chip_quarantined"
+            state.update({
+                "current_level": disp_lv,
+                "last_counter": usage_counter if usage_counter is not None else state.get("last_counter"),
+                "pages_after_zero": overrun_p,
+                "cycle_status": cyc_st,
+                "updated_at": now,
+            })
+            _record_snapshot(
+                conn, ip, color, printer_model, cartridge_name, cartridge_key,
+                timestamp, counters, usage_counter, disp_lv, raw_level, source,
+                valid=False, reject_reason=_REJECT_QUARANTINED_CHIP,
+            )
+            _upsert_state(conn, state)
+            return _state_public_dict(
+                state, profile,
+                extra_meta={"frozen_chip_level": _valid_level(raw_level)},
+            )
 
         if state.get("cycle_start_counter") is None and level_i is not None and usage_counter is not None:
             state.update({
@@ -1190,6 +1755,10 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
                 "pending_refill_timestamp": None,
                 "updated_at": now,
             })
+            if exact_f is not None:
+                _EXACT_ANCHOR_CACHE[(ip, color)] = (usage_counter, exact_f, cartridge_key)
+            else:
+                _EXACT_ANCHOR_CACHE.pop((ip, color), None)
             _record_snapshot(conn, ip, color, printer_model, cartridge_name, cartridge_key,
                              timestamp, counters, usage_counter, level_i, raw_level, source,
                              valid=False, reject_reason="counter_decreased_anchor_reset")
@@ -1201,11 +1770,6 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
         anchor_counter = _to_int(state.get("anchor_counter"))
 
         # ─── Surface anti-noise gate (single-pixel blip) ─────────────────────────
-        # ✅ Real data (TOSHIBA 0.40/0.41): stable level of 100% + lone polls at 8%.
-        # Without this gate, every blip would settle the anchor at 8 → the return to 100 would be detected
-        # as a "charge" → cycle_learn would record a yield of 320-400 from poisoned data.
-        # A severe drop with almost zero pages = read noise: anchor and last_valid_level are not moved,
-        # but last_counter moves forward so that its pages are preserved.
         if (prev_level is not None and level_i is not None
                 and prev_level - level_i > LEVEL_NOISE_DROP_PERCENT
                 and usage_counter is not None and last_counter is not None
@@ -1224,12 +1788,14 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
             pending_level = _to_int(state.get("pending_refill_level"))
             pending_counter = _to_int(state.get("pending_refill_counter"))
             if pending_level is not None and level_i >= pending_level - 1 and usage_counter >= (pending_counter or usage_counter):
+                end_lvl_pre = 0 if state.get("zero_reached_counter") is not None else anchor_level
                 cycle_update = _maybe_close_cycle(
                     conn, state, ip=ip, color=color, printer_model=printer_model,
                     cartridge_name=cartridge_name, cartridge_key=cartridge_key,
-                    usage_counter=usage_counter, timestamp=timestamp,
+                    usage_counter=pending_counter or usage_counter, timestamp=timestamp,
                     counter_basis=counter_basis, source="cycle_auto_refill",
                     rated_capacity=rated_capacity,
+                    end_level_before_refill=end_lvl_pre,
                 ) or {}
                 state.update(cycle_update)
                 state.update({
@@ -1249,6 +1815,10 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
                     "pending_refill_counter": None,
                     "pending_refill_timestamp": None,
                 })
+                if exact_f is not None:
+                    _EXACT_ANCHOR_CACHE[(ip, color)] = (usage_counter, exact_f, cartridge_key)
+                else:
+                    _EXACT_ANCHOR_CACHE.pop((ip, color), None)
             else:
                 state.update({
                     "pending_refill_level": level_i,
@@ -1262,6 +1832,8 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
                              timestamp, counters, usage_counter, level_i, raw_level, source,
                              valid=True, reject_reason="refill_candidate_or_confirmed")
             _upsert_state(conn, state)
+            _upsert_profile_if_high(conn, state)
+            profile = _load_profile(conn, cartridge_key)
             return _state_public_dict(state, profile)
 
         # A small toner increase is usually bounce/noise; do not learn from it, but record the last value.
@@ -1293,6 +1865,8 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
                 "anchor_timestamp": timestamp,
                 "updated_at": now,
             })
+            if exact_f is not None:
+                _EXACT_ANCHOR_CACHE[(ip, color)] = (usage_counter, exact_f, cartridge_key)
             _record_snapshot(conn, ip, color, printer_model, cartridge_name, cartridge_key,
                              timestamp, counters, usage_counter, level_i, raw_level, source, valid=True)
             _upsert_state(conn, state)
@@ -1301,15 +1875,35 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
         toner_drop = anchor_level - level_i
         pages_delta = usage_counter - anchor_counter
 
-        # Stale anchor: a refill candidate was recorded (pending_refill_level is set) and the level is now at
-        # least REFILL_JUMP_PERCENT above the anchor, but the confirmation never ran. A single-step refill
-        # (e.g. 0% -> 100%) is recorded as a candidate and last_valid_level moves to 100, so the next poll sees
-        # no new jump and the confirmation never runs; the anchor then stays at the old level and learning
-        # freezes. Restart the cycle here and record the refill time. Gradual rises with no pending candidate
-        # do not match this branch. It returns early and never reaches the sample path, so the noise gate,
-        # the quantization gate and the rated-capacity band are unchanged.
+        # Stale anchor / single-step refill confirmation (M4 fix):
+        # When a single-step refill (e.g. 0% -> 100%, or 30% -> 100%) set pending_refill_level on Poll N+1
+        # and confirmed at high level on Poll N+2, close any completed zero_plateau cycle (with pages_after_zero > 0
+        # or un-sampled drop) before resetting cycle_start_* and anchor_*, without double-counting an already-sampled
+        # 100 -> 0 drop when pages_after_zero == 0.
         pending_level = _to_int(state.get("pending_refill_level"))
         if pending_level is not None and level_i - anchor_level >= REFILL_JUMP_PERCENT:
+            refill_counter = _to_int(state.get("pending_refill_counter")) or usage_counter
+            zero_reached_now = state.get("zero_reached_counter") is not None
+            pages_after_z = _to_int(state.get("pages_after_zero"), 0)
+            existing_samples = int(state.get("sample_count") or 0)
+            should_close_zero = zero_reached_now and (pages_after_z > 0 or existing_samples == 0)
+            should_close_partial = (
+                not zero_reached_now
+                and anchor_level > 0
+                and (_to_int(state.get("cycle_start_level"), 100) - anchor_level) >= MIN_PARTIAL_CYCLE_DROP_PCT
+                and (refill_counter - anchor_counter) >= MIN_PAGES_FOR_SAMPLE
+            )
+            if should_close_zero or should_close_partial:
+                cycle_update = _maybe_close_cycle(
+                    conn, state, ip=ip, color=color, printer_model=printer_model,
+                    cartridge_name=cartridge_name, cartridge_key=cartridge_key,
+                    usage_counter=refill_counter, timestamp=timestamp,
+                    counter_basis=counter_basis, source="cycle_auto_refill",
+                    rated_capacity=rated_capacity,
+                    end_level_before_refill=0 if should_close_zero else anchor_level,
+                ) or {}
+                state.update(cycle_update)
+
             state.update({
                 "last_refill_at": timestamp,
                 "last_refill_counter": usage_counter,
@@ -1331,26 +1925,96 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
                 "last_counter": usage_counter,
                 "updated_at": now,
             })
+            if exact_f is not None:
+                _EXACT_ANCHOR_CACHE[(ip, color)] = (usage_counter, exact_f, cartridge_key)
+            else:
+                _EXACT_ANCHOR_CACHE.pop((ip, color), None)
             _record_snapshot(conn, ip, color, printer_model, cartridge_name, cartridge_key,
                              timestamp, counters, usage_counter, level_i, raw_level, source,
                              valid=True, reject_reason="stale_anchor_reset")
             _upsert_state(conn, state)
+            _upsert_profile_if_high(conn, state)
+            profile = _load_profile(conn, cartridge_key)
             return _state_public_dict(state, profile)
 
+        # High-resolution sub-percent telemetry when SNMP reports raw max > 100
+        subpct_drop = None
+        cached_exact = _EXACT_ANCHOR_CACHE.get((ip, color))
+        if exact_f is not None and cached_exact is not None:
+            c_counter, c_exact_lvl, c_key = cached_exact
+            if c_counter == anchor_counter and c_key == cartridge_key and c_exact_lvl - exact_f >= 0.75:
+                subpct_drop = c_exact_lvl - exact_f
+
         # Stable level: keep the anchor so that low-usage printers also get cumulative calculations.
-        if toner_drop <= 0:
+        if toner_drop <= 0 and subpct_drop is None:
+            eff_ypp = _to_int(state.get("yield_per_page"), rated_capacity or DEFAULT_YIELD_PER_PAGE)
+            ref_for_freeze = rated_capacity or eff_ypp or DEFAULT_YIELD_PER_PAGE
+            freeze_thresh = _frozen_chip_page_threshold(printer_model, ref_for_freeze)
+            if level_i is not None and level_i > 0 and pages_delta >= freeze_thresh:
+                est_drop = int(round(pages_delta * 100.0 / max(eff_ypp, 1)))
+                virt_lv = max(0, min(100, anchor_level - est_drop))
+                exp_empty = int(round(eff_ypp * (min(max(anchor_level, 1), 100) / 100.0)))
+                overrun_p = max(0, pages_delta - exp_empty) if virt_lv == 0 else 0
+                overrun_thresh = max(OVERRUN_ALERT_MIN_PAGES, int(round(OVERRUN_ALERT_PCT * max(eff_ypp, 1))))
+                cyc_st = "overrun_alert" if overrun_p >= overrun_thresh else "frozen_chip"
+                state.update({
+                    "current_level": virt_lv,
+                    "last_valid_level": level_i,
+                    "last_counter": usage_counter,
+                    "pages_after_zero": overrun_p,
+                    "cycle_status": cyc_st,
+                    "force_estimate": 1,
+                    "updated_at": now,
+                })
+                _record_snapshot(
+                    conn, ip, color, printer_model, cartridge_name, cartridge_key,
+                    timestamp, counters, usage_counter, virt_lv, raw_level, source,
+                    valid=False, reject_reason=_REJECT_FROZEN_CHIP,
+                )
+                _upsert_state(conn, state)
+                return _state_public_dict(
+                    state, profile,
+                    extra_meta={"frozen_chip_level": level_i},
+                )
+
             state.update({"current_level": level_i, "last_valid_level": level_i, "last_counter": usage_counter, "updated_at": now})
             _record_snapshot(conn, ip, color, printer_model, cartridge_name, cartridge_key,
                              timestamp, counters, usage_counter, level_i, raw_level, source, valid=True)
+            v2_dec = None
+            if _is_v2_estimator_enabled():
+                v2_dec = _apply_v2_state_decision(
+                    conn, state, profile=profile, device_capacity_pages=device_capacity,
+                    counter_basis=counter_basis, timestamp=timestamp,
+                )
             _upsert_state(conn, state)
-            return _state_public_dict(state, profile)
+            if v2_dec is not None:
+                _upsert_profile_if_high(conn, state)
+                profile = _load_profile(conn, cartridge_key)
+            return _state_public_dict(state, profile, interval_decision=v2_dec)
 
-        estimated_yield = int(round(pages_delta * 100.0 / toner_drop)) if toner_drop > 0 else None
+        # If a previously frozen chip genuinely steps down, restore healthy active sensor tracking.
+        if state.get("cycle_status") in ("frozen_chip", "overrun_alert"):
+            state["cycle_status"] = "zero_plateau" if level_i == 0 else "active"
+            state["force_estimate"] = 0
+            if level_i > 0:
+                state["pages_after_zero"] = 0
+
+        eff_drop = subpct_drop if subpct_drop is not None else float(toner_drop)
+        recorded_drop = max(1, int(round(eff_drop)))
+        estimated_yield = int(round(pages_delta * 100.0 / eff_drop)) if eff_drop > 0 else None
         reject_reason = None
         accepted = True
         if pages_delta < MIN_PAGES_FOR_SAMPLE:
             accepted = False
             reject_reason = "not_enough_pages_yet"
+        elif subpct_drop is not None:
+            min_subpct_pages = max(30, int(round((rated_capacity or DEFAULT_YIELD_PER_PAGE) * 0.004)))
+            if pages_delta < min_subpct_pages:
+                accepted = False
+                reject_reason = "not_enough_pages_yet"
+            elif estimated_yield < MIN_ESTIMATED_YIELD or estimated_yield > MAX_ESTIMATED_YIELD:
+                accepted = False
+                reject_reason = "estimated_yield_out_of_range"
         elif toner_drop == 1 and pages_delta < _quant_min_pages_1pct(rated_capacity):
             # A quantized sample of "1% with few pages" has a large relative error (real example:
             # 11 pages → estimate of 1100 for Cartridge 737 with a rating of 2400). Wait until
@@ -1361,12 +2025,12 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
             accepted = False
             reject_reason = "estimated_yield_out_of_range"
 
-        weight = _sample_weight(pages_delta, toner_drop, counter_quality) if accepted else 0.0
+        weight = _sample_weight(pages_delta, eff_drop, counter_quality) if accepted else 0.0
         _record_sample(conn, ip=ip, color=color, printer_model=printer_model,
                        cartridge_name=cartridge_name, cartridge_key=cartridge_key,
                        start_counter=anchor_counter, end_counter=usage_counter,
                        start_level=anchor_level, end_level=level_i,
-                       pages_delta=pages_delta, toner_drop=toner_drop,
+                       pages_delta=pages_delta, toner_drop=recorded_drop,
                        estimated_yield=estimated_yield, counter_basis=counter_basis,
                        weight=weight, accepted=accepted, reject_reason=reject_reason, source=source)
 
@@ -1377,25 +2041,37 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
             old_weight = float(state.get("total_weight") or 0.0)
             new_weight = old_weight + weight
             sample_count = int(state.get("sample_count") or 0) + 1
-            # ✅ Weighted median of recent samples (outlier-resistant) instead of a moving average
+            # ✅ Two-stage robust estimator (Midpoint Weighted Median + MAD/Huber Telescoping M-Estimator)
             _rb, _rb_w = _robust_learned_yield(conn, ip, color, cartridge_key, rated=rated_capacity)
-            new_yield = _rb if _rb else _blend_yield(old_yield, old_weight, estimated_yield, weight)
-            confidence = _derive_confidence(sample_count, new_weight, counter_basis)
+            regime = None
+            if rated_capacity and (_rb is None or abs(_rb - rated_capacity) > LEARNED_DEVIATION_LIMIT * rated_capacity):
+                regime = _detect_regime_shift(conn, ip, color, cartridge_key, rated_capacity)
+
+            if regime is not None:
+                new_yield = regime[0]
+            elif _rb is not None:
+                new_yield = _rb
+            elif rated_capacity:
+                # M8 fix: NEVER blend a reference capacity (catalog/device) with an out-of-band sample,
+                # which previously fabricated an intermediate number (e.g. 22,800) and permanently froze state.
+                new_yield = None
+            else:
+                new_yield = _blend_yield(old_yield, old_weight, estimated_yield, weight)
+
+            confidence = _derive_confidence(
+                sample_count, new_weight, counter_basis,
+                max_single_drop=eff_drop, max_single_pages=pages_delta,
+            )
             confidence = _cap_confidence_by_variance(
                 confidence, _recent_accepted_estimates(conn, ip, color, cartridge_key))
 
-            # A low-confidence sample, especially for colors or toners that have just
-            # reached 0/1%, can create an unrealistic jump. So if a better baseline exists, such as
-            # catalog/device_capacity/shared_profile, auto_learn with low confidence must not
-            # override the displayed capacity. The sample is recorded and will be used by later samples.
             keep_existing_capacity = (
+                new_yield is None or
                 (old_source in ("catalog", "device_capacity") and confidence == "low") or
                 (old_source == "shared_profile" and confidence != "high")
             )
-            # ✅ Compatibility rule with the reference: when a reference capacity (catalog/device) exists,
-            # the learned value is only displayed when it is within the ±40% band of the reference;
-            # outside it is a sign of noise or an unusual cartridge, and the reference stays displayed.
-            if (rated_capacity and new_yield
+            # ✅ Compatibility rule with the reference, unless a multi-sample low-CV regime shift is proven:
+            if (rated_capacity and new_yield is not None and regime is None
                     and abs(new_yield - rated_capacity) > LEARNED_DEVIATION_LIMIT * rated_capacity
                     and old_source not in ("manual_reset", "forced_estimate", "shared_profile")):
                 keep_existing_capacity = True
@@ -1408,6 +2084,10 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
                 "anchor_level": level_i,
                 "anchor_timestamp": timestamp,
             }
+            if exact_f is not None:
+                _EXACT_ANCHOR_CACHE[(ip, color)] = (usage_counter, exact_f, cartridge_key)
+            else:
+                _EXACT_ANCHOR_CACHE.pop((ip, color), None)
             if keep_existing_capacity:
                 update_payload.update({
                     "yield_per_page": old_yield,
@@ -1426,38 +2106,76 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
             # the next poll accumulates pages and toner drop against the same anchor (B-2). Other rejects re-anchor.
             if reject_reason not in ("not_enough_pages_yet", "quantization_1pct_noise"):
                 state.update({"anchor_counter": usage_counter, "anchor_level": level_i, "anchor_timestamp": timestamp})
+                if exact_f is not None:
+                    _EXACT_ANCHOR_CACHE[(ip, color)] = (usage_counter, exact_f, cartridge_key)
+                else:
+                    _EXACT_ANCHOR_CACHE.pop((ip, color), None)
 
         state.update({"current_level": level_i, "last_valid_level": level_i, "last_counter": usage_counter, "updated_at": now})
         _record_snapshot(conn, ip, color, printer_model, cartridge_name, cartridge_key,
                          timestamp, counters, usage_counter, level_i, raw_level, source,
                          valid=accepted, reject_reason=reject_reason)
+        v2_dec = None
+        if _is_v2_estimator_enabled():
+            v2_dec = _apply_v2_state_decision(
+                conn, state, profile=profile, device_capacity_pages=device_capacity,
+                counter_basis=counter_basis, timestamp=timestamp,
+            )
         _upsert_state(conn, state)
         _upsert_profile_if_high(conn, state)
         profile = _load_profile(conn, cartridge_key)
-        return _state_public_dict(state, profile)
+        return _state_public_dict(state, profile, interval_decision=v2_dec)
+
+
+def _extract_exact_level(toner: dict) -> Optional[float]:
+    """Derives sub-percent supply level when SNMP prtMarkerSuppliesMaxCapacity > 100 (raw units)."""
+    try:
+        max_v = toner.get("max")
+        rem_v = toner.get("remaining")
+        unit_code = toner.get("unit_code")
+        if max_v is None or rem_v is None:
+            return None
+        max_i = int(max_v)
+        rem_i = int(rem_v)
+        # Only when max_i > 100 (sub-percent resolution) and unit_code != 19 (not coarse percent)
+        if max_i > 100 and 0 <= rem_i <= max_i and unit_code != 19:
+            return round((rem_i * 100.0) / max_i, 4)
+    except (TypeError, ValueError):
+        return None
+    return None
 
 
 def process_printer_yield_snapshot(*, ip: str, printer_model: str, counters: dict,
                                    toners: Dict[str, dict], device_type: str,
-                                   timestamp: str = None, source: str = "poll") -> Dict[str, dict]:
+                                   timestamp: str = None, source: str = "poll",
+                                   swapped_colors=None,
+                                   quarantined_colors=None,
+                                   virtual_levels: Optional[Dict[str, int]] = None) -> Dict[str, dict]:
     """Processes all toners of one printer and returns per-color metadata."""
     results = {}
     if not isinstance(toners, dict):
         return results
+    swapped_set = {str(c).lower() for c in (swapped_colors or ()) if c}
+    quarantined_set = {str(c).lower() for c in (quarantined_colors or ()) if c}
+    virt_map = {str(k).lower(): v for k, v in (virtual_levels or {}).items()}
     ensure_yield_tables()
     for color in sorted(toners.keys(), key=lambda c: _COLOR_ORDER.index(c) if c in _COLOR_ORDER else 99):
         toner = toners.get(color) or {}
         if not isinstance(toner, dict):
             continue
+        color_lc = color.lower()
+        is_quarantined = (color_lc in quarantined_set) and (color_lc not in swapped_set)
         # B-3: a toner that has a raw_level key but no device reading (Canon status code, manual-override estimate)
         # is shown with its display level and must never be learned from. A toner without the key keeps the old
         # meaning: `level` is the reading.
         has_raw_key = "raw_level" in toner
         raw_level = toner.get("raw_level") if has_raw_key else toner.get("level")
-        level_is_synthetic = has_raw_key and raw_level is None and toner.get("level") is not None
+        level_is_synthetic = (not is_quarantined) and has_raw_key and raw_level is None and toner.get("level") is not None
         level = toner.get("level") if level_is_synthetic else raw_level
+        exact_level = None if (level_is_synthetic or is_quarantined) else _extract_exact_level(toner)
         name = toner.get("name") or color
         device_capacity_pages = toner.get("device_capacity_pages")
+        virt_lv = virt_map.get(color_lc, toner.get("level")) if is_quarantined else None
         try:
             results[color] = process_cartridge_snapshot(
                 ip=ip,
@@ -1472,6 +2190,10 @@ def process_printer_yield_snapshot(*, ip: str, printer_model: str, counters: dic
                 source=source,
                 device_capacity_pages=device_capacity_pages,
                 level_is_synthetic=level_is_synthetic,
+                exact_level=exact_level,
+                hardware_swap=(color_lc in swapped_set),
+                chip_quarantined=is_quarantined,
+                virtual_display_level=virt_lv,
                 _ensure_tables=False,
             )
         except Exception as exc:
@@ -1481,11 +2203,25 @@ def process_printer_yield_snapshot(*, ip: str, printer_model: str, counters: dic
 
 def register_manual_refill(*, ip: str, color: str, printer_model: str, cartridge_name: str,
                            new_level: int, counters: dict, device_type: str = "unknown",
-                           timestamp: str = None) -> dict:
-    """Records a manual reset/refill as a valid anchor for the Yield Engine."""
+                           timestamp: str = None,
+                           replacement_reason: Optional[str] = None,
+                           quarantine_chip: bool = False) -> dict:
+    """Records a manual reset/refill as a valid anchor for the Yield Engine.
+
+    `replacement_reason`:
+      - `"empty"`: physical toner depleted (faded/white print). Full cycle consumption (`start_level -> 0%`)
+        is closed even when the hardware chip was frozen/unreset (e.g. stuck at 90%), and a verified `0%`
+        interval endpoint is persisted before resetting to `new_level`.
+      - `"dirty"`: early cartridge replacement due to print dirtiness/streaks/drum-blade defect (common on
+        Canon, HP, Brother) while toner still remained. Never closes as `0%` full depletion; treats the printed
+        pages as a right-censored lower bound (`Y_true > pages_delta`), preserving learned capacity from
+        downward bias (or ratcheting up if `pages_delta` already exceeded an underestimated yield).
+      - `None` / `"auto"`: backward-compatible automatic sensor/page inference.
+    """
     ensure_yield_tables()
     timestamp = timestamp or _now()
     color = (color or "black").lower()
+    reason_norm = _normalize_replacement_reason(replacement_reason)
     # Same rule as process_cartridge_snapshot: a blank or 'Unknown' model/name keeps the stored identity (R2 fix).
     model_missing = _is_placeholder_model(printer_model)
     name_missing = _is_placeholder_name(cartridge_name, color)
@@ -1528,21 +2264,160 @@ def register_manual_refill(*, ip: str, color: str, printer_model: str, cartridge
             inherited_conf = "high"
 
         cycle_update = {}
+        prev_cyc_status = str(state.get("cycle_status") or "active")
+        was_quarantined_or_frozen = prev_cyc_status in ("chip_quarantined", "frozen_chip", "overrun_alert")
         if state and usage_counter is not None:
-            _rated_manual = (lambda cm: (cm or {}).get("yield_per_page"))(
-                _catalog_lookup(printer_model, cartridge_name, color))
-            cycle_update = _maybe_close_cycle(
-                conn, state, ip=ip, color=color, printer_model=printer_model,
-                cartridge_name=cartridge_name, cartridge_key=cartridge_key,
-                usage_counter=usage_counter, timestamp=timestamp,
-                counter_basis=counter_basis, source="cycle_manual_refill",
-                rated_capacity=_valid_device_capacity(_rated_manual),
-            ) or {}
+            _rated_manual = _valid_device_capacity((catalog_match or {}).get("yield_per_page"))
+            ref_cap_for_gate = _rated_manual or inherited_yield or DEFAULT_YIELD_PER_PAGE
+            start_lvl = _to_int(state.get("cycle_start_level"), 100)
+            start_cnt = _to_int(state.get("cycle_start_counter"))
+            last_valid_lvl = _to_int(state.get("last_valid_level"))
+            pages_delta = (usage_counter - start_cnt) if (start_cnt is not None and usage_counter >= start_cnt) else 0
+
+            if reason_norm == "empty":
+                # Technician explicitly confirmed physical toner ran empty:
+                # guard only against accidental double-click (< 15% of reference capacity).
+                min_empty_pages = max(MIN_PAGES_FOR_SAMPLE, int(0.15 * ref_cap_for_gate))
+                if start_cnt is not None and pages_delta >= min_empty_pages:
+                    cycle_update = _maybe_close_cycle(
+                        conn, state, ip=ip, color=color, printer_model=printer_model,
+                        cartridge_name=cartridge_name, cartridge_key=cartridge_key,
+                        usage_counter=usage_counter, timestamp=timestamp,
+                        counter_basis=counter_basis, source="cycle_manual_empty",
+                        rated_capacity=_rated_manual,
+                        end_level_before_refill=0,
+                        accepted_source="cycle_manual_empty",
+                    ) or {}
+                    if cycle_update and (was_quarantined_or_frozen or last_valid_lvl is None or last_valid_lvl > 5):
+                        # Record verified physical 0% interval endpoint for v2 interval estimator
+                        _record_snapshot(
+                            conn, ip, color, printer_model, cartridge_name, cartridge_key,
+                            timestamp, counters or {}, usage_counter, 0, 0,
+                            "manual_empty_confirm", valid=True, reject_reason=None,
+                        )
+                elif start_cnt is not None and pages_delta > 0:
+                    _record_sample(
+                        conn, ip=ip, color=color, printer_model=printer_model,
+                        cartridge_name=cartridge_name, cartridge_key=cartridge_key,
+                        start_counter=start_cnt, end_counter=usage_counter,
+                        start_level=start_lvl, end_level=0, pages_delta=pages_delta,
+                        toner_drop=min(max(start_lvl, 1), 100),
+                        estimated_yield=int(round(pages_delta * 100.0 / max(1, min(start_lvl, 100)))),
+                        counter_basis=counter_basis, weight=0, accepted=False,
+                        reject_reason="manual_empty_too_short", source="cycle_manual_empty",
+                    )
+
+            elif reason_norm == "dirty":
+                # Cartridge replaced early due to dirty prints / drum / wiper blade (Canon, HP, Brother):
+                # 1. If sensor had ALREADY genuinely hit 0% earlier, close zero cycle normally.
+                if state.get("zero_reached_counter") is not None:
+                    cycle_update = _maybe_close_cycle(
+                        conn, state, ip=ip, color=color, printer_model=printer_model,
+                        cartridge_name=cartridge_name, cartridge_key=cartridge_key,
+                        usage_counter=usage_counter, timestamp=timestamp,
+                        counter_basis=counter_basis, source="cycle_dirty_after_zero",
+                        rated_capacity=_rated_manual,
+                        end_level_before_refill=0,
+                    ) or {}
+                # 2. If a healthy, non-quarantined fine-grained chip genuinely dropped >= 25%,
+                #    use the partial sensor slope with cautious 0.5x weight (never 0% endpoint).
+                elif (
+                    not was_quarantined_or_frozen
+                    and last_valid_lvl is not None
+                    and 0 < last_valid_lvl < start_lvl
+                    and (start_lvl - last_valid_lvl) >= DIRTY_PARTIAL_MIN_DROP_PCT
+                    and get_brand_spec(printer_model).typical_step_pct < 5.0
+                ):
+                    cycle_update = _maybe_close_cycle(
+                        conn, state, ip=ip, color=color, printer_model=printer_model,
+                        cartridge_name=cartridge_name, cartridge_key=cartridge_key,
+                        usage_counter=usage_counter, timestamp=timestamp,
+                        counter_basis=counter_basis, source="cycle_dirty_partial",
+                        rated_capacity=_rated_manual,
+                        end_level_before_refill=last_valid_lvl,
+                        weight_scale=0.5,
+                        accepted_source="cycle_dirty_partial",
+                    ) or {}
+                # 3. Right-censored lower bound (`Y_true > pages_delta * 100 / start_lvl`):
+                #    never drag learned capacity down, but ratchet up if underestimated!
+                elif start_cnt is not None and pages_delta >= MIN_PAGES_FOR_SAMPLE:
+                    eff_start = max(1, min(start_lvl, 100))
+                    lower_bound_y = int(round(pages_delta * 100.0 / eff_start))
+                    in_band = (
+                        MIN_ESTIMATED_YIELD <= lower_bound_y <= MAX_ESTIMATED_YIELD
+                        and (not _rated_manual or lower_bound_y <= CYCLE_RATED_BAND[1] * _rated_manual)
+                    )
+                    if in_band and lower_bound_y > inherited_yield:
+                        ratcheted = int(round(0.4 * inherited_yield + 0.6 * lower_bound_y))
+                        w_lb = 2.0
+                        _record_sample(
+                            conn, ip=ip, color=color, printer_model=printer_model,
+                            cartridge_name=cartridge_name, cartridge_key=cartridge_key,
+                            start_counter=start_cnt, end_counter=usage_counter,
+                            start_level=start_lvl, end_level=last_valid_lvl,
+                            pages_delta=pages_delta, toner_drop=eff_start,
+                            estimated_yield=lower_bound_y, counter_basis=counter_basis,
+                            weight=w_lb, accepted=True, reject_reason=None,
+                            source="dirty_lower_bound",
+                        )
+                        inherited_yield = ratcheted
+                        inherited_source = "cycle_learn"
+                        if inherited_conf == "low":
+                            inherited_conf = "medium"
+                        state["sample_count"] = int(state.get("sample_count") or 0) + 1
+                        state["total_weight"] = float(state.get("total_weight") or 0.0) + w_lb
+                        state["learned_at"] = timestamp
+                    else:
+                        _record_sample(
+                            conn, ip=ip, color=color, printer_model=printer_model,
+                            cartridge_name=cartridge_name, cartridge_key=cartridge_key,
+                            start_counter=start_cnt, end_counter=usage_counter,
+                            start_level=start_lvl, end_level=last_valid_lvl,
+                            pages_delta=pages_delta, toner_drop=0,
+                            estimated_yield=lower_bound_y if lower_bound_y > 0 else None,
+                            counter_basis=counter_basis, weight=0, accepted=False,
+                            reject_reason="dirty_cartridge_early_swap",
+                            source="manual_reset_dirty",
+                        )
+
+            else:
+                # Legacy / unspecified reason: preserve existing sensor/page inference, while
+                # avoiding bogus partial-drop math if the chip was quarantined/frozen!
+                if state.get("zero_reached_counter") is not None:
+                    end_lvl_manual = 0
+                elif (
+                    not was_quarantined_or_frozen
+                    and last_valid_lvl is not None
+                    and 0 < last_valid_lvl < start_lvl
+                ):
+                    end_lvl_manual = last_valid_lvl
+                else:
+                    min_manual_pages = max(MIN_ESTIMATED_YIELD, int(0.30 * ref_cap_for_gate))
+                    end_lvl_manual = 0 if (start_cnt is not None and pages_delta >= min_manual_pages) else start_lvl
+
+                cycle_update = _maybe_close_cycle(
+                    conn, state, ip=ip, color=color, printer_model=printer_model,
+                    cartridge_name=cartridge_name, cartridge_key=cartridge_key,
+                    usage_counter=usage_counter, timestamp=timestamp,
+                    counter_basis=counter_basis, source="cycle_manual_refill",
+                    rated_capacity=_rated_manual,
+                    end_level_before_refill=end_lvl_manual,
+                ) or {}
+                if cycle_update and was_quarantined_or_frozen and end_lvl_manual == 0:
+                    _record_snapshot(
+                        conn, ip, color, printer_model, cartridge_name, cartridge_key,
+                        timestamp, counters or {}, usage_counter, 0, 0,
+                        "manual_empty_confirm", valid=True, reject_reason=None,
+                    )
+
             if cycle_update:
                 inherited_yield = cycle_update.get("yield_per_page", inherited_yield)
                 inherited_source = cycle_update.get("yield_source", inherited_source)
                 inherited_conf = cycle_update.get("confidence", inherited_conf)
+                state.update(cycle_update)
 
+        new_cyc_status = "chip_quarantined" if quarantine_chip else "active"
+        snap_source = f"manual_reset:{reason_norm}" if reason_norm else "manual_reset"
         state.update({
             "printer_ip": ip,
             "color": color,
@@ -1571,15 +2446,26 @@ def register_manual_refill(*, ip: str, color: str, printer_model: str, cartridge
             "zero_reached_counter": None,
             "zero_reached_timestamp": None,
             "pages_after_zero": 0,
-            "cycle_status": "active",
+            "cycle_status": new_cyc_status,
             "updated_at": _now(),
         })
+        _EXACT_ANCHOR_CACHE.pop((ip, color), None)
         _record_snapshot(conn, ip, color, printer_model, cartridge_name, cartridge_key,
                          timestamp, counters or {}, usage_counter, level_i, level_i,
-                         "manual_reset", valid=usage_counter is not None,
+                         snap_source, valid=usage_counter is not None,
                          reject_reason=None if usage_counter is not None else "missing_counter_manual_reset")
+        if _is_v2_estimator_enabled():
+            _apply_v2_state_decision(
+                conn, state, profile=profile,
+                counter_basis=counter_basis, timestamp=timestamp,
+            )
         _upsert_state(conn, state)
-        return _state_public_dict(state, profile)
+        _upsert_profile_if_high(conn, state)
+        profile = _load_profile(conn, cartridge_key)
+        return _state_public_dict(
+            state, profile,
+            extra_meta={"last_reset_reason": reason_norm},
+        )
 
 
 def get_yield_status(ip: str = None) -> list:
@@ -1603,32 +2489,130 @@ def get_yield_status(ip: str = None) -> list:
             """,
             params,
         ).fetchall()
-    return [
-        {
-            "printer_ip": r[0],
-            "color": r[1],
-            "printer_model": r[2],
-            "cartridge_name": r[3],
-            "cartridge_key": r[4],
-            "current_level": r[5],
-            "yield_per_page": r[6],
-            "yield_source": r[7],
-            "confidence": r[8],
-            "sample_count": r[9],
-            "total_weight": r[10],
-            "anchor_level": r[11],
-            "anchor_counter": r[12],
-            "last_refill_at": r[13],
-            "learned_at": r[14],
-            "cycle_start_counter": r[15],
-            "cycle_start_level": r[16],
-            "zero_reached_counter": r[17],
-            "pages_after_zero": r[18],
-            "cycle_status": r[19],
-            "updated_at": r[20],
-        }
-        for r in rows
-    ]
+
+        profiles_by_key: Dict[str, dict] = {}
+        snap_by_slot: Dict[Tuple[str, str], list] = {}
+        if rows:
+            try:
+                for pr in conn.execute(
+                    "SELECT cartridge_key, yield_per_page, confidence, sample_count, total_weight, source_printer_ip "
+                    "FROM cartridge_yield_profiles"
+                ).fetchall():
+                    if pr[0]:
+                        profiles_by_key[str(pr[0])] = {
+                            "cartridge_key": pr[0],
+                            "yield_per_page": pr[1],
+                            "confidence": pr[2],
+                            "sample_count": pr[3],
+                            "total_weight": pr[4],
+                            "source_printer_ip": pr[5],
+                        }
+            except Exception:
+                profiles_by_key = {}
+
+            try:
+                snap_rows = conn.execute(
+                    f"""
+                    SELECT printer_ip, color, usage_counter, toner_level, raw_level, source,
+                           valid, reject_reason, timestamp, cartridge_key, full_color, print_total
+                    FROM toner_snapshots_v2
+                    {where}
+                    ORDER BY id ASC
+                    """,
+                    params,
+                ).fetchall()
+                for sr in snap_rows:
+                    slot = (str(sr[0] or ""), str(sr[1] or "").lower())
+                    buf = snap_by_slot.setdefault(slot, [])
+                    buf.append(sr[2:])
+            except Exception:
+                snap_by_slot = {}
+
+        out = []
+        v2_active = _is_v2_estimator_enabled()
+        for r in rows:
+            p_ip = r[0]
+            c_name = str(r[1] or "").lower()
+            c_key = r[4]
+            cur_lv = r[5]
+            ypp_val = r[6]
+            item = {
+                "printer_ip": p_ip,
+                "color": r[1],
+                "printer_model": r[2],
+                "cartridge_name": r[3],
+                "cartridge_key": c_key,
+                "current_level": cur_lv,
+                "yield_per_page": ypp_val,
+                "yield_source": r[7],
+                "confidence": r[8],
+                "sample_count": r[9],
+                "total_weight": r[10],
+                "anchor_level": r[11],
+                "anchor_counter": r[12],
+                "last_refill_at": r[13],
+                "learned_at": r[14],
+                "cycle_start_counter": r[15],
+                "cycle_start_level": r[16],
+                "zero_reached_counter": r[17],
+                "pages_after_zero": r[18],
+                "cycle_status": r[19],
+                "updated_at": r[20],
+            }
+            slot_snaps = snap_by_slot.get((str(p_ip or ""), c_name), [])[-400:]
+            dec = estimate_cartridge_interval(
+                conn,
+                ip=p_ip,
+                color=c_name,
+                state=item,
+                profile=profiles_by_key.get(str(c_key or "")),
+                snap_rows=slot_snaps,
+            )
+            eff_cap = dec.capacity_pages if v2_active else int(ypp_val or dec.capacity_pages or DEFAULT_YIELD_PER_PAGE)
+            eta_p = (
+                int(round((max(0.0, min(100.0, float(cur_lv))) / 100.0) * eff_cap))
+                if cur_lv is not None
+                else None
+            )
+            cov_idx = dec.coverage_index
+            if not v2_active and dec.nominal_capacity_pages and eff_cap > 0:
+                cov_idx = round(max(0.15, min(6.0, float(dec.nominal_capacity_pages) / float(eff_cap))), 3)
+
+            cyc_st = str(r[19] or "active")
+            pages_after_z = int(r[18] or 0)
+            sensor_state = cyc_st if cyc_st in ("overrun_alert", "chip_quarantined", "frozen_chip") else "healthy"
+            frozen_raw_lv = None
+            last_reset_reason = None
+            if slot_snaps:
+                if sensor_state != "healthy":
+                    frozen_raw_lv = _valid_level(slot_snaps[-1][2])
+                for s_row in reversed(slot_snaps):
+                    s_src = str(s_row[3] or "")
+                    if s_src.startswith("manual_reset:"):
+                        last_reset_reason = s_src.split(":", 1)[1] or None
+                        break
+                    if s_src == "manual_reset":
+                        break
+
+            item.update({
+                "sensor_state": sensor_state,
+                "chip_quarantined": cyc_st in ("chip_quarantined", "overrun_alert"),
+                "frozen_chip_level": frozen_raw_lv,
+                "overrun_pages": pages_after_z if sensor_state != "healthy" else 0,
+                "unregistered_refill_suspected": cyc_st == "overrun_alert",
+                "last_reset_reason": last_reset_reason,
+                "interval_capacity_pages": dec.capacity_pages,
+                "capacity_ci95": [dec.capacity_ci95[0], dec.capacity_ci95[1]],
+                "rel_ci95": dec.rel_ci95,
+                "capacity_method": dec.capacity_method,
+                "learning_state": dec.learning_state,
+                "nominal_capacity_pages": dec.nominal_capacity_pages,
+                "coverage_index": cov_idx,
+                "eta_pages": eta_p,
+                "n_plateaus": dec.n_plateaus,
+            })
+            out.append(item)
+    return out
 
 
 def write_yield_status_report(path: str = "yield_status_report.txt") -> None:
@@ -1657,6 +2641,7 @@ BRAND_COLOR_FALLBACKS: Dict[str, Dict[str, int]] = {
         "cyan": 33600,
         "magenta": 33600,
         "yellow": 33600,
+        "drum": 120000,
         "default": 33600,
     },
     "hp": {
@@ -1664,6 +2649,7 @@ BRAND_COLOR_FALLBACKS: Dict[str, Dict[str, int]] = {
         "cyan": 6000,
         "magenta": 6000,
         "yellow": 6000,
+        "drum": 30000,
         "default": 6000,
     },
     "canon": {
@@ -1671,6 +2657,7 @@ BRAND_COLOR_FALLBACKS: Dict[str, Dict[str, int]] = {
         "cyan": 2300,
         "magenta": 2300,
         "yellow": 2300,
+        "drum": 23000,
         "default": 2500,
     },
     "brother": {
@@ -1678,7 +2665,56 @@ BRAND_COLOR_FALLBACKS: Dict[str, Dict[str, int]] = {
         "cyan": 1500,
         "magenta": 1500,
         "yellow": 1500,
+        "drum": 12000,
         "default": 2000,
+    },
+    "kyocera": {
+        "black": 12000,
+        "cyan": 8000,
+        "magenta": 8000,
+        "yellow": 8000,
+        "drum": 100000,
+        "default": 8000,
+    },
+    "ricoh": {
+        "black": 24000,
+        "cyan": 18000,
+        "magenta": 18000,
+        "yellow": 18000,
+        "drum": 90000,
+        "default": 18000,
+    },
+    "xerox": {
+        "black": 13900,
+        "cyan": 9000,
+        "magenta": 9000,
+        "yellow": 9000,
+        "drum": 60000,
+        "default": 9000,
+    },
+    "lexmark": {
+        "black": 8500,
+        "cyan": 5000,
+        "magenta": 5000,
+        "yellow": 5000,
+        "drum": 40000,
+        "default": 5000,
+    },
+    "samsung": {
+        "black": 4000,
+        "cyan": 3500,
+        "magenta": 3500,
+        "yellow": 3500,
+        "drum": 20000,
+        "default": 3500,
+    },
+    "epson": {
+        "black": 6000,
+        "cyan": 5000,
+        "magenta": 5000,
+        "yellow": 5000,
+        "drum": 25000,
+        "default": 5000,
     },
 }
 
@@ -1733,56 +2769,107 @@ def compute_yield_per_color(
 
     Algorithm:
       1. Extract the data of past cycles from cartridge_lifecycle, if present.
-      2. Use the median instead of the simple average to filter outliers.
-      3. If there are not enough samples, use the samples from cartridge_state and yield_samples.
-      4. Fall back to the brand/color estimate if there is no historical data.
+      2. Scope yield_samples to the active cartridge_key when available (preventing cross-swap mixing).
+      3. Use the median instead of the simple average to filter outliers.
+      4. Check cartridge_state (skipping uninformative 'default' rows when brand fallback is known).
+      5. Fall back to the brand/color estimate if there is no historical data.
     """
     color = (color or "black").strip().lower()
 
     def _query(c: Any) -> Optional[float]:
+        # Discover active cartridge_key / state metadata up front when available
+        active_key: Optional[str] = None
+        state_ypp: Optional[float] = None
+        state_model: Optional[str] = None
+        state_source: Optional[str] = None
+        is_pg = getattr(c, "backend", "sqlite") == BACKEND_POSTGRESQL
+        try:
+            r_state = c.execute(
+                "SELECT yield_per_page, printer_model, cartridge_key, yield_source "
+                "FROM cartridge_state WHERE printer_ip = ? AND color = ?",
+                (printer_ip, color),
+            ).fetchone()
+            if r_state:
+                if r_state[0] and r_state[0] > 0:
+                    state_ypp = float(r_state[0])
+                if r_state[1]:
+                    state_model = str(r_state[1])
+                if r_state[2]:
+                    active_key = str(r_state[2])
+                if r_state[3]:
+                    state_source = str(r_state[3])
+        except Exception:
+            if not is_pg:
+                try:
+                    r_min = c.execute(
+                        "SELECT yield_per_page, printer_model FROM cartridge_state WHERE printer_ip = ? AND color = ?",
+                        (printer_ip, color),
+                    ).fetchone()
+                    if r_min:
+                        if r_min[0] and r_min[0] > 0:
+                            state_ypp = float(r_min[0])
+                        if r_min[1]:
+                            state_model = str(r_min[1])
+                except Exception as exc:
+                    log.debug("compute_yield_per_color: cartridge_state fallback query failed: %s", exc)
+
         # 1. Check closed cycles in cartridge_lifecycle
         samples: list[float] = []
-        try:
-            rows = c.execute(
-                """
-                SELECT actual_yield_per_page
-                FROM cartridge_lifecycle
-                WHERE printer_ip = ? AND cartridge_color = ? AND actual_yield_per_page IS NOT NULL AND actual_yield_per_page > 0
-                ORDER BY id DESC LIMIT 20
-                """,
-                (printer_ip, color),
-            ).fetchall()
-            for r in rows:
-                if r[0] and MIN_ESTIMATED_YIELD <= r[0] <= MAX_ESTIMATED_YIELD:
-                    samples.append(float(r[0]))
-        except Exception as exc:
-            log.warning(
-                "compute_yield_per_color: cartridge_lifecycle query failed for %s/%s: %s",
-                printer_ip, color, exc, exc_info=True,
-            )
-
-        # 2. Check learning samples in yield_samples
-        if len(samples) < 3:
+        if not is_pg:
             try:
                 rows = c.execute(
                     """
-                    SELECT estimated_yield
-                    FROM yield_samples
-                    WHERE printer_ip = ? AND color = ? AND accepted = ? AND estimated_yield > 0
+                    SELECT actual_yield_per_page
+                    FROM cartridge_lifecycle
+                    WHERE printer_ip = ? AND cartridge_color = ? AND actual_yield_per_page IS NOT NULL AND actual_yield_per_page > 0
                     ORDER BY id DESC LIMIT 20
                     """,
-                    (printer_ip, color, True),
+                    (printer_ip, color),
                 ).fetchall()
                 for r in rows:
                     if r[0] and MIN_ESTIMATED_YIELD <= r[0] <= MAX_ESTIMATED_YIELD:
                         samples.append(float(r[0]))
-            except Exception as exc:
-                log.warning(
-                    "compute_yield_per_color: yield_samples query failed for %s/%s: %s",
-                    printer_ip, color, exc, exc_info=True,
-                )
+            except Exception:
+                pass
 
-        # 3. If there are enough samples, compute the median (Median) after removing outliers
+        # 2. Check learning samples in yield_samples (scoped to active cartridge_key when present)
+        if len(samples) < 3:
+            rows = []
+            if active_key:
+                try:
+                    rows = c.execute(
+                        """
+                        SELECT estimated_yield
+                        FROM yield_samples
+                        WHERE printer_ip = ? AND color = ? AND accepted = ? AND estimated_yield > 0
+                          AND (cartridge_key = ? OR cartridge_key IS NULL OR cartridge_key = '')
+                        ORDER BY id DESC LIMIT 20
+                        """,
+                        (printer_ip, color, True, active_key),
+                    ).fetchall()
+                except Exception:
+                    rows = []
+            if not rows:
+                try:
+                    rows = c.execute(
+                        """
+                        SELECT estimated_yield
+                        FROM yield_samples
+                        WHERE printer_ip = ? AND color = ? AND accepted = ? AND estimated_yield > 0
+                        ORDER BY id DESC LIMIT 20
+                        """,
+                        (printer_ip, color, True),
+                    ).fetchall()
+                except Exception as exc:
+                    log.warning(
+                        "compute_yield_per_color: yield_samples query failed for %s/%s: %s",
+                        printer_ip, color, exc, exc_info=True,
+                    )
+            for r in rows:
+                if r[0] and MIN_ESTIMATED_YIELD <= r[0] <= MAX_ESTIMATED_YIELD:
+                    samples.append(float(r[0]))
+
+        # 3. If there are samples, compute the median (Median) to reject outliers
         if samples:
             samples.sort()
             n = len(samples)
@@ -1792,22 +2879,14 @@ def compute_yield_per_color(
                 median_val = (samples[n // 2 - 1] + samples[n // 2]) / 2.0
             return round(median_val, 2)
 
-        # 4. Check cartridge_state
-        b_name = brand
-        try:
-            r = c.execute(
-                "SELECT yield_per_page, printer_model FROM cartridge_state WHERE printer_ip = ? AND color = ?",
-                (printer_ip, color),
-            ).fetchone()
-            if r and r[0] and r[0] > 0:
-                return float(r[0])
-            if not b_name and r and r[1]:
-                b_name = str(r[1])
-        except Exception as exc:
-            log.warning(
-                "compute_yield_per_color: cartridge_state query failed for %s/%s: %s",
-                printer_ip, color, exc, exc_info=True,
-            )
+        # 4. Check cartridge_state: if yield_source is 'default' and a brand fallback is known, prefer brand fallback (R5 fix)
+        b_name = brand or state_model
+        if state_ypp and state_ypp > 0:
+            if state_source == "default" and b_name:
+                fb_val = estimate_yield_fallback(b_name, color, default_pages=-1)
+                if fb_val > 0:
+                    return float(fb_val)
+            return state_ypp
 
         # 5. Fallback based on brand and color
         if b_name:

@@ -28,7 +28,7 @@
               "toner_overrides": "{}",
               "updated_at": "<TS_UTC>",
               "yield_learning_failures": 0,
-              "yield_per_page": 2000
+              "yield_per_page": 1950
             }
           ],
           "toner_snapshots_v2": [],
@@ -77,10 +77,10 @@
             "scan_net_fc": null,
             "total": 25431,
             "twin": null,
-            "yield_confidence": "low",
+            "yield_confidence": "medium",
             "yield_learning_failures": 0,
-            "yield_per_page": 2000,
-            "yield_source": "default"
+            "yield_per_page": 1950,
+            "yield_source": "catalog"
           },
           "device": {
             "firmware": "N/A",
@@ -98,8 +98,8 @@
           "poll_ms": 1000,
           "toners": {
             "black": {
-              "capacity_pages": 2000,
-              "capacity_source": "default",
+              "capacity_pages": 1950,
+              "capacity_source": "catalog",
               "cycle_start_counter": null,
               "cycle_start_level": null,
               "cycle_status": "active",
@@ -120,8 +120,8 @@
               "usage": null,
               "usage_m": null,
               "yield_cartridge_key": "hl-l2350dw|black toner cartridge tn-2430|black",
-              "yield_confidence": "low",
-              "yield_per_page": 2000,
+              "yield_confidence": "medium",
+              "yield_per_page": 1950,
               "yield_sample_count": 0,
               "yield_total_weight": 0.0
             }

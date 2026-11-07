@@ -406,19 +406,28 @@
 
 <!-- TONER RESET MODAL -->
 <div class="modal-overlay" id="modal-toner-reset" style="display:none" onclick="if(event.target===this) closeTonerResetModal()">
-  <div class="modal" style="width:420px">
+  <div class="modal" style="width:min(460px, 94vw)">
     <h3>🔁 تنظیم مجدد کارتریج</h3>
     <div class="form-group">
       <label for="toner-reset-color" class="form-label">رنگ کارتریج</label>
-      <select id="toner-reset-color" class="form-input"></select>
+      <select id="toner-reset-color" class="form-input" onchange="updateTonerResetContext()"></select>
+    </div>
+    <div id="toner-reset-chip-note" class="toner-reset-note" style="display:none"></div>
+    <div class="form-group">
+      <label for="toner-reset-reason" class="form-label">علت تعویض یا شارژ کارتریج</label>
+      <select id="toner-reset-reason" class="form-input" onchange="updateTonerResetReasonHint()">
+        <option value="empty" selected>🫙 خالی شدن تونر / کم‌رنگ و سفید شدن چاپ</option>
+        <option value="dirty">🧹 کثیف بودن چاپ / خرابی قطعات کارتریج (Canon · HP · Brother)</option>
+      </select>
+      <div id="toner-reset-reason-hint" class="toner-reset-reason-hint"></div>
     </div>
     <div class="form-group">
-      <label for="toner-reset-level" class="form-label">درصد جدید (۰–۱۰۰)</label>
+      <label for="toner-reset-level" class="form-label">درصد جدید کارتریج جایگزین / شارژشده (۰–۱۰۰)</label>
       <input id="toner-reset-level" type="number" min="0" max="100" value="100" class="form-input">
     </div>
     <div class="form-actions">
       <button class="btn" onclick="closeTonerResetModal()">انصراف</button>
-      <button class="btn btn-green" onclick="submitTonerReset()">تأیید</button>
+      <button class="btn btn-green" onclick="submitTonerReset()">تأیید و ثبت</button>
     </div>
   </div>
 </div>

@@ -675,7 +675,49 @@ async function fetchData() {
 
 // Toner Reset Modal and handlers
 let _tonerResetTargetIp = null;
-function openTonerResetModal(ip) {
+
+function updateTonerResetReasonHint() {
+  const modal = document.getElementById('modal-toner-reset');
+  if (!modal) return;
+  const reasonEl = modal.querySelector('#toner-reset-reason');
+  const hintEl = modal.querySelector('#toner-reset-reason-hint');
+  if (!reasonEl || !hintEl) return;
+  const reason = reasonEl.value || 'empty';
+  if (reason === 'dirty') {
+    hintEl.innerHTML = '🧹 <strong>تعویض زودهنگام (کثیفی چاپ / خرابی قطعه):</strong> کارتریج قبلی هنوز پودر داشته اما به‌دلیل خط انداختن، کثیفی صفحه یا خرابی درام/بلید تعویض شده است؛ سیستم از کاهش اشتباه ظرفیت یادگرفته‌شده جلوگیری می‌کند.';
+  } else {
+    hintEl.innerHTML = '🫙 <strong>اتمام واقعی تونر:</strong> کارتریج قبلی کاملاً خالی شده است؛ کل صفحات چاپ‌شده در این چرخه (حتی اگر چیپ کارتریج ریست نشده یا روی عددی مثل ۹۰٪ ثابت مانده باشد) برای یادگیری دقیق ظرفیت ثبت می‌شود.';
+  }
+}
+
+function updateTonerResetContext() {
+  const modal = document.getElementById('modal-toner-reset');
+  if (!modal || !_tonerResetTargetIp) return;
+  const noteEl = modal.querySelector('#toner-reset-chip-note');
+  const sel = modal.querySelector('#toner-reset-color');
+  if (!noteEl || !sel) return;
+  const p = (allData || []).find(x => x.ip === _tonerResetTargetIp) || {};
+  const td = (p.toners || {})[sel.value] || {};
+  const rawLv = typeof td.raw_level === 'number' && td.raw_level >= 0 && td.raw_level <= 100
+    ? td.raw_level
+    : (typeof td.frozen_chip_level === 'number' ? td.frozen_chip_level : null);
+  const overrun = Number(td.overrun_pages || 0);
+  const sensorState = td.sensor_state || 'healthy';
+
+  if (sensorState === 'overrun_alert' && overrun > 0) {
+    const chipPart = rawLv !== null ? ` (چیپ ثابت روی ${fmtN(rawLv)}٪)` : '';
+    noteEl.style.display = 'block';
+    noteEl.innerHTML = `🔔 این کارتریج <strong>${fmtN(overrun)} صفحه</strong> پس از اتمام تخمینی چاپ کرده است${chipPart}. با ثبت این فرم، شمارش جدید کارتریج آغاز و چیپ نامعتبر قرنطینه می‌شود.`;
+  } else if ((sensorState === 'frozen_chip' || sensorState === 'chip_quarantined') && rawLv !== null) {
+    noteEl.style.display = 'block';
+    noteEl.innerHTML = `🛡️ مقدار خام چیپ در حال حاضر <strong>${fmtN(rawLv)}٪</strong> است؛ پس از ثبت، در صورت تعویض‌نشدن چیپ، عدد ثابت چیپ قرنطینه شده و مصرف دقیق از روی کنتور محاسبه می‌شود.`;
+  } else {
+    noteEl.style.display = 'none';
+    noteEl.innerHTML = '';
+  }
+}
+
+function openTonerResetModal(ip, preselectColor = null) {
   _tonerResetTargetIp = ip;
   const p = (allData || []).find(x=>x.ip===ip) || {};
   const toners = p.toners || {};
@@ -685,8 +727,19 @@ function openTonerResetModal(ip) {
   if (!modal) return;
   const sel = modal.querySelector('#toner-reset-color');
   const lvl = modal.querySelector('#toner-reset-level');
-  sel.innerHTML = colors.map(c=>`<option value="${c}">${({black:'مشکی',cyan:'سیان',magenta:'مژنتا',yellow:'زرد'}[c])}</option>`).join('');
+  const reasonSel = modal.querySelector('#toner-reset-reason');
+  const colorLabels = {black:'مشکی',cyan:'سیان',magenta:'مژنتا',yellow:'زرد'};
+  sel.innerHTML = colors.map(c => {
+    const lv = typeof toners[c]?.level === 'number' ? ` (${toners[c].level}%)` : '';
+    return `<option value="${c}">${colorLabels[c] || c}${lv}</option>`;
+  }).join('');
+  if (preselectColor && colors.includes(preselectColor)) {
+    sel.value = preselectColor;
+  }
+  if (reasonSel) reasonSel.value = 'empty';
   lvl.value = 100;
+  updateTonerResetContext();
+  updateTonerResetReasonHint();
   modal.style.display = 'block';
 }
 
@@ -700,6 +753,8 @@ async function submitTonerReset() {
   const modal = document.getElementById('modal-toner-reset');
   if (!modal) return;
   const color = modal.querySelector('#toner-reset-color').value;
+  const reasonEl = modal.querySelector('#toner-reset-reason');
+  const reason = reasonEl ? (reasonEl.value || 'empty') : 'empty';
   let new_level = parseInt(modal.querySelector('#toner-reset-level').value || '100');
   if (isNaN(new_level)) new_level = 100;
   new_level = Math.max(0, Math.min(100, new_level));
@@ -708,11 +763,12 @@ async function submitTonerReset() {
     const r = await apiFetch(`${API}/api/printer/${encodeURIComponent(_tonerResetTargetIp)}/toner_reset`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ color, new_level })
+      body: JSON.stringify({ color, new_level, reason })
     });
     const j = await r.json();
     if (r.ok) {
-      toast('مقدار تونر به‌روزرسانی شد','s');
+      const reasonMsg = reason === 'dirty' ? ' (ثبت تعویض به‌علت کثیفی چاپ)' : ' (ثبت شارژ پس از اتمام تونر)';
+      toast(`مقدار تونر به‌روزرسانی شد${reasonMsg}`,'s');
       closeTonerResetModal();
       fetchData();
     } else {
@@ -1504,21 +1560,46 @@ function buildPrinterDetail(p) {
         ? `${fmtN(learnedCapacity)} صفحه${isReferenceCapacity ? '' : ' تخمینی'}`
         : ((typeof td.max === 'number' && td.max > 100) ? `${fmtN(td.max)} صفحه` : '—');
       const pagesAfterZero = Number(td.pages_after_zero || 0);
-      // the zero-plateau message only makes sense when the current level is really 0%.
-      // after a charge/reset, cycle_status may temporarily remain in the backend until the next poll confirms it;
-      // at 100% the message "toner is empty" must not be shown.
-      const showZeroPlateau = hasLevel && level === 0 && (td.cycle_status === 'zero_plateau' || pagesAfterZero > 0);
+      const overrunPages = Number(td.overrun_pages || pagesAfterZero || 0);
+      const sensorState = td.sensor_state || 'healthy';
+      const rawChipVal = (typeof td.frozen_chip_level === 'number' && td.frozen_chip_level >= 0 && td.frozen_chip_level <= 100)
+        ? td.frozen_chip_level
+        : ((typeof td.raw_level === 'number' && td.raw_level >= 0 && td.raw_level <= 100) ? td.raw_level : null);
+      const isOverrunAlert = Boolean(td.unregistered_refill_suspected || (sensorState === 'overrun_alert' && overrunPages > 0));
+      // the zero-plateau message only makes sense when the current level is really 0% on a live non-quarantined sensor.
+      const showZeroPlateau = !isOverrunAlert && sensorState === 'healthy' && hasLevel && level === 0
+        && (td.cycle_status === 'zero_plateau' || pagesAfterZero > 0);
       const zeroPlateauHtml = showZeroPlateau ? `
         <div class="supply-zero-hint">تونر از دید SNMP صفر است اما چاپ ادامه دارد؛ چاپ پس از صفر: <strong class="num">${fmtN(pagesAfterZero)}</strong> صفحه</div>
       ` : '';
+      let chipSensorHintHtml = '';
+      if (isOverrunAlert) {
+        const chipPart = rawChipVal !== null ? ` (چیپ ثابت روی <strong class="num">${fmtN(rawChipVal)}%</strong>)` : '';
+        chipSensorHintHtml = `
+          <div class="supply-overrun-hint">
+            <div>🔔 <strong>احتمال شارژ یا تعویض ثبت‌نشده:</strong> <strong class="num">${fmtN(overrunPages)}</strong> صفحه پس از اتمام تخمینی (۰٪) چاپ شده است${chipPart}.</div>
+            ${canManage() ? `<button type="button" class="btn btn-sm btn-cyan" style="margin-top:6px;font-size:10px" onclick="openTonerResetModal('${escapeHtml(p.ip)}','${escapeHtml(col)}')">🔁 ثبت شارژ / تنظیم مجدد</button>` : ''}
+          </div>
+        `;
+      } else if (sensorState === 'frozen_chip') {
+        const chipPart = rawChipVal !== null ? ` روی <strong class="num">${fmtN(rawChipVal)}%</strong>` : '';
+        chipSensorHintHtml = `
+          <div class="supply-chip-hint is-frozen">⚠️ چیپ کارتریج${chipPart} ثابت مانده است؛ درصد تونر بر اساس شمارنده چاپ محاسبه می‌شود.</div>
+        `;
+      } else if (sensorState === 'chip_quarantined' && rawChipVal !== null && rawChipVal !== level) {
+        chipSensorHintHtml = `
+          <div class="supply-chip-hint is-quarantined">🛡️ قرنطینه چیپ (مقدار خام سنسور: <strong class="num">${fmtN(rawChipVal)}%</strong>) — محاسبه هوشمند از آخرین شارژ</div>
+        `;
+      }
+      const statusHintsHtml = `${zeroPlateauHtml}${chipSensorHintHtml}`;
       const yieldInfoHtml = learnedCapacity > 0 ? `
         <div class="supply-yield-info">
           <span class="yield-chip yc-${escapeHtml(yieldConfidence)}">اعتماد: ${escapeHtml(yieldConfidenceText)}</span>
           <span>منبع: ${escapeHtml(yieldSourceText)}</span>
           ${yieldSamples ? `<span>نمونه: <strong class="num">${fmtN(yieldSamples)}</strong></span>` : ''}
         </div>
-        ${zeroPlateauHtml}
-      ` : zeroPlateauHtml;
+        ${statusHintsHtml}
+      ` : statusHintsHtml;
       const remainingText = hasLevel
         ? `${level}%`
         : (typeof td.remaining === 'number' && td.remaining >= 0 ? fmtN(td.remaining) : '—');

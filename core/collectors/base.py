@@ -148,6 +148,22 @@ def _learn_yield_per_page(ip: str, delta_pages: int, prev_toner_level: int, curr
     if toner_drop < 1 or delta_pages < 50:
         return
 
+    # M6 reconciliation: when the per-cartridge Yield Engine already manages this printer's black slot
+    # with a non-default source, defer to Yield Engine so legacy 2-poll 0.6/0.4 blending and the old
+    # 10-failure force_estimate counter never conflict with or overwrite per-cartridge learning.
+    try:
+        from core.database import db_connection
+        with db_connection() as _yc:
+            _yrow = _yc.execute(
+                "SELECT yield_per_page, yield_source FROM cartridge_state WHERE printer_ip = ? AND color = 'black'",
+                (ip,),
+            ).fetchone()
+            if _yrow and _yrow[0] and int(_yrow[0]) > 0 and (_yrow[1] or "default") != "default":
+                log.debug("  [%s] legacy _learn_yield_per_page deferred to yield_engine (source=%s)", ip, _yrow[1])
+                return
+    except Exception:
+        pass
+
     try:
         estimated_yield = int(round(delta_pages * 100.0 / toner_drop))
     except ZeroDivisionError:
@@ -157,7 +173,7 @@ def _learn_yield_per_page(ip: str, delta_pages: int, prev_toner_level: int, curr
         log.exception("  [%s] yield learning error: %s", ip, exc)
         return
 
-    if estimated_yield < 300 or estimated_yield > 20000:
+    if estimated_yield < 300 or estimated_yield > 600000:
         log.info(f"  [{ip}] yield learning ignored خارج از بازه: {estimated_yield}")
         return
 
@@ -320,8 +336,17 @@ def apply_toner_override(ip: str, total: int, snmp_level: int = None, color: str
     if pages_since_override == 0:
         return override_start_toner
 
-    yield_per_page = prev.get("yield_per_page", DEFAULT_YIELD_PER_PAGE)
-    if not isinstance(yield_per_page, int) or yield_per_page <= 0:
+    # Per-color yield_per_page priority: slot-specific yield -> per-color map -> printer default
+    raw_ypp = entry.get("yield_per_page")
+    if raw_ypp is None and isinstance(prev.get("yield_per_color"), dict):
+        raw_ypp = prev["yield_per_color"].get(color)
+    if raw_ypp is None:
+        raw_ypp = prev.get("yield_per_page", DEFAULT_YIELD_PER_PAGE)
+    try:
+        yield_per_page = int(raw_ypp)
+    except (TypeError, ValueError):
+        yield_per_page = DEFAULT_YIELD_PER_PAGE
+    if yield_per_page <= 0:
         yield_per_page = DEFAULT_YIELD_PER_PAGE
 
     estimated_drop = int(round(pages_since_override * 100.0 / yield_per_page))
@@ -331,6 +356,159 @@ def apply_toner_override(ip: str, total: int, snmp_level: int = None, color: str
               f"start_total={override_start_total}, start_toner={override_start_toner}, "
               f"yield_per_page={yield_per_page}, pages_since_reset={pages_since_override}, final={final_level}")
     return final_level
+
+
+def evaluate_override_quarantine(
+    entry: dict,
+    total: int,
+    snmp_level: int = None,
+    swapped: bool = False,
+    fallback_yield: int = DEFAULT_YIELD_PER_PAGE,
+) -> dict:
+    """Evaluate active manual/frozen-chip override, auto-release conditions, and overrun past 0%.
+
+    Returns a dict with:
+      - release (bool): True if a live/swapped chip proved genuine tracking and override should clear
+      - virtual_level (Optional[int]): dead-reckoned level in [0, 100]
+      - pages_since_override (int): printed pages since override start
+      - overrun_pages (int): pages printed after virtual_level reached 0%
+      - unregistered_refill_suspected (bool): True if overrun exceeds 15% of capacity (min 150 pages)
+      - chip_quarantined (bool): True if raw SNMP level must be quarantined from yield slope learning
+      - updated_entry (dict): normalized entry (e.g. recording chip_aligned_at_reset on initial polls)
+    """
+    if not isinstance(entry, dict) or not entry:
+        return {
+            "release": False,
+            "virtual_level": None,
+            "pages_since_override": 0,
+            "overrun_pages": 0,
+            "unregistered_refill_suspected": False,
+            "chip_quarantined": False,
+            "updated_entry": entry,
+        }
+
+    updated = dict(entry)
+    start_total = updated.get("start_total")
+    start_toner = updated.get("start_toner")
+    try:
+        pages_since = int(total) - int(start_total)
+        start_toner_i = max(0, min(100, int(start_toner)))
+    except (TypeError, ValueError):
+        return {
+            "release": True,
+            "virtual_level": snmp_level,
+            "pages_since_override": 0,
+            "overrun_pages": 0,
+            "unregistered_refill_suspected": False,
+            "chip_quarantined": False,
+            "updated_entry": updated,
+        }
+
+    if pages_since < 0:
+        return {
+            "release": True,
+            "virtual_level": snmp_level,
+            "pages_since_override": pages_since,
+            "overrun_pages": 0,
+            "unregistered_refill_suspected": False,
+            "chip_quarantined": False,
+            "updated_entry": updated,
+        }
+
+    try:
+        ypp = int(updated.get("yield_per_page") or fallback_yield or DEFAULT_YIELD_PER_PAGE)
+    except (TypeError, ValueError):
+        ypp = DEFAULT_YIELD_PER_PAGE
+    if ypp <= 0:
+        ypp = DEFAULT_YIELD_PER_PAGE
+
+    snmp_valid = None
+    if snmp_level is not None:
+        try:
+            sv = int(snmp_level)
+            if 0 <= sv <= 100:
+                snmp_valid = sv
+        except (TypeError, ValueError):
+            snmp_valid = None
+
+    # 1. Hardware-proven swap (new chip_id / serial or supply_pages reset) with valid numeric sensor
+    if swapped and snmp_valid is not None:
+        return {
+            "release": True,
+            "virtual_level": snmp_valid,
+            "pages_since_override": pages_since,
+            "overrun_pages": 0,
+            "unregistered_refill_suspected": False,
+            "chip_quarantined": False,
+            "updated_entry": updated,
+        }
+
+    mode = str(updated.get("mode") or "manual_reset")
+    # 2. Auto-frozen chip recovery: if sensor genuinely steps down monotonically (not a noise blip)
+    if mode == "auto_frozen_chip" and snmp_valid is not None:
+        frozen_lvl = updated.get("frozen_raw_level")
+        try:
+            frozen_i = int(frozen_lvl) if frozen_lvl is not None else None
+        except (TypeError, ValueError):
+            frozen_i = None
+        if frozen_i is not None and 0 <= snmp_valid < frozen_i and (frozen_i - snmp_valid) <= 25 and pages_since >= 10:
+            return {
+                "release": True,
+                "virtual_level": snmp_valid,
+                "pages_since_override": pages_since,
+                "overrun_pages": 0,
+                "unregistered_refill_suspected": False,
+                "chip_quarantined": False,
+                "updated_entry": updated,
+            }
+
+    # 3. Manual reset quarantine auto-release when a reset/new chip aligned near start_toner and then steps down
+    chip_at_reset = updated.get("chip_level_at_reset")
+    try:
+        chip_at_reset_i = int(chip_at_reset) if chip_at_reset is not None else None
+    except (TypeError, ValueError):
+        chip_at_reset_i = None
+
+    if pages_since <= 30 and snmp_valid is not None and abs(snmp_valid - start_toner_i) <= 2:
+        if chip_at_reset_i is None or abs(chip_at_reset_i - start_toner_i) <= 2 or snmp_valid > (chip_at_reset_i or 0) + 5:
+            updated["chip_aligned_at_reset"] = True
+
+    if (
+        mode == "manual_reset"
+        and bool(updated.get("chip_aligned_at_reset"))
+        and snmp_valid is not None
+        and pages_since >= 20
+    ):
+        drop_from_start = start_toner_i - snmp_valid
+        if 1 <= drop_from_start <= 20:
+            implied_y = pages_since * 100.0 / float(drop_from_start)
+            if 300.0 <= implied_y <= max(600000.0, ypp * 3.5):
+                return {
+                    "release": True,
+                    "virtual_level": snmp_valid,
+                    "pages_since_override": pages_since,
+                    "overrun_pages": 0,
+                    "unregistered_refill_suspected": False,
+                    "chip_quarantined": False,
+                    "updated_entry": updated,
+                }
+
+    est_drop = 0 if pages_since == 0 else int(round(pages_since * 100.0 / ypp))
+    virtual_lv = max(0, min(100, start_toner_i - est_drop))
+    expected_empty_pages = int(round(ypp * (start_toner_i / 100.0)))
+    overrun_pages = max(0, pages_since - expected_empty_pages) if virtual_lv == 0 else 0
+    overrun_thresh = max(150, int(round(0.15 * ypp)))
+    quarantined = bool(updated.get("chip_quarantined", True))
+
+    return {
+        "release": False,
+        "virtual_level": virtual_lv,
+        "pages_since_override": pages_since,
+        "overrun_pages": overrun_pages,
+        "unregistered_refill_suspected": bool(overrun_pages >= overrun_thresh),
+        "chip_quarantined": quarantined,
+        "updated_entry": updated,
+    }
 
 
 # Events
@@ -1558,6 +1736,12 @@ def detect_brand(ip: str, community: str) -> str:
     if "1.3.6.1.4.1.1129" in oid_str or "toshiba"   in sys_desc: return "toshiba"
     if "1.3.6.1.4.1.1602" in oid_str or "canon"     in sys_desc: return "canon"
     if "1.3.6.1.4.1.2435" in oid_str or "brother"   in sys_desc: return "brother"
+    if "1.3.6.1.4.1.1347" in oid_str or "kyocera"   in sys_desc: return "kyocera"
+    if "1.3.6.1.4.1.367"  in oid_str or "ricoh"     in sys_desc: return "ricoh"
+    if "1.3.6.1.4.1.253"  in oid_str or "xerox"     in sys_desc: return "xerox"
+    if "1.3.6.1.4.1.641"  in oid_str or "lexmark"   in sys_desc: return "lexmark"
+    if "1.3.6.1.4.1.236"  in oid_str or "samsung"   in sys_desc: return "samsung"
+    if "1.3.6.1.4.1.1248" in oid_str or "epson"     in sys_desc: return "epson"
     if ("1.3.6.1.4.1.11"   in oid_str or
             "jetdirect" in sys_desc or
             "hp " in sys_desc or

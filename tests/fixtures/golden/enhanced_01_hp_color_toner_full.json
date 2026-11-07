@@ -130,8 +130,8 @@
               "yield_total_weight": 0.0
             },
             "cyan": {
-              "capacity_pages": 2000,
-              "capacity_source": "default",
+              "capacity_pages": 3250,
+              "capacity_source": "catalog",
               "cycle_start_counter": 21480,
               "cycle_start_level": 58,
               "cycle_status": "active",
@@ -152,14 +152,14 @@
               "usage": null,
               "usage_m": null,
               "yield_cartridge_key": "hp color laserjet mfp m577|cyan cartridge hp cf031a|cyan",
-              "yield_confidence": "low",
-              "yield_per_page": 2000,
+              "yield_confidence": "medium",
+              "yield_per_page": 3250,
               "yield_sample_count": 0,
               "yield_total_weight": 0.0
             },
             "magenta": {
-              "capacity_pages": 2000,
-              "capacity_source": "default",
+              "capacity_pages": 3250,
+              "capacity_source": "catalog",
               "cycle_start_counter": 21480,
               "cycle_start_level": 44,
               "cycle_status": "active",
@@ -180,14 +180,14 @@
               "usage": null,
               "usage_m": null,
               "yield_cartridge_key": "hp color laserjet mfp m577|magenta cartridge hp cf033a|magenta",
-              "yield_confidence": "low",
-              "yield_per_page": 2000,
+              "yield_confidence": "medium",
+              "yield_per_page": 3250,
               "yield_sample_count": 0,
               "yield_total_weight": 0.0
             },
             "yellow": {
-              "capacity_pages": 2000,
-              "capacity_source": "default",
+              "capacity_pages": 3250,
+              "capacity_source": "catalog",
               "cycle_start_counter": 21480,
               "cycle_start_level": 29,
               "cycle_status": "active",
@@ -208,8 +208,8 @@
               "usage": null,
               "usage_m": null,
               "yield_cartridge_key": "hp color laserjet mfp m577|yellow cartridge hp cf032a|yellow",
-              "yield_confidence": "low",
-              "yield_per_page": 2000,
+              "yield_confidence": "medium",
+              "yield_per_page": 3250,
               "yield_sample_count": 0,
               "yield_total_weight": 0.0
             }

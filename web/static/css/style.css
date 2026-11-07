@@ -888,6 +888,12 @@ html.light .stat-bar-wrapper { background: #e2e8f0; }
 .yield-chip.yc-medium{color:var(--yellow);border-color:rgba(255,215,64,.35);background:rgba(255,215,64,.08)}
 .yield-chip.yc-low{color:var(--text3);border-color:rgba(123,134,160,.25);background:rgba(123,134,160,.08)}
 .supply-zero-hint{margin-top:8px;border:1px solid rgba(255,215,64,.28);background:rgba(255,215,64,.07);border-radius:8px;padding:7px 9px;font-size:10px;line-height:1.7;color:var(--text2)}
+.supply-overrun-hint{margin-top:8px;border:1px solid rgba(255,112,67,.42);background:rgba(255,112,67,.10);border-radius:8px;padding:8px 10px;font-size:10.5px;line-height:1.7;color:var(--text)}
+.supply-chip-hint{margin-top:8px;border-radius:8px;padding:6px 9px;font-size:10px;line-height:1.65;color:var(--text2)}
+.supply-chip-hint.is-frozen{border:1px solid rgba(255,215,64,.32);background:rgba(255,215,64,.07)}
+.supply-chip-hint.is-quarantined{border:1px solid rgba(0,229,255,.26);background:rgba(0,229,255,.06)}
+.toner-reset-note{margin-bottom:12px;border:1px solid rgba(0,229,255,.28);background:rgba(0,229,255,.07);border-radius:8px;padding:8px 10px;font-size:11px;line-height:1.7;color:var(--text2)}
+.toner-reset-reason-hint{margin-top:6px;border:1px solid var(--border);background:var(--bg3);border-radius:8px;padding:7px 9px;font-size:10.5px;line-height:1.7;color:var(--text2)}
 .toner-status-badge{padding:2px 7px;border-radius:3px;font-family:var(--mono);font-size:9px;font-weight:700}
 .ts-ok{background:rgba(0,230,118,.1);color:var(--green)}
 .ts-low{background:rgba(255,215,64,.1);color:var(--yellow)}

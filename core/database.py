@@ -1392,7 +1392,7 @@ def estimate_yield_from_history(ip: str, days: int = 7, min_points: int = 3, min
             return None
 
         estimated_yield = int(round(total_pages * 100.0 / total_drop))
-        if not 300 <= estimated_yield <= 20000:
+        if not 300 <= estimated_yield <= 600000:
             return None
         return {
             "yield_per_page": estimated_yield,
