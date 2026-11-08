@@ -108,7 +108,7 @@ def create_datasource(
         INSERT INTO data_sources (uid, name, type, config, is_default, org_id, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (ds_uid, name.strip(), ds_type, cfg_val, 1 if is_default else 0, org_id, now, now),
+        (ds_uid, name.strip(), ds_type, cfg_val, bool(is_default), org_id, now, now),
     )
 
     log.info(f"منبع داده جدید با شناسه {ds_uid} و نام '{name}' ایجاد شد.")
@@ -207,7 +207,7 @@ def update_datasource(
 
     if is_default is not None:
         updates.append("is_default = ?")
-        params.append(1 if is_default else 0)
+        params.append(bool(is_default))
 
     params.append(uid)
     conn.execute(f"UPDATE data_sources SET {', '.join(updates)} WHERE uid = ?", tuple(params))

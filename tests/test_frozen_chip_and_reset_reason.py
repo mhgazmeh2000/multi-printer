@@ -391,11 +391,23 @@ class FrozenChipAndResetReasonTests(unittest.TestCase):
         self.assertEqual(body_dirty["yield_per_page"], 3100)
 
         prev_saved = store._prev.get(ip) or {}
+        # Raw SNMP baseline must preserve actual chip reading (90), NOT virtual manual override (100)
+        self.assertEqual(prev_saved.get("toner_level"), 90)
         ov_blk = (prev_saved.get("toner_overrides") or {}).get("black") or {}
         self.assertEqual(ov_blk.get("reset_reason"), "dirty")
         self.assertEqual(ov_blk.get("chip_level_at_reset"), 90)
         self.assertFalse(ov_blk.get("chip_aligned_at_reset"))
         self.assertTrue(ov_blk.get("chip_quarantined"))
+
+        # Chip-less Brother reset (raw_level=None) must keep prev['toner_level'] as None
+        with store.data_lock:
+            store.printer_data[ip]["toners"]["black"]["raw_level"] = None
+        r_chipless = client.post(
+            f"/api/printer/{ip}/toner_reset",
+            json={"color": "black", "new_level": 100, "reason": "empty"},
+        )
+        self.assertEqual(r_chipless.status_code, 200)
+        self.assertIsNone((store._prev.get(ip) or {}).get("toner_level"))
 
         # 3. Verify dashboard HTML & JS include the replacement reason selector
         html_txt = (REPO_ROOT / "web" / "templates" / "dashboard.html").read_text(encoding="utf-8")
@@ -404,6 +416,39 @@ class FrozenChipAndResetReasonTests(unittest.TestCase):
         self.assertIn('value="empty"', html_txt)
         self.assertIn('value="dirty"', html_txt)
         self.assertIn("JSON.stringify({ color, new_level, reason })", js_txt)
+
+    def test_8_toner_anti_noise_caps_consecutive_rejections_at_two_polls(self):
+        """1–2 poll SNMP blips stay rejected, while a steady lower level is accepted on consecutive poll #3."""
+        from core.collectors import base as collector_base
+        from core.collectors.base import _counters_event
+
+        ip = "172.16.8.51"
+        collector_base._TONER_NOISE_STREAKS.clear()
+        store._prev.set(ip, {"print_total": 10000, "toner_level": 60, "yield_per_page": 2000})
+
+        with mock.patch("core.collectors.base.add_event"):
+            # Single-poll blip 60 -> 8 followed by recovery 60 -> 60 resets streak
+            _counters_event(
+                ip=ip, total=10000, prev=store._prev.get(ip), alerts=[], curr_codes=[],
+                current_toner_level=8, prev_toner_level=60, uptime=1000,
+            )
+            self.assertEqual((store._prev.get(ip) or {}).get("toner_level"), 60)
+            _counters_event(
+                ip=ip, total=10001, prev=store._prev.get(ip), alerts=[], curr_codes=[],
+                current_toner_level=60, prev_toner_level=60, uptime=1060,
+            )
+            self.assertNotIn(ip, collector_base._TONER_NOISE_STREAKS)
+
+            # Genuine steady state 60 -> 32: polls #1 and #2 reject, poll #3 accepts 32 cleanly
+            for expected in (60, 60, 32):
+                prev_now = store._prev.get(ip) or {}
+                _counters_event(
+                    ip=ip, total=10002, prev=prev_now, alerts=[], curr_codes=[],
+                    current_toner_level=32, prev_toner_level=prev_now.get("toner_level"), uptime=1120,
+                )
+                self.assertEqual((store._prev.get(ip) or {}).get("toner_level"), expected)
+            # Legacy yield must not be polluted by <5 page idle acceptance
+            self.assertEqual((store._prev.get(ip) or {}).get("yield_per_page"), 2000)
 
 
 if __name__ == "__main__":

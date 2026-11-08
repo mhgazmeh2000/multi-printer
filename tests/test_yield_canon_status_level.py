@@ -141,6 +141,14 @@ class LegacyLearningLevelTests(unittest.TestCase):
         toners = {"black": {"level": 15, "raw_level": None}, "cyan": {"level": 60, "raw_level": 60}}
         self.assertEqual(_legacy_learning_level(toners), ("cyan", 60))
 
+    def test_brother_drum_raw_level_is_never_treated_as_toner_learning_level(self):
+        """Brother 'drum' has raw_level while black has raw_level=None; drum must never be returned as toner."""
+        toners = {
+            "black": {"level": 99, "raw_level": None},
+            "drum": {"level": 46, "raw_level": 46},
+        }
+        self.assertEqual(_legacy_learning_level(toners), (None, None))
+
 
 if __name__ == "__main__":
     unittest.main()

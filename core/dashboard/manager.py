@@ -74,9 +74,9 @@ def create_dashboard(
     conn.execute(
         """
         INSERT INTO dashboards (uid, title, description, layout, variables, owner_id, org_id, is_starred, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (dash_uid, title.strip(), description, layout_val, vars_val, owner_id, org_id, now, now),
+        (dash_uid, title.strip(), description, layout_val, vars_val, owner_id, org_id, False, now, now),
     )
 
     # Get the inserted dashboard id
@@ -240,7 +240,7 @@ def update_dashboard(
         params.append(_dumps(variables))
     if is_starred is not None:
         updates.append("is_starred = ?")
-        params.append(1 if is_starred else 0)
+        params.append(bool(is_starred))
 
     params.append(uid)
     sql = f"UPDATE dashboards SET {', '.join(updates)} WHERE uid = ?"
@@ -508,7 +508,13 @@ def check_dashboard_access(
 
 
 def bootstrap_dashboard_tables(conn: Any) -> None:
-    """Creates timeseries, dashboard, panel, permission, and datasource tables if they do not exist."""
+    """Creates timeseries, dashboard, panel, permission, and datasource tables if they do not exist.
+
+    On PostgreSQL (Rule E.4.5), Alembic migrations (0006–0008) own DDL, so this function is a safe no-op.
+    """
+    from core.db.connection import BACKEND_POSTGRESQL
+    if getattr(conn, "backend", None) == BACKEND_POSTGRESQL:
+        return
     conn.execute('''
         CREATE TABLE IF NOT EXISTS print_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
