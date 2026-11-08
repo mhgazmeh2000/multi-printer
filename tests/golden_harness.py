@@ -589,6 +589,11 @@ def clear_module_caches():
     except Exception:  # pragma: no cover
         pass
     try:
+        from core.collectors import base as collector_base
+        collector_base._TONER_NOISE_STREAKS.clear()
+    except Exception:  # pragma: no cover
+        pass
+    try:
         from tests.fake_snmp import clear_version_cache
         clear_version_cache()
     except Exception:  # pragma: no cover

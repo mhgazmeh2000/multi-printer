@@ -512,6 +512,10 @@ def evaluate_override_quarantine(
 
 
 # Events
+_TONER_NOISE_MAX_CONSECUTIVE_REJECTS = 2
+_TONER_NOISE_STREAKS: dict = {}
+
+
 def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: list,
                     full_color: int = None, black_white: int = None,
                     paper_size: str = None, username: str = None,
@@ -848,17 +852,34 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
     # It was stable (Ran 44/15/280 Pali), but every now and then *a* poll reads 8%
     # and again 100%; Each blip creates a dummy REFILL candidate. Drop >25 units in
     # A poll with <5 print pages is physically impossible (multi-thousand page cartridges)
-    # So such a reading is noise: the previous value is kept and entered into the logic
-    # REFILL/learning does not yield.
+    # So up to _TONER_NOISE_MAX_CONSECUTIVE_REJECTS consecutive blips keep prev_toner_level;
+    # if the new lower reading persists on the 3rd consecutive poll, it is a genuine steady
+    # state (e.g. cartridge swap to an older chip or stale baseline) and is accepted cleanly.
     if (prev_toner_level is not None and current_toner_level is not None
             and 0 <= actual_delta < 5):
         try:
             if int(prev_toner_level) - int(current_toner_level) > 25:
-                log.info("  [%s] خواندن نویزی تونر رد شد: %s%% → %s%% با %s صفحه چاپ (مقدار قبلی نگه داشته شد)",
-                         ip, prev_toner_level, current_toner_level, actual_delta)
-                current_toner_level = prev_toner_level
+                streak = int(_TONER_NOISE_STREAKS.get(ip, 0)) + 1
+                if streak <= _TONER_NOISE_MAX_CONSECUTIVE_REJECTS:
+                    _TONER_NOISE_STREAKS[ip] = streak
+                    log.info(
+                        "  [%s] خواندن نویزی تونر رد شد (%s/%s): %s%% → %s%% با %s صفحه چاپ (مقدار قبلی نگه داشته شد)",
+                        ip, streak, _TONER_NOISE_MAX_CONSECUTIVE_REJECTS,
+                        prev_toner_level, current_toner_level, actual_delta,
+                    )
+                    current_toner_level = prev_toner_level
+                else:
+                    _TONER_NOISE_STREAKS.pop(ip, None)
+                    log.info(
+                        "  [%s] سطح جدید تونر پس از %s نظرسنجی متوالی پایدار پذیرفته شد: %s%% → %s%%",
+                        ip, streak, prev_toner_level, current_toner_level,
+                    )
+            else:
+                _TONER_NOISE_STREAKS.pop(ip, None)
         except (TypeError, ValueError):
             pass
+    else:
+        _TONER_NOISE_STREAKS.pop(ip, None)
 
     # ─── Generic evidence-based cartridge detection ─────────────────────
     if cartridge_ids is not None or cartridge_supply_pages is not None:

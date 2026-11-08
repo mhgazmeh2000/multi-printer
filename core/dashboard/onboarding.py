@@ -1,15 +1,18 @@
 """
 PrintGuard Onboarding State Manager (Phase J.9)
 Tracks per-user onboarding tours completion, dismissal, and global disable preference.
+Uses `user_onboarding_state` on SQLite and `meta` (`onboarding:user:<id>`) on PostgreSQL
+so Alembic schema strictness (Rule E.4.5, head 0008) is preserved without extra DDL.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from core.db.connection import connect
+from core.db.connection import BACKEND_POSTGRESQL, connect
 
 log = logging.getLogger("printguard.onboarding")
 
@@ -25,6 +28,53 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _meta_key(user_id: int) -> str:
+    return f"onboarding:user:{int(user_id)}"
+
+
+def _default_payload() -> Dict[str, Any]:
+    return {
+        "disabled_all": False,
+        "completed": {t: False for t in KNOWN_TOURS},
+        "dismissed": {t: False for t in KNOWN_TOURS},
+    }
+
+
+def _load_pg_state(conn: Any, user_id: int) -> Dict[str, Any]:
+    state = _default_payload()
+    row = conn.execute(
+        "SELECT value FROM meta WHERE key = ?",
+        (_meta_key(user_id),),
+    ).fetchone()
+    if not row or not row[0]:
+        return state
+    raw = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+    if not isinstance(raw, dict):
+        return state
+    state["disabled_all"] = bool(raw.get("disabled_all", False))
+    comp = raw.get("completed") if isinstance(raw.get("completed"), dict) else {}
+    dism = raw.get("dismissed") if isinstance(raw.get("dismissed"), dict) else {}
+    for t in KNOWN_TOURS:
+        state["completed"][t] = bool(comp.get(t, False))
+        state["dismissed"][t] = bool(dism.get(t, False))
+    return state
+
+
+def _save_pg_state(conn: Any, user_id: int, state: Dict[str, Any]) -> None:
+    payload = json.dumps(state, ensure_ascii=False, sort_keys=True)
+    now = _utc_now_iso()
+    conn.execute(
+        """
+        INSERT INTO meta (key, value, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT (key) DO UPDATE SET
+            value = EXCLUDED.value,
+            updated_at = EXCLUDED.updated_at
+        """,
+        (_meta_key(user_id), payload, now),
+    )
+
+
 def get_user_tours_status(user_id: int) -> Dict[str, Any]:
     """Retrieve onboarding status for all standard tours for a given user."""
     status: Dict[str, bool] = {t: False for t in KNOWN_TOURS}
@@ -33,6 +83,9 @@ def get_user_tours_status(user_id: int) -> Dict[str, Any]:
 
     try:
         with connect() as conn:
+            if getattr(conn, "backend", None) == BACKEND_POSTGRESQL:
+                return _load_pg_state(conn, user_id)
+
             rows = conn.execute(
                 "SELECT tour_name, completed_at, dismissed, disabled_all FROM user_onboarding_state WHERE user_id = ?",
                 (user_id,),
@@ -72,6 +125,17 @@ def set_tour_status(
 
     try:
         with connect() as conn:
+            if getattr(conn, "backend", None) == BACKEND_POSTGRESQL:
+                state = _load_pg_state(conn, user_id)
+                if tour_name in state["completed"]:
+                    state["completed"][tour_name] = bool(completed)
+                    state["dismissed"][tour_name] = bool(dismissed)
+                if disabled_all is not None:
+                    state["disabled_all"] = bool(disabled_all)
+                _save_pg_state(conn, user_id, state)
+                conn.commit()
+                return True
+
             row = conn.execute(
                 "SELECT id, disabled_all FROM user_onboarding_state WHERE user_id = ? AND tour_name = ?",
                 (user_id, tour_name),
@@ -109,14 +173,23 @@ def set_user_onboarding_disabled(user_id: int, disabled: bool) -> bool:
     disabled_val = 1 if disabled else 0
     try:
         with connect() as conn:
+            if getattr(conn, "backend", None) == BACKEND_POSTGRESQL:
+                state = _load_pg_state(conn, user_id)
+                state["disabled_all"] = bool(disabled)
+                _save_pg_state(conn, user_id, state)
+                conn.commit()
+                return True
+
             conn.execute(
                 "UPDATE user_onboarding_state SET disabled_all = ? WHERE user_id = ?",
                 (disabled_val, user_id),
             )
             conn.execute(
                 """
-                INSERT OR IGNORE INTO user_onboarding_state (user_id, tour_name, completed_at, dismissed, disabled_all)
+                INSERT INTO user_onboarding_state (user_id, tour_name, completed_at, dismissed, disabled_all)
                 VALUES (?, '_global_', NULL, 0, ?)
+                ON CONFLICT (user_id, tour_name) DO UPDATE SET
+                    disabled_all = EXCLUDED.disabled_all
                 """,
                 (user_id, disabled_val),
             )
@@ -131,6 +204,21 @@ def reset_user_tours(user_id: int, tour_name: Optional[str] = None) -> bool:
     """Reset onboarding tour progress so the user can re-run tours."""
     try:
         with connect() as conn:
+            if getattr(conn, "backend", None) == BACKEND_POSTGRESQL:
+                if tour_name:
+                    state = _load_pg_state(conn, user_id)
+                    if tour_name in state["completed"]:
+                        state["completed"][tour_name] = False
+                        state["dismissed"][tour_name] = False
+                    _save_pg_state(conn, user_id, state)
+                else:
+                    conn.execute(
+                        "DELETE FROM meta WHERE key = ?",
+                        (_meta_key(user_id),),
+                    )
+                conn.commit()
+                return True
+
             if tour_name:
                 conn.execute(
                     "DELETE FROM user_onboarding_state WHERE user_id = ? AND tour_name = ?",

@@ -802,13 +802,15 @@ def _canon_display_percent(model: str, supply_name: str, percent: Optional[int])
 def _legacy_learning_level(toners: Dict) -> tuple:
     """Returns (legacy_toner_color, level) for the legacy learner and refill detection (B-3).
 
-    Only device readings count (raw_level). A display level without a reading (Canon status code shown as
-    0/15/70%, or a manual-override estimate) is never returned, so it cannot teach a yield or trigger a refill.
+    Only real toner colors (black/cyan/magenta/yellow) with device readings (raw_level) count.
+    Non-toner consumables (e.g. Brother 'drum') and display levels without a raw reading (Canon status
+    code shown as 0/15/70%, or a manual-override estimate) are never returned.
     """
     black = toners.get("black") or {}
     if black.get("raw_level") is not None:
         return "black", black["raw_level"]
-    for ck, t in toners.items():
+    for ck in ("cyan", "magenta", "yellow"):
+        t = toners.get(ck) or {}
         if t.get("raw_level") is not None:
             return ck, t["raw_level"]
     return None, None

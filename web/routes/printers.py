@@ -790,6 +790,15 @@ def toner_reset(ip):
             and 0 <= int(raw_chip_before_reset) <= 100
             and abs(int(raw_chip_before_reset) - new_level) <= 2
         )
+        raw_black_level = (
+            int(raw_chip_before_reset)
+            if (
+                raw_chip_before_reset is not None
+                and isinstance(raw_chip_before_reset, (int, float))
+                and 0 <= int(raw_chip_before_reset) <= 100
+            )
+            else None
+        )
         overrides[color] = {
             'start_total': current_total,
             'start_toner': new_level,
@@ -802,12 +811,15 @@ def toner_reset(ip):
         }
 
         new_prev = {
+            **prev,
             # A manual reset should sync the counter baseline with the current snapshot;
             # Otherwise, the next poll may make a PRINT or COUNTER_RESET error.
             'print_total': current_total,
             'full_color': current_full_color if current_full_color is not None else prev.get('full_color'),
             'black_white': current_black_white if current_black_white is not None else prev.get('black_white'),
-            'toner_level': new_level if color == 'black' else prev.get('toner_level'),
+            # Preserve the real SNMP chip reading (or None on chip-less models) instead of
+            # writing the virtual override level into raw prev['toner_level'].
+            'toner_level': raw_black_level if color == 'black' else prev.get('toner_level'),
             'manual_override': 1,
             'override_color': color,
             'override_base_level': new_level,

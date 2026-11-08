@@ -38,6 +38,12 @@ from web.routes.import_db import bp as bp_import_db
 from web.routes.yield_status import bp as bp_yield_status
 from web.routes.metrics import bp as bp_metrics
 from web.routes.contact import bp as bp_contact
+from web.routes.alerts_bp import bp as bp_alerts
+from web.routes.datasources_bp import bp as bp_datasources
+from web.routes.onboarding_bp import bp as bp_onboarding
+from web.routes.plugins_bp import bp as bp_plugins
+from web.routes.query_bp import bp as bp_query
+from core.plugins.loader import plugin_manager
 from web.auth import auth_bp, init_auth, login_redirect_url, user_can_access_module
 from web.captcha import init_captcha
 from web.security import init_security
@@ -78,7 +84,7 @@ def create_app() -> Flask:
         MAIL_OAUTH_REFRESH_TOKEN=settings.MAIL_OAUTH_REFRESH_TOKEN,
         GOOGLE_CLIENT_ID=settings.GOOGLE_CLIENT_ID,
         GOOGLE_CLIENT_SECRET=settings.GOOGLE_CLIENT_SECRET,
-        ASSET_VERSION=os.getenv("ASSET_VERSION", "20260907-resilience-proxy"),
+        ASSET_VERSION=os.getenv("ASSET_VERSION", "20261108-yield-v2"),
     )
 
     init_auth(app)
@@ -90,8 +96,11 @@ def create_app() -> Flask:
         bp_dashboard, bp_printers, bp_logs, bp_export,
         bp_scan, bp_discover, bp_stats, bp_validation, bp_system, bp_users,
         bp_security_audit, bp_import_db, bp_yield_status, bp_groups, bp_metrics, bp_contact,
+        bp_alerts, bp_datasources, bp_onboarding, bp_plugins, bp_query,
     ):
         app.register_blueprint(blueprint)
+
+    plugin_manager.init_app(app)
 
     # ─── Exemption of JSON API endpoints from CSRF ─────────────────────────
     # For JSON endpoints that authenticate from session, CSRF protection
@@ -185,6 +194,12 @@ def create_app() -> Flask:
 
         viewer_allowed = {
             "dashboard.index",
+            "dashboard.preview_panels",
+            "dashboard.dashboards_list_view",
+            "dashboard.dashboard_view",
+            "dashboard.api_panel_registry",
+            "dashboard.api_list_dashboards",
+            "dashboard.api_get_dashboard",
             "system.api_status",
             "groups.api_groups",
             "printers.api_printers",
@@ -193,6 +208,13 @@ def create_app() -> Flask:
             "logs.api_all_logs",
             "stats.api_daily_stats",
             "stats.api_usage_series",
+            "onboarding.api_onboarding_status",
+            "onboarding.api_onboarding_complete",
+            "onboarding.api_onboarding_reset",
+            "alerts_engine.api_active_alerts",
+            "alerts_engine.api_alert_summary",
+            "alerts_engine.api_alert_detail",
+            "plugins_mgr.api_list_plugins",
             "auth.logout",
         }
         manager_allowed = viewer_allowed | {
@@ -205,6 +227,23 @@ def create_app() -> Flask:
             "users.api_user_verify",
             "users.api_user_access",
             "users.api_delete_user",
+            "dashboard.dashboard_edit",
+            "dashboard.api_create_dashboard",
+            "dashboard.api_update_dashboard",
+            "dashboard.api_add_panel",
+            "dashboard.api_update_panel",
+            "dashboard.api_delete_panel",
+            "query_engine.api_prebuilt_catalog",
+            "query_engine.api_query_preview",
+            "query_engine.api_query_validate",
+            "datasources.datasources_page",
+            "datasources.api_list_drivers",
+            "datasources.api_list_datasources",
+            "datasources.api_create_datasource",
+            "datasources.api_get_datasource",
+            "datasources.api_update_datasource",
+            "attendance.index",
+            "attendance.api_stats",
         }
 
         if role == "manager":

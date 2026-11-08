@@ -5,34 +5,49 @@ suggested actions, and REST endpoints.
 """
 
 import os
+import tempfile
 import unittest
 from datetime import datetime, timezone
 
-from core.db.connection import connect
-from core.dashboard.manager import bootstrap_dashboard_tables
 from core.alerting.alert_service import (
-    get_active_alerts,
-    get_alert_summary,
-    get_alert_by_id,
     _resolve_suggested_action,
+    get_active_alerts,
+    get_alert_by_id,
+    get_alert_summary,
 )
+from core.database import init_db
+from core.db.connection import connect
+from core.security_audit import init_security_audit
+from models import User
 from web import create_app
 
 
 class TestAlertEngine(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.old_cwd = os.getcwd()
+        os.chdir(self.tmp.name)
         os.environ["SECRET_KEY"] = "test-secret-phase-j-alerts"
-        cls.app = create_app()
-        cls.app.config["TESTING"] = True
-        cls.client = cls.app.test_client()
+        if not os.getenv("PG_DSN") and not os.getenv("DATABASE_URL"):
+            os.environ["DB_BACKEND"] = "sqlite"
 
-        # Bootstrap DB and seed test alerts
+        init_db()
+        init_security_audit()
+
+        self.app = create_app()
+        self.app.config["TESTING"] = True
+        self.app.config["WTF_CSRF_ENABLED"] = False
+        self.client = self.app.test_client()
+        self.viewer = User.create(
+            username="alert_viewer",
+            email="alerts@printguard.org",
+            password="secret_pass_123",
+            role="viewer",
+            is_verified=True,
+        )
+
         with connect() as conn:
-            bootstrap_dashboard_tables(conn)
             now_iso = datetime.now(timezone.utc).isoformat()
-
-            # Seed a log alert
             conn.execute(
                 """
                 INSERT INTO logs (printer_ip, printer_name, timestamp, type, message, severity, code)
@@ -40,7 +55,6 @@ class TestAlertEngine(unittest.TestCase):
                 """,
                 ("172.16.25.10", "HP LaserJet Pro", now_iso, "ALERT", "درب جلویی باز است", "critical", "DOOR_OPEN"),
             )
-            # Seed another log event (warning)
             conn.execute(
                 """
                 INSERT INTO logs (printer_ip, printer_name, timestamp, type, message, severity, code)
@@ -48,7 +62,6 @@ class TestAlertEngine(unittest.TestCase):
                 """,
                 ("172.16.25.20", "Toshiba Studio", now_iso, "STATUS", "دستگاه آفلاین شد", "warning", "NET_OFFLINE"),
             )
-            # Seed security event
             conn.execute(
                 """
                 INSERT INTO security_events (timestamp, event_type, ip_address, user_identifier, severity, details, created_at)
@@ -57,6 +70,10 @@ class TestAlertEngine(unittest.TestCase):
                 (now_iso, "login_failed", "192.168.1.100", "attacker", "critical", "Multiple failed logins", now_iso),
             )
             conn.commit()
+
+    def tearDown(self):
+        os.chdir(self.old_cwd)
+        self.tmp.cleanup()
 
     def test_suggested_action_resolution(self):
         act_toner = _resolve_suggested_action("toner", "TONER_LOW", "کاهش سطح کارتریج")
@@ -76,7 +93,6 @@ class TestAlertEngine(unittest.TestCase):
         self.assertIsInstance(alerts, list)
         self.assertGreaterEqual(len(alerts), 2)
 
-        # Check required fields
         first = alerts[0]
         self.assertIn("id", first)
         self.assertIn("title", first)
@@ -115,7 +131,8 @@ class TestAlertEngine(unittest.TestCase):
 
     def test_api_active_alerts(self):
         with self.client.session_transaction() as sess:
-            sess["_user_id"] = "1"
+            sess["_user_id"] = str(self.viewer.id)
+            sess["_fresh"] = True
 
         res = self.client.get("/api/alerts/active?severity=all")
         self.assertEqual(res.status_code, 200)
@@ -125,7 +142,8 @@ class TestAlertEngine(unittest.TestCase):
 
     def test_api_alert_summary(self):
         with self.client.session_transaction() as sess:
-            sess["_user_id"] = "1"
+            sess["_user_id"] = str(self.viewer.id)
+            sess["_fresh"] = True
 
         res = self.client.get("/api/alerts/summary")
         self.assertEqual(res.status_code, 200)
