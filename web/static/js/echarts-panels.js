@@ -15,6 +15,47 @@
 
   const ECH = global.PrintGuardECharts;
 
+  function escapePanelText(value) {
+    return String(value == null ? "" : value).replace(/[&<>"']/g,
+      char => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[char]));
+  }
+
+  function renderTextContent(element, content, mode) {
+    const text = String(content == null ? "" : content);
+    // Plain/unknown modes and missing dependencies always fail closed to text.
+    element.style.whiteSpace = "pre-wrap";
+    if (!["markdown", "html"].includes(mode) || !global.DOMPurify?.isSupported) {
+      element.textContent = text;
+      return;
+    }
+    try {
+      let html = text;
+      if (mode === "markdown") {
+        if (typeof global.marked?.parse !== "function") {
+          element.textContent = text;
+          return;
+        }
+        html = global.marked.parse(text, {async: false, gfm: true, breaks: true});
+      }
+      // Both raw HTML and markdown output go through the same restrictive policy.
+      // No styles, media, forms, SVG/MathML, IDs, data-* or event attributes.
+      const fragment = global.DOMPurify.sanitize(html, {
+        ALLOWED_TAGS: ["p", "br", "strong", "em", "b", "i", "s", "del", "ul", "ol", "li",
+          "blockquote", "pre", "code", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "a",
+          "table", "thead", "tbody", "tr", "th", "td", "div", "span"],
+        ALLOWED_ATTR: ["href", "title"],
+        ALLOW_DATA_ATTR: false,
+        ALLOW_ARIA_ATTR: false,
+        RETURN_DOM_FRAGMENT: true,
+      });
+      element.replaceChildren(fragment);
+      element.style.whiteSpace = "normal";
+    } catch (_) {
+      // Never fall back to inserting the unsanitized source.
+      element.textContent = text;
+    }
+  }
+
   const PanelRenderers = {
     // ─── 1. Stat Panel ────────────────────────────────────────────────────────
     stat: {
@@ -392,8 +433,8 @@
         }
 
         const bodyEl = document.createElement("div");
-        const rawText = config.content || (typeof data === "string" ? data : "");
-        bodyEl.innerHTML = rawText;
+        const rawText = config.content ?? (typeof data === "string" ? data : "");
+        renderTextContent(bodyEl, rawText, config.mode ?? "markdown");
         container.appendChild(bodyEl);
       },
     },
@@ -445,7 +486,7 @@
 
           const filteredAlerts = activeFilter === "all"
             ? rawAlerts
-            : rawAlerts.filter((a) => (a.severity || "").toLowerCase() === activeFilter);
+            : rawAlerts.filter((a) => String(a.severity || "").toLowerCase() === activeFilter);
 
           const listWrap = document.createElement("div");
           listWrap.style.cssText = "flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:8px;";
@@ -459,7 +500,7 @@
 
           filteredAlerts.slice(0, config.max_items || 20).forEach((al) => {
             const item = document.createElement("div");
-            const sev = (al.severity || "warning").toLowerCase();
+            const sev = String(al.severity || "warning").toLowerCase();
             const borderCl = sev === "critical" ? "var(--red)" : sev === "warning" ? "var(--yellow)" : "var(--cyan)";
 
             item.style.cssText =
@@ -479,7 +520,7 @@
 
             const sub = document.createElement("div");
             sub.style.cssText = "color:var(--text3); font-size:11px; margin-top:2px;";
-            const timeStr = al.timestamp || al.time || "";
+            const timeStr = String(al.timestamp || al.time || "");
             const displayTime = timeStr.includes("T") ? timeStr.slice(0, 19).replace("T", " ") : timeStr;
             sub.textContent = `${al.printer_name || al.printer_ip || "سیستم"} • ${displayTime}`;
 
@@ -508,7 +549,7 @@
             document.body.appendChild(modal);
           }
 
-          const sev = (al.severity || "warning").toLowerCase();
+          const sev = String(al.severity || "warning").toLowerCase();
           const sevColor = sev === "critical" ? "var(--red)" : sev === "warning" ? "var(--yellow)" : "var(--cyan)";
           const sevLabel = sev === "critical" ? "بحرانی" : sev === "warning" ? "هشدار" : "اطلاع";
 
@@ -517,30 +558,33 @@
               <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border); padding-bottom:12px; margin-bottom:14px;">
                 <div style="display:flex; align-items:center; gap:8px;">
                   <span style="display:inline-block; width:10px; height:10px; border-radius:50%; background:${sevColor};"></span>
-                  <h3 style="margin:0; font-size:16px; color:var(--text);">${al.title || 'جزئیات هشدار'}</h3>
+                  <h3 style="margin:0; font-size:16px; color:var(--text);">${escapePanelText(al.title || 'جزئیات هشدار')}</h3>
                 </div>
-                <button class="btn" style="padding:2px 8px; font-size:14px;" onclick="document.getElementById('pg-alert-detail-modal').style.display='none'">×</button>
+                <button class="btn" style="padding:2px 8px; font-size:14px;" data-alert-close>×</button>
               </div>
               <div style="font-size:13px; color:var(--text); display:flex; flex-direction:column; gap:10px;">
                 <div><b>شدت هشدار:</b> <span style="color:${sevColor}; font-weight:bold;">${sevLabel}</span></div>
-                <div><b>دستگاه / منبع:</b> ${al.printer_name || al.printer_ip || 'سیستم'} ${al.printer_ip ? `(${al.printer_ip})` : ''}</div>
-                <div><b>کد فنی:</b> <code>${al.code || 'SYS_ALERT'}</code></div>
-                <div><b>زمان ثبت:</b> ${al.timestamp || al.time || 'نامشخص'}</div>
+                <div><b>دستگاه / منبع:</b> ${escapePanelText(al.printer_name || al.printer_ip || 'سیستم')} ${al.printer_ip ? `(${escapePanelText(al.printer_ip)})` : ''}</div>
+                <div><b>کد فنی:</b> <code>${escapePanelText(al.code || 'SYS_ALERT')}</code></div>
+                <div><b>زمان ثبت:</b> ${escapePanelText(al.timestamp || al.time || 'نامشخص')}</div>
                 <div style="background:rgba(255,255,255,0.03); border:1px solid var(--border); border-radius:6px; padding:10px; margin-top:4px;">
                   <b style="color:var(--text2); display:block; margin-bottom:4px;">شرح پیام:</b>
-                  <div>${al.message || al.title || ''}</div>
+                  <div>${escapePanelText(al.message || al.title || '')}</div>
                 </div>
                 ${al.suggested_action ? `
                 <div style="background:rgba(6,182,212,0.08); border:1px solid var(--cyan); border-radius:6px; padding:10px; color:var(--cyan);">
                   <b>اقدام پیشنهادی PrintGuard:</b>
-                  <div style="margin-top:4px; font-size:12.5px; color:var(--text);">${al.suggested_action}</div>
+                  <div style="margin-top:4px; font-size:12.5px; color:var(--text);">${escapePanelText(al.suggested_action)}</div>
                 </div>` : ''}
               </div>
               <div style="display:flex; justify-content:flex-end; margin-top:18px;">
-                <button class="btn btn-cyan" onclick="document.getElementById('pg-alert-detail-modal').style.display='none'">بستن</button>
+                <button class="btn btn-cyan" data-alert-close>بستن</button>
               </div>
             </div>
           `;
+          modal.querySelectorAll("[data-alert-close]").forEach(button => {
+            button.addEventListener("click", () => { modal.style.display = "none"; });
+          });
           modal.style.display = "flex";
         };
 
@@ -570,9 +614,9 @@
 
   global.PrintGuardPanels = {
     render(type, container, data, config) {
-      const renderer = PanelRenderers[type];
+      const renderer = Object.hasOwn(PanelRenderers, type) ? PanelRenderers[type] : null;
       if (!renderer) {
-        container.innerHTML = `<div style="color:var(--red); padding:10px;">نوع پنل ناشناخته: ${type}</div>`;
+        container.textContent = `نوع پنل ناشناخته: ${String(type)}`;
         return;
       }
       renderer.render(container, data, config);

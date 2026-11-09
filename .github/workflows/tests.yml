@@ -63,6 +63,18 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt -r requirements-dev.txt
 
+      - name: Setup Node for DOM security regressions
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install DOM test dependencies
+        run: npm ci
+
+      - name: Panel DOM security regressions
+        run: npm test
+
       # ---------- Route 1: pytest (only 3 marker files = 21 tests) ----------
       - name: pytest — فایل‌های pytest-only (۲۱ تست)
         run: python -m pytest tests/ -m pytest_only -q --color=no
@@ -94,3 +106,30 @@ jobs:
           python -m pytest tests/ -q --color=no \
             --cov=core --cov=web --cov-report=term-missing \
             --cov-report=xml:${{ runner.temp }}/coverage.xml
+
+  panel-security-windows:
+    name: Panel security / Windows Python 3.14
+    runs-on: windows-latest
+    timeout-minutes: 10
+    env:
+      DB_BACKEND: sqlite
+      # Keep locale-based subprocess defaults to catch the original cp1252 bug.
+      PYTHONUTF8: "0"
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
+      - name: Install DOM test dependencies
+        run: npm ci
+      - name: Panel DOM security regressions
+        run: npm test
+      - name: Security tests including explicit UTF-8 subprocess IO
+        run: python -m unittest -v tests.test_security_hardening
