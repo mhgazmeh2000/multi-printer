@@ -5,16 +5,12 @@ Provides direct SQL querying with strict Read-Only enforcement and LIMIT protect
 
 from __future__ import annotations
 
-import re
 from typing import Any, Dict, List
 import psycopg
+from psycopg.conninfo import make_conninfo
+from core.dashboard.sql_security import sanitize_select, MAX_REPORT_ROWS
 
 from core.datasources.base import BaseDataSource, DataSourceError, DataSourceSecurityError
-
-PROHIBITED_SQL_KEYWORDS = re.compile(
-    r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|REPLACE|GRANT|REVOKE|EXEC|EXECUTE|CALL|VACUUM)\b",
-    re.IGNORECASE,
-)
 
 
 class PostgreSQLDataSource(BaseDataSource):
@@ -49,17 +45,9 @@ class PostgreSQLDataSource(BaseDataSource):
         sslmode = cfg.get("sslmode", "prefer")
         timeout = cfg.get("timeout", 10)
 
-        parts = [
-            f"host={host}",
-            f"port={port}",
-            f"dbname={dbname}",
-            f"user={user}",
-            f"sslmode={sslmode}",
-            f"connect_timeout={timeout}",
-        ]
-        if password:
-            parts.append(f"password={password}")
-        return " ".join(parts)
+        return make_conninfo(host=str(host), port=str(port), dbname=str(dbname),
+                             user=str(user), password=str(password),
+                             sslmode=str(sslmode), connect_timeout=str(timeout))
 
     def test_connection(self) -> Dict[str, Any]:
         conn_str = self._get_connection_string()
@@ -70,31 +58,24 @@ class PostgreSQLDataSource(BaseDataSource):
                 version = row[0] if row else "PostgreSQL"
             return {"status": "ok", "message": f"اتصال با موفقیت برقرار شد ({version.split()[0]} {version.split()[1]})."}
         except Exception as e:
-            raise DataSourceError(f"خطا در برقراری اتصال به PostgreSQL: {e}")
+            raise DataSourceError("اتصال به PostgreSQL ناموفق بود.") from e
 
     def query(self, query_params: Dict[str, Any]) -> Dict[str, Any]:
         raw_sql = query_params.get("raw_sql", "").strip()
         if not raw_sql:
             raise DataSourceError("متن کوئری SQL نمی‌تواند خالی باشد.")
 
-        # Security Check: Must only be SELECT or WITH statements
-        stripped_upper = raw_sql.upper().lstrip()
-        if not (stripped_upper.startswith("SELECT") or stripped_upper.startswith("WITH")):
-            raise DataSourceSecurityError("فقط کوئری‌های خواندنی (SELECT) در Data Source مجاز هستند.")
-
-        if PROHIBITED_SQL_KEYWORDS.search(raw_sql):
-            raise DataSourceSecurityError("دستورات تغییر داده (INSERT, UPDATE, DELETE, DROP, ...) اکیداً مسدود می‌باشند.")
-
-        # Ensure reasonable LIMIT if not specified
-        if "LIMIT" not in stripped_upper:
-            raw_sql = f"{raw_sql.rstrip(';')} LIMIT 1000;"
+        raw_sql = sanitize_select(raw_sql)
 
         conn_str = self._get_connection_string()
         try:
             with psycopg.connect(conn_str) as conn:
+                conn.execute("SET TRANSACTION READ ONLY")
+                conn.execute("SET LOCAL statement_timeout = '5s'")
+                conn.execute("SET LOCAL lock_timeout = '1s'")
                 cur = conn.execute(raw_sql)
                 col_names = [desc[0] for desc in cur.description] if cur.description else []
-                raw_rows = cur.fetchall()
+                raw_rows = cur.fetchmany(MAX_REPORT_ROWS)
 
             columns = [{"field": c, "title": c, "type": "text"} for c in col_names]
             rows = []
@@ -107,7 +88,7 @@ class PostgreSQLDataSource(BaseDataSource):
                 "total": len(rows),
             }
         except Exception as e:
-            raise DataSourceError(f"خطا در اجرای کوئری PostgreSQL: {e}")
+            raise DataSourceError("اجرای گزارش PostgreSQL ناموفق بود.") from e
 
     def get_schema(self) -> Dict[str, Any]:
         conn_str = self._get_connection_string()

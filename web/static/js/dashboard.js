@@ -84,15 +84,33 @@ document.addEventListener('click', function(e) {
 // ══════════════════════════════════════════════════
 // UTILITIES
 // ══════════════════════════════════════════════════
-function escapeHtml(str) {
-  if (!str) return '';
-  return str.replace(/[&<>]/g, function(m) {
-    if (m === '&') return '&amp;';
-    if (m === '<') return '&lt;';
-    if (m === '>') return '&gt;';
-    return m;
-  });
+function escapeHtml(value) {
+  return String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[ch]));
 }
+
+// For remaining inline handlers: encode the JS string first, then the HTML attribute.
+// HTML entity escaping alone is NOT safe inside a JavaScript string literal.
+function jsArg(value) {
+  return escapeHtml(JSON.stringify(String(value == null ? '' : value)));
+}
+
+// Never embed names/models in executable attributes; keep them as inert data.
+document.addEventListener('click', function(event) {
+  const button = event.target && typeof event.target.closest === 'function'
+    ? event.target.closest('[data-printer-action]') : null;
+  if (!button) return;
+  const action = button.dataset.printerAction;
+  const ip = button.dataset.ip;
+  if (action === 'remove') {
+    event.preventDefault();
+    const printer = allData.find(p => p.ip === ip);
+    removePrinter(ip, printer ? printer.name : ip);
+  } else if (action === 'quick-add') {
+    quickAdd(event, ip, button.dataset.model || '');
+  }
+});
 
 // ══════════════════════════════════════════════════
 // Time display (phase E.3)
@@ -595,12 +613,12 @@ function renderPrinterCard(p) {
       </div>`));
 
     return `
-      <div class="overview-card oc-online sensor-banner" data-ip="${p.ip}" onclick="onOverviewCardClick(event, '${p.ip}')" style="border-top:2px solid var(--orange)">
+      <div class="overview-card oc-online sensor-banner" data-ip="${escapeHtml(p.ip)}" onclick="onOverviewCardClick(event, ${jsArg(p.ip)})" style="border-top:2px solid var(--orange)">
         <div class="oc-header">
           <div>
-            <div class="oc-ip" style="color:var(--orange)">${p.ip} <span style="${badgeStyle}background:#ff9800;">دماسنج</span></div>
+            <div class="oc-ip" style="color:var(--orange)">${escapeHtml(p.ip)} <span style="${badgeStyle}background:#ff9800;">دماسنج</span></div>
             <div class="oc-name">${displayName}</div>
-            <div class="oc-model">ECS100G · ${officeName}</div>
+            <div class="oc-model">ECS100G · ${escapeHtml(officeName)}</div>
           </div>
           ${online === true
             ? `<div class="oc-pill pill-on"><span class="pill-dot" style="background:var(--green);box-shadow:0 0 5px var(--green)"></span>ONLINE</div>`
@@ -611,7 +629,7 @@ function renderPrinterCard(p) {
         <div class="oc-sensor-data" style="margin-top:8px">
           ${sensorRows.join('')}
         </div>
-        ${p.alerts?.length ? `<div class="oc-alert">⚠ ${p.alerts.map(a=>a.message).join(' | ')}</div>` : ''}
+        ${p.alerts?.length ? `<div class="oc-alert">⚠ ${p.alerts.map(a=>escapeHtml(a.message)).join(' | ')}</div>` : ''}
       </div>`;
   }
 
@@ -690,7 +708,7 @@ function renderPrinterCard(p) {
   let cartIdHtml = '';
   if (cartIdEntries.length) {
     // the real chip ID is available
-    cartIdHtml = `<div class="oc-cart-id" style="margin-top:4px;font-size:10px;color:var(--text3);font-family:var(--mono);direction:ltr;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${cartIdEntries.map(([c,v])=>c+': '+v).join(' | ')}">🧩 ${cartIdEntries.map(([,v])=>escapeHtml(v)).join(' · ')} ${qualityBadge}</div>`;
+    cartIdHtml = `<div class="oc-cart-id" style="margin-top:4px;font-size:10px;color:var(--text3);font-family:var(--mono);direction:ltr;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(cartIdEntries.map(([c,v])=>c+': '+v).join(' | '))}">🧩 ${cartIdEntries.map(([,v])=>escapeHtml(v)).join(' · ')} ${qualityBadge}</div>`;
   } else {
     cartIdHtml = `<div class="oc-cart-id" style="margin-top:4px;font-size:10px;color:var(--text3);font-family:var(--mono);direction:ltr;text-align:left;white-space:normal;overflow-wrap:anywhere" title="شناسه‌ی معتبر کارتریج از backend موجود نیست">N/A</div>`;
   }
@@ -698,12 +716,12 @@ function renderPrinterCard(p) {
   const hasCachedSnapshot = (p.counters && p.counters.total != null) || Object.keys(toners).length > 0;
 
   return `
-    <div class="overview-card ${warnCls}" data-ip="${p.ip}" onclick="onOverviewCardClick(event, '${p.ip}')">
+    <div class="overview-card ${warnCls}" data-ip="${escapeHtml(p.ip)}" onclick="onOverviewCardClick(event, ${jsArg(p.ip)})">
       <div class="oc-header">
         <div class="oc-header-info">
-          <div class="oc-ip">${p.ip} ${typeBadge}</div>
+          <div class="oc-ip">${escapeHtml(p.ip)} ${typeBadge}</div>
           <div class="oc-name">${displayName}</div>
-          <div class="oc-model">${p.device?.model || 'TOSHIBA'} · ${officeName}</div>
+          <div class="oc-model">${escapeHtml(p.device?.model || 'TOSHIBA')} · ${escapeHtml(officeName)}</div>
           ${cartIdHtml}
         </div>
         <div class="oc-header-actions">
@@ -748,7 +766,7 @@ function renderPrinterCard(p) {
         <div class="oc-toner-area">${blackTonerHtml}</div>
       </div>
 
-      ${p.alerts?.length ? `<div class="oc-alert">⚠ ${p.alerts.map(a=>a.message).join(' | ')}</div>` : ''}
+      ${p.alerts?.length ? `<div class="oc-alert">⚠ ${p.alerts.map(a=>escapeHtml(a.message)).join(' | ')}</div>` : ''}
     </div>
   `;
 }
@@ -989,7 +1007,7 @@ function openTonerResetModal(ip, preselectColor = null) {
   const colorLabels = {black:'مشکی',cyan:'سیان',magenta:'مژنتا',yellow:'زرد'};
   sel.innerHTML = colors.map(c => {
     const lv = typeof toners[c]?.level === 'number' ? ` (${toners[c].level}%)` : '';
-    return `<option value="${c}">${colorLabels[c] || c}${lv}</option>`;
+    return `<option value="${escapeHtml(c)}">${escapeHtml(colorLabels[c] || c)}${lv}</option>`;
   }).join('');
   if (preselectColor && colors.includes(preselectColor)) {
     sel.value = preselectColor;
@@ -1124,7 +1142,7 @@ function rebuildTabs(printers) {
       const alertIcon = hasAl ? '<span class="sb-alert-icon">⚠</span>' : '';
       const activeCls = activeTab === p.ip ? ' active' : '';
       const displayName = p.nickname ? `${escapeHtml(p.nickname)} (${escapeHtml(p.name)})` : escapeHtml(p.name);
-      return `<div class="sb-item${activeCls}${hasAl?' has-alert':''}" data-tab="${p.ip}" onclick="switchTab('${p.ip}',this)">
+      return `<div class="sb-item${activeCls}${hasAl?' has-alert':''}" data-tab="${escapeHtml(p.ip)}" onclick="switchTab(${jsArg(p.ip)},this)">
                <span class="sb-dot ${dotCls}"></span>
                <span class="sb-item-name">${displayName}</span>
                ${alertIcon}
@@ -1132,10 +1150,10 @@ function rebuildTabs(printers) {
     }).join('');
 
     groupEl.innerHTML = `
-      <div class="sb-group-hdr${hasAlert ? ' has-alert' : ''}" onclick="filterByGroup('${g.id}')">
-        <span class="sb-arrow" onclick="event.stopPropagation();toggleSbGroup('${g.id}')">▶</span>
-        <span class="sb-group-icon">${g.icon}</span>
-        <span class="sb-group-name">${g.name}</span>
+      <div class="sb-group-hdr${hasAlert ? ' has-alert' : ''}" onclick="filterByGroup(${jsArg(g.id)})">
+        <span class="sb-arrow" onclick="event.stopPropagation();toggleSbGroup(${jsArg(g.id)})">▶</span>
+        <span class="sb-group-icon">${escapeHtml(g.icon)}</span>
+        <span class="sb-group-name">${escapeHtml(g.name)}</span>
         <span class="sb-group-meta">${metaHtml}</span>
       </div>
       <div class="sb-group-body">${itemsHtml}</div>
@@ -1149,9 +1167,9 @@ function rebuildTabs(printers) {
   if (groupSelect) {
     const currentVal = groupSelect.value;
     const officeOpts = OFFICE_GROUPS.map(g =>
-      `<option value="${g.id}">${g.icon} ${g.name}</option>`).join('');
+      `<option value="${escapeHtml(g.id)}">${escapeHtml(g.icon)} ${escapeHtml(g.name)}</option>`).join('');
     const customOpts = CUSTOM_GROUPS.map(g =>
-      `<option value="${g.id}">${g.icon || '🏢'} ${g.name}</option>`).join('');
+      `<option value="${escapeHtml(g.id)}">${escapeHtml(g.icon || '🏢')} ${escapeHtml(g.name)}</option>`).join('');
     groupSelect.innerHTML = `
       <option value="">🏠 خودکار — بر اساس زیرشبکه دفتر</option>
       <optgroup label="🏢 دفاتر">${officeOpts}</optgroup>
@@ -1241,7 +1259,7 @@ function sensorSeriesSectionHtml(ip) {
   const key = ip.replace(/\./g, '-');
   const presetBtns = SENSOR_RANGE_PRESETS.map(r => `
         <button class="filter-btn${st.mode === 'preset' && st.hours === r.hours ? ' active' : ''}"
-                data-hours="${r.hours}" onclick="setSensorPreset('${ip}', ${r.hours}, this)">${r.label}</button>`).join('');
+                data-hours="${r.hours}" onclick="setSensorPreset(${jsArg(ip)}, ${r.hours}, this)">${r.label}</button>`).join('');
   return `
     <div class="section sensor-ts-section" data-ip="${ip}" style="margin-bottom:14px">
       <div class="section-title">📈 روند دما و رطوبت</div>
@@ -1253,7 +1271,7 @@ function sensorSeriesSectionHtml(ip) {
         <input type="datetime-local" class="form-input sensor-ts-from" value="${st.start}" style="width:190px">
         <span style="font-size:11px;color:var(--text3)">تا</span>
         <input type="datetime-local" class="form-input sensor-ts-to" value="${st.end}" style="width:190px">
-        <button class="btn btn-cyan" onclick="applySensorCustomRange('${ip}')">اعمال بازه</button>
+        <button class="btn btn-cyan" onclick="applySensorCustomRange(${jsArg(ip)})">اعمال بازه</button>
         <span style="font-size:10px;color:var(--text3)">(به وقت تهران)</span>
       </div>
       <div class="sensor-ts-summary" style="font-size:11px;color:var(--text3);margin-bottom:6px;min-height:16px"></div>
@@ -1767,9 +1785,9 @@ function buildPrinterDetail(p) {
   if (!p.online && p.online !== null) return `
     <div class="offline-banner">
       <h2>🔌 آفلاین</h2>
-      <div class="offline-message">${p.ip} — ${p.error || 'Device unreachable'}</div>
+      <div class="offline-message">${escapeHtml(p.ip)} — ${escapeHtml(p.error || 'Device unreachable')}</div>
       <div style="margin-top:8px;font-size:11px;color:var(--red);font-family:var(--mono)">آخرین بررسی: ${p.last_poll ? new Date(p.last_poll).toLocaleTimeString('fa-IR') : '—'}</div>
-      <button class="btn btn-cyan" style="margin-top:16px" onclick="removePrinter('${p.ip}','${p.name}')">× حذف پرینتر</button>
+      <button class="btn btn-cyan" style="margin-top:16px" data-printer-action="remove" data-ip="${escapeHtml(p.ip)}">× حذف پرینتر</button>
     </div>`;
 
   const hasCachedSnapshot = (p.counters && p.counters.total != null) || Object.keys(p.toners || {}).length > 0;
@@ -1867,7 +1885,7 @@ function buildPrinterDetail(p) {
         chipSensorHintHtml = `
           <div class="supply-overrun-hint">
             <div>🔔 <strong>احتمال شارژ یا تعویض ثبت‌نشده:</strong> <strong class="num">${fmtN(overrunPages)}</strong> صفحه پس از اتمام تخمینی (۰٪) چاپ شده است${chipPart}.</div>
-            ${canManage() ? `<button type="button" class="btn btn-sm btn-cyan" style="margin-top:6px;font-size:10px" onclick="openTonerResetModal('${escapeHtml(p.ip)}','${escapeHtml(col)}')">🔁 ثبت شارژ / تنظیم مجدد</button>` : ''}
+            ${canManage() ? `<button type="button" class="btn btn-sm btn-cyan" style="margin-top:6px;font-size:10px" onclick="openTonerResetModal(${jsArg(p.ip)},${jsArg(col)})">🔁 ثبت شارژ / تنظیم مجدد</button>` : ''}
           </div>
         `;
       } else if (sensorState === 'frozen_chip') {
@@ -1947,14 +1965,14 @@ function buildPrinterDetail(p) {
 
   const alertsHtml = alerts.length ? `<div class="section" style="margin-top:14px">
     <div class="section-title">🚨 هشدارهای فعال</div>
-    ${alerts.map(a=>`<div class="alert-row"><span style="font-size:14px">⚠️</span><span class="alert-text">${a.message}</span><span class="alert-code">#${a.code}</span></div>`).join('')}
+    ${alerts.map(a=>`<div class="alert-row"><span style="font-size:14px">⚠️</span><span class="alert-text">${escapeHtml(a.message)}</span><span class="alert-code">#${escapeHtml(a.code)}</span></div>`).join('')}
   </div>` : '';
 
   const ip = p.ip;
   const logId = 'plog-' + ip.replace(/\./g,'-');
   const displayName = p.nickname ? escapeHtml(p.nickname) : escapeHtml(p.name);
   const editButtonHtml = canEditPrinters()
-    ? `<button class="btn btn-edit" onclick="openEditModal('${p.ip}')" 
+    ? `<button class="btn btn-edit" onclick="openEditModal(${jsArg(p.ip)})"
                  style="margin-right:8px;" title="ویرایش اطلاعات و گروه" aria-label="ویرایش اطلاعات و گروه">✎</button>`
     : '';
   const nameLine = p.nickname
@@ -1970,7 +1988,7 @@ function buildPrinterDetail(p) {
 
   // ✅ Bug #6: removed the duplicate delete button — only printerDeleteButtonHtml is used
   const printerDeleteButtonHtml = canEditPrinters()
-    ? `<button class="btn btn-sm btn-orange" onclick="removePrinter('${p.ip}','${escapeHtml(p.name)}')" style="font-size:9px">× حذف</button>`
+    ? `<button class="btn btn-sm btn-orange" data-printer-action="remove" data-ip="${escapeHtml(p.ip)}" style="font-size:9px">× حذف</button>`
     : '';
 
 
@@ -2063,7 +2081,7 @@ function buildPrinterDetail(p) {
 
   const extraCountersHtml = hasAnyExtraCounter ? `
     <div class="section extra-counters-accordion" style="margin-top:10px">
-      <button type="button" id="extra-counters-header-${safeIp}" class="extra-counters-accordion-header${accordionOpen ? ' open' : ''}" onclick="toggleExtraCountersAccordion('${ip}')">
+      <button type="button" id="extra-counters-header-${safeIp}" class="extra-counters-accordion-header${accordionOpen ? ' open' : ''}" onclick="toggleExtraCountersAccordion(${jsArg(ip)})">
         <span class="extra-counters-accordion-title">📊 سایر شمارنده‌ها</span>
         <span class="extra-counters-accordion-icon">⌄</span>
       </button>
@@ -2081,9 +2099,9 @@ function buildPrinterDetail(p) {
     <div class="section" style="margin-bottom:14px">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
         <div>
-          <div style="font-family:var(--mono);font-size:12px;color:var(--cyan)">${p.ip}</div>
+          <div style="font-family:var(--mono);font-size:12px;color:var(--cyan)">${escapeHtml(p.ip)}</div>
           ${nameLine}
-          <div style="font-family:var(--mono);font-size:10px;color:var(--text3);margin-top:2px">${dev.model || '—'} · S/N: ${dev.serial || '—'} · FW: ${dev.firmware || '—'} · Uptime: ${dev.uptime_str || '—'}</div>
+          <div style="font-family:var(--mono);font-size:10px;color:var(--text3);margin-top:2px">${escapeHtml(dev.model || '—')} · S/N: ${escapeHtml(dev.serial || '—')} · FW: ${escapeHtml(dev.firmware || '—')} · Uptime: ${escapeHtml(dev.uptime_str || '—')}</div>
         </div>
         <div style="display:flex;gap:8px;align-items:center">
           <div style="text-align:center"><div style="font-family:var(--mono);font-size:9px;color:var(--text3)">Response</div><div style="font-family:var(--mono);font-size:13px;color:var(--cyan)">${p.poll_ms != null ? p.poll_ms + 'ms' : '—'}</div></div>
@@ -2102,7 +2120,7 @@ function buildPrinterDetail(p) {
       <div class="section">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
           <div class="section-title">📦 تونر و کارتریج‌ها</div>
-          ${canManage() ? `<button class="btn btn-cyan" onclick="openTonerResetModal('${ip}')" style="font-size:12px">تنظیم مجدد کارتریج</button>` : ''}
+          ${canManage() ? `<button class="btn btn-cyan" onclick="openTonerResetModal(${jsArg(ip)})" style="font-size:12px">تنظیم مجدد کارتریج</button>` : ''}
         </div>
         <div class="supply-grid">${supplyCards || '<span style="color:var(--text3);font-size:11px">اطلاعات موجود نیست</span>'}</div>
       </div>
@@ -2117,25 +2135,25 @@ function buildPrinterDetail(p) {
       <div class="section-title">📋 رویدادهای این دستگاه</div>
       <div class="log-toolbar">
         <div class="log-filter" id="filter-${ip.replace(/\./g,'-')}">
-          <button class="filter-btn" onclick="filterLog('all',this,'${logId}')">همه</button>
-          <button class="filter-btn" onclick="filterLog('ALERT',this,'${logId}')">هشدار</button>
-          <button class="filter-btn active" onclick="filterLog('PRINT',this,'${logId}')">چاپ</button>
-          <button class="filter-btn" onclick="filterLog('STATUS',this,'${logId}')">وضعیت</button>
-          <button class="filter-btn" onclick="filterLog('SERVICE',this,'${logId}')">🔧 سرویس</button>
-          <button class="filter-btn" onclick="filterLog('REFILL',this,'${logId}')">🖨 شارژ</button>
-          <button class="filter-btn" onclick="filterLog('CARTRIDGE_CHANGED',this,'${logId}')">🔄 کارتریج</button>
+          <button class="filter-btn" onclick="filterLog('all',this,${jsArg(logId)})">همه</button>
+          <button class="filter-btn" onclick="filterLog('ALERT',this,${jsArg(logId)})">هشدار</button>
+          <button class="filter-btn active" onclick="filterLog('PRINT',this,${jsArg(logId)})">چاپ</button>
+          <button class="filter-btn" onclick="filterLog('STATUS',this,${jsArg(logId)})">وضعیت</button>
+          <button class="filter-btn" onclick="filterLog('SERVICE',this,${jsArg(logId)})">🔧 سرویس</button>
+          <button class="filter-btn" onclick="filterLog('REFILL',this,${jsArg(logId)})">🖨 شارژ</button>
+          <button class="filter-btn" onclick="filterLog('CARTRIDGE_CHANGED',this,${jsArg(logId)})">🔄 کارتریج</button>
         </div>
         <span class="log-count" id="${logId}-count"></span>
-        <button class="btn btn-cyan" onclick="openEvModal('${ip}','SERVICE')" style="font-size:11px">🔧 ثبت سرویس</button>
-        <button class="btn btn-yellow" onclick="openEvModal('${ip}','REFILL')" style="font-size:11px">🖨 شارژ کارتریج</button>
+        <button class="btn btn-cyan" onclick="openEvModal(${jsArg(ip)},'SERVICE')" style="font-size:11px">🔧 ثبت سرویس</button>
+        <button class="btn btn-yellow" onclick="openEvModal(${jsArg(ip)},'REFILL')" style="font-size:11px">🖨 شارژ کارتریج</button>
         <input type="datetime-local" class="printer-log-start" data-ip="${ip}" style="width:auto; font-family:var(--mono); font-size:11px;" title="شروع بازه">
         <input type="datetime-local" class="printer-log-end" data-ip="${ip}" style="width:auto; font-family:var(--mono); font-size:11px;" title="پایان بازه">
-        <button class="btn btn-cyan" onclick="applyDateFilter('${ip}')">🔍 اعمال فیلتر</button>
-        <button class="btn btn-yellow" onclick="exportLogsWithRange('${ip}', 'excel')">↓ Excel (بازه)</button>
-        <button class="btn btn-orange" onclick="exportLogsWithRange('${ip}', 'csv')">↓ CSV (بازه)</button>
-        <button class="btn btn-yellow" onclick="exportPrinterLogExcel('${ip}')">↓ Excel</button>
-        <button class="btn btn-orange" onclick="exportPrinterLogJSON('${ip}')">↓ JSON</button>
-        <button class="btn" style="border-color:rgba(255,61,61,.3);color:var(--red);background:rgba(255,61,61,.06)" onclick="clearPrinterLog('${ip}')">× پاک</button>
+        <button class="btn btn-cyan" onclick="applyDateFilter(${jsArg(ip)})">🔍 اعمال فیلتر</button>
+        <button class="btn btn-yellow" onclick="exportLogsWithRange(${jsArg(ip)}, 'excel')">↓ Excel (بازه)</button>
+        <button class="btn btn-orange" onclick="exportLogsWithRange(${jsArg(ip)}, 'csv')">↓ CSV (بازه)</button>
+        <button class="btn btn-yellow" onclick="exportPrinterLogExcel(${jsArg(ip)})">↓ Excel</button>
+        <button class="btn btn-orange" onclick="exportPrinterLogJSON(${jsArg(ip)})">↓ JSON</button>
+        <button class="btn" style="border-color:rgba(255,61,61,.3);color:var(--red);background:rgba(255,61,61,.06)" onclick="clearPrinterLog(${jsArg(ip)})">× پاک</button>
       </div>
       <div id="${logId}"></div>
     </div>`;
@@ -2145,8 +2163,8 @@ function buildSensorDetail(p) {
   if (!p.online && p.online !== null) return `
     <div class="offline-banner">
       <h2>🔴 آفلاین</h2>
-      <div class="offline-message">${p.ip} — ${p.error || 'دستگاه در دسترس نیست'}</div>
-      ${canEditPrinters() ? `<button class="btn btn-cyan" style="margin-top:16px" onclick="removePrinter('${p.ip}','${p.name}')">× حذف دستگاه</button>` : ''}
+      <div class="offline-message">${escapeHtml(p.ip)} — ${escapeHtml(p.error || 'دستگاه در دسترس نیست')}</div>
+      ${canEditPrinters() ? `<button class="btn btn-cyan" style="margin-top:16px" data-printer-action="remove" data-ip="${escapeHtml(p.ip)}">× حذف دستگاه</button>` : ''}
     </div>`;
 
   if (p.online === null) return `<div style="padding:60px;text-align:center">⏳ در حال بررسی...</div>`;
@@ -2159,21 +2177,21 @@ function buildSensorDetail(p) {
   const humPorts = Array.isArray(c.hum_ports) && c.hum_ports.length
     ? c.hum_ports
     : [{port: 1, value: c.hum1, status: c.hum1_status}, ...(c.hum2 !== null && c.hum2 !== undefined ? [{port: 2, value: c.hum2, status: c.hum2_status}] : [])];
-  const displayName = p.nickname ? `${p.nickname} (${p.name})` : p.name;
+  const displayName = p.nickname ? `${escapeHtml(p.nickname)} (${escapeHtml(p.name)})` : escapeHtml(p.name);
   const editButtonHtml = canEditPrinters()
-    ? `<button class="btn btn-edit" onclick="openEditModal('${p.ip}')" style="margin-right:8px" title="ویرایش اطلاعات و گروه" aria-label="ویرایش اطلاعات و گروه">✎</button>`
+    ? `<button class="btn btn-edit" onclick="openEditModal(${jsArg(p.ip)})" style="margin-right:8px" title="ویرایش اطلاعات و گروه" aria-label="ویرایش اطلاعات و گروه">✎</button>`
     : '';
   const sensorDeleteButtonHtml = canEditPrinters()
-    ? `<button class="btn btn-orange" onclick="removePrinter('${p.ip}','${p.name}')" style="font-size:10px">× حذف</button>`
+    ? `<button class="btn btn-orange" data-printer-action="remove" data-ip="${escapeHtml(p.ip)}" style="font-size:10px">× حذف</button>`
     : '';
   const sensorLogActionsHtml = canAdmin()
     ? `
-        <button class="btn btn-yellow" onclick="exportPrinterLogExcel('${p.ip}')">↓ Excel</button>
-        <button class="btn btn-orange" onclick="exportPrinterLogJSON('${p.ip}')">↓ JSON</button>
-        <button class="btn" style="border-color:red" onclick="clearPrinterLog('${p.ip}')">× پاک</button>
+        <button class="btn btn-yellow" onclick="exportPrinterLogExcel(${jsArg(p.ip)})">↓ Excel</button>
+        <button class="btn btn-orange" onclick="exportPrinterLogJSON(${jsArg(p.ip)})">↓ JSON</button>
+        <button class="btn" style="border-color:red" onclick="clearPrinterLog(${jsArg(p.ip)})">× پاک</button>
       `
     : canManage()
-      ? `<button class="btn btn-yellow" onclick="exportPrinterLogExcel('${p.ip}')">↓ Excel</button>`
+      ? `<button class="btn btn-yellow" onclick="exportPrinterLogExcel(${jsArg(p.ip)})">↓ Excel</button>`
       : '';
 
   // Helper to display sensor status
@@ -2204,10 +2222,10 @@ function buildSensorDetail(p) {
     <div class="section" style="margin-bottom:14px">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
         <div>
-          <div style="font-family:var(--mono);font-size:12px;color:var(--orange)">${p.ip} 🌡️</div>
+          <div style="font-family:var(--mono);font-size:12px;color:var(--orange)">${escapeHtml(p.ip)} 🌡️</div>
           <div style="font-size:18px;font-weight:700;margin-top:4px">${displayName} ${editButtonHtml}</div>
           <div style="font-family:var(--mono);font-size:10px;color:var(--text3)">
-            ${dev.model || 'ECS100G'} · S/N: ${dev.serial || '—'} · FW: ${dev.firmware || '—'}
+            ${escapeHtml(dev.model || 'ECS100G')} · S/N: ${escapeHtml(dev.serial || '—')} · FW: ${escapeHtml(dev.firmware || '—')}
           </div>
         </div>
         <div style="display:flex;gap:8px;align-items:center">
@@ -2402,15 +2420,15 @@ function _buildPagination(containerId, total, page, pageSize) {
   for (const p of pages) {
     if (prev && p - prev > 1) btns += `<span class="pg-dots">…</span>`;
     btns += `<button class="pg-btn${p===page?' active':''}"
-      onclick="_pgGoto('${containerId}',${p})">${p}</button>`;
+      onclick="_pgGoto(${jsArg(containerId)},${p})">${p}</button>`;
     prev = p;
   }
 
   return `<div class="log-pagination">
-    <button class="pg-btn pg-arrow" onclick="_pgGoto('${containerId}',${page-1})"
+    <button class="pg-btn pg-arrow" onclick="_pgGoto(${jsArg(containerId)},${page-1})"
       ${page<=1?'disabled':''}>&#8249;</button>
     ${btns}
-    <button class="pg-btn pg-arrow" onclick="_pgGoto('${containerId}',${page+1})"
+    <button class="pg-btn pg-arrow" onclick="_pgGoto(${jsArg(containerId)},${page+1})"
       ${page>=totalPages?'disabled':''}>&#8250;</button>
     <span class="pg-info">${start}–${end} از ${total}</span>
   </div>`;
@@ -2550,8 +2568,8 @@ function renderAccessPanel(st) {
 
   grid.innerHTML = urls.map(u => `
     <div class="access-card">
-      <div class="access-card-title">${u.title}</div>
-      <div class="access-url" onclick="copyURL(this,'${u.url}')" title="کلیک برای کپی">${u.url}</div>
+      <div class="access-card-title">${escapeHtml(u.title)}</div>
+      <div class="access-url" onclick="copyURL(this,${jsArg(u.url)})" title="کلیک برای کپی">${escapeHtml(u.url)}</div>
       <div class="qr-hint">کلیک برای کپی آدرس</div>
     </div>
   `).join('');
@@ -2808,7 +2826,7 @@ function renderGroupManagerList() {
       <div class="gm-row" style="display:flex;align-items:center;gap:8px;padding:6px;border-bottom:1px solid var(--border)">
         <input type="checkbox" class="gm-check" data-ip="${escapeHtml(p.ip)}">
         <div style="flex:1;font-size:13px">${escapeHtml(p.ip)} — ${display}</div>
-        <select class="form-input gm-select" data-ip="${escapeHtml(p.ip)}" onchange="assignPrinterToGroup('${escapeHtml(p.ip)}', this.value)">
+        <select class="form-input gm-select" data-ip="${escapeHtml(p.ip)}" onchange="assignPrinterToGroup(${jsArg(escapeHtml(p.ip))}, this.value)">
           ${opts}
         </select>
       </div>`;
@@ -2870,8 +2888,8 @@ async function fetchOfficeSubnets() {
       const label = d.name || d.id;
       const isCustom = CUSTOM_GROUPS.find(g => g.id === d.id);
       const deleteBtn = isCustom
-        ? `<button class="btn btn-ghost" onclick="deleteGroupUI('${escapeHtml(d.id)}')" title="حذف گروه سفارشی">× حذف گروه</button>`
-        : `<button class="btn btn-ghost" onclick="deleteOfficeGroupUI('${escapeHtml(d.id)}')" title="حذف گروه دفتری">× حذف گروه</button>`;
+        ? `<button class="btn btn-ghost" onclick="deleteGroupUI(${jsArg(d.id)})" title="حذف گروه سفارشی">× حذف گروه</button>`
+        : `<button class="btn btn-ghost" onclick="deleteOfficeGroupUI(${jsArg(d.id)})" title="حذف گروه دفتری">× حذف گروه</button>`;
       return `<div style="display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--border);padding:8px">
         <div style="width:150px;font-weight:700">${escapeHtml(label)}</div>
         <input class="form-input" data-key="${escapeHtml(d.id)}" value="${escapeHtml(val||'')}" style="flex:1" placeholder="مثلاً: 172.16.25">
@@ -2982,10 +3000,10 @@ function doBulkPreview() {
   const newCount = items.filter(x => x.valid && !x.exists).length;
   container.innerHTML = items.map(it => {
     if (!it.valid)
-      return `<div class="bulk-result-row err">✗ ${it.ip} &nbsp;<span style="color:var(--text3)">فرمت IP نامعتبر</span></div>`;
+      return `<div class="bulk-result-row err">✗ ${escapeHtml(it.ip)} &nbsp;<span style="color:var(--text3)">فرمت IP نامعتبر</span></div>`;
     if (it.exists)
-      return `<div class="bulk-result-row skip">⏭ ${it.ip} &nbsp;<span style="color:var(--text3)">قبلاً موجود است</span></div>`;
-    return `<div class="bulk-result-row ok">✓ ${it.ip} &nbsp;<span style="color:var(--text2)">${it.name||'—'}</span> &nbsp;<span style="color:var(--text3)">[${it.community}]</span></div>`;
+      return `<div class="bulk-result-row skip">⏭ ${escapeHtml(it.ip)} &nbsp;<span style="color:var(--text3)">قبلاً موجود است</span></div>`;
+    return `<div class="bulk-result-row ok">✓ ${escapeHtml(it.ip)} &nbsp;<span style="color:var(--text2)">${escapeHtml(it.name || '—')}</span> &nbsp;<span style="color:var(--text3)">[${escapeHtml(it.community)}]</span></div>`;
   }).join('');
 
   btn.style.display = newCount ? 'inline-flex' : 'none';
@@ -3124,7 +3142,7 @@ async function doDiscover() {
         </div>
         ${isExist
           ? '<span style="font-size:10px;color:var(--text3);font-family:var(--mono)">قبلاً اضافه شده</span>'
-          : `<button class="btn btn-green" onclick="quickAdd(event, '${escapeHtml(f.ip)}','${escapeHtml((f.model||'').slice(0,20))}')">＋ افزودن</button>`
+          : `<button class="btn btn-green" data-printer-action="quick-add" data-ip="${escapeHtml(f.ip)}" data-model="${escapeHtml((f.model || '').slice(0,20))}">＋ افزودن</button>`
         }
       </div>`;
     }).join('');
@@ -4100,7 +4118,7 @@ async function analyzeImportFile() {
             <input type="checkbox" name="import-tables" value="${escapeHtml(t)}" ${checked} style="margin-top:4px">
             <span>
               <strong>${escapeHtml(info.label || t)}</strong>
-              <small style="display:block;color:var(--text3)">${fmtN(info.count || 0)} رکورد${dateRange}</small>
+              <small style="display:block;color:var(--text3)">${fmtN(info.count || 0)} رکورد${escapeHtml(dateRange)}</small>
             </span>
           </label>`;
       }).join('') || '<div style="font-size:11px;color:var(--red)">هیچ جدول قابل import یافت نشد.</div>';
@@ -4216,15 +4234,15 @@ function renderGroupCards() {
       (!p.group && getOfficeGroup(p.ip) === g.id)).length;
     const isOffice = !!OFFICE_GROUPS.find(o => o.id === g.id);
     const subtitle = isOffice
-      ? `گروه پیش‌فرض دفتر — خودکار بر اساس زیرشبکه ${g.subnet ? `<code style="color:var(--cyan);font-family:var(--mono)">${g.subnet}.x</code>` : ''}`
+      ? `گروه پیش‌فرض دفتر — خودکار بر اساس زیرشبکه ${g.subnet ? `<code style="color:var(--cyan);font-family:var(--mono)">${escapeHtml(g.subnet)}.x</code>` : ''}`
       : 'گروه سفارشی';
     const actions = isOffice ? '' : `
-      <button class="btn" style="padding:3px 10px; font-size:11px" onclick="renameGroupPrompt('${g.id}')">✏️ نام</button>
-      <button class="btn" style="padding:3px 10px; font-size:11px; color:var(--red); border-color:var(--red)" onclick="deleteGroupById('${g.id}')">🗑</button>
+      <button class="btn" style="padding:3px 10px; font-size:11px" onclick="renameGroupPrompt(${jsArg(g.id)})">✏️ نام</button>
+      <button class="btn" style="padding:3px 10px; font-size:11px; color:var(--red); border-color:var(--red)" onclick="deleteGroupById(${jsArg(g.id)})">🗑</button>
     `;
     return `
       <div style="display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid var(--border); border-radius:10px; background:var(--bg2)">
-        <span style="font-size:18px">${g.icon || '🏢'}</span>
+        <span style="font-size:18px">${escapeHtml(g.icon || '🏢')}</span>
         <div style="flex:1; min-width:0">
           <div style="font-size:12px; font-weight:700; color:var(--text)">${escapeHtml(g.name)}
             <span style="font-size:10px; color:var(--text3); font-weight:400">(${count} پرینتر)</span>
@@ -4301,7 +4319,7 @@ function renderGroupManagerList() {
   container.innerHTML = filteredPrinters.map(p => {
     const currentGid = normalizeGroupId(p.group);
     const options = defs.map(g =>
-      `<option value="${g.id}" ${currentGid === g.id ? 'selected' : ''}>${g.icon || '🏢'} ${escapeHtml(g.name)}</option>`
+      `<option value="${escapeHtml(g.id)}" ${currentGid === g.id ? 'selected' : ''}>${escapeHtml(g.icon || '🏢')} ${escapeHtml(g.name)}</option>`
     ).join('');
     const officeGid = getOfficeGroup(p.ip);
     const officeName = (groupDefById(officeGid) || {}).name || officeGid;
@@ -4310,9 +4328,9 @@ function renderGroupManagerList() {
       <div style="display:flex; align-items:center; gap:10px; padding:8px; border-bottom:1px solid var(--border); background:var(--bg2); margin-bottom:4px; border-radius:6px">
         <div style="flex:1; min-width:0">
           <div style="font-size:12px; font-weight:700; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap">${escapeHtml(p.nickname || p.name)}</div>
-          <div style="font-family:var(--mono); font-size:10px; color:var(--cyan)">${p.ip}</div>
+          <div style="font-family:var(--mono); font-size:10px; color:var(--cyan)">${escapeHtml(p.ip)}</div>
         </div>
-        <select onchange="updatePrinterGroupDirectly('${p.ip}', this.value)" style="padding:4px 8px; font-size:11px; border-radius:4px; border:1px solid var(--border); background:var(--bg3); color:var(--text); width:170px">
+        <select onchange="updatePrinterGroupDirectly(${jsArg(p.ip)}, this.value)" style="padding:4px 8px; font-size:11px; border-radius:4px; border:1px solid var(--border); background:var(--bg3); color:var(--text); width:170px">
           <option value="" ${!currentGid ? 'selected' : ''}>🏠 خودکار (${escapeHtml(officeName)})</option>
           ${options}
         </select>

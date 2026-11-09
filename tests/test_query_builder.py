@@ -181,7 +181,7 @@ class QueryEngineApiIntegrationTests(unittest.TestCase):
         self.app.config["TESTING"] = True
         self.client = self.app.test_client()
 
-        self.user = User.create("qb_tester", "qb@printguard.org", "pass123", role="manager", is_verified=True)
+        self.user = User.create("qb_tester", "qb@printguard.org", "pass123", role="admin", is_verified=True)
 
     def tearDown(self):
         os.chdir(self.old_cwd)

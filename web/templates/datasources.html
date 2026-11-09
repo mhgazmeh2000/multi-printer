@@ -16,7 +16,7 @@
     <div style="display:flex; gap:12px; align-items:center;">
       <button class="btn btn-cyan" onclick="if(window.PrintGuardTours) window.PrintGuardTours.startDatasourceTour(true);" title="راهنمای تعاملی منابع داده">راهنما 💡</button>
       <a href="/dashboards" class="btn" style="text-decoration:none;">داشبوردها 📊</a>
-      {% if current_user.role in ['admin', 'manager'] %}
+      {% if current_user.role == 'admin' %}
       <button id="btn-new-ds" class="btn btn-green" onclick="openAddDsModal()">＋ افزودن منبع داده</button>
       {% endif %}
       <a href="/" class="btn" style="text-decoration:none;">پایش پرینترها 🖨</a>
@@ -69,6 +69,11 @@
 
 <script>
 let availableDrivers = [];
+const canManageDataSources = {{ (current_user.role == 'admin') | tojson }};
+function dsEscape(value) {
+  return String(value == null ? '' : value).replace(/[&<>"']/g,
+    char => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[char]));
+}
 
 async function loadDataSources() {
   const grid = document.getElementById("ds-grid");
@@ -84,7 +89,7 @@ async function loadDataSources() {
           <div style="font-size:36px; margin-bottom:10px;">🔌</div>
           <div style="color:var(--text); font-weight:600; font-size:16px;">هیچ منبع داده‌ای هنوز تعریف نشده است</div>
           <div style="color:var(--text3); font-size:13px; margin:8px 0 18px;">می‌توانید به PostgreSQL، REST API یا GitHub متصل شوید.</div>
-          <button class="btn btn-green" onclick="openAddDsModal()">＋ اولین منبع داده را اضافه کنید</button>
+          ${canManageDataSources ? '<button class="btn btn-green" onclick="openAddDsModal()">＋ اولین منبع داده را اضافه کنید</button>' : ''}
         </div>
       `;
       return;
@@ -102,22 +107,23 @@ async function loadDataSources() {
           <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px;">
             <div style="display:flex; align-items:center; gap:8px;">
               <span style="font-size:20px;">${icon}</span>
-              <h4 style="margin:0; font-size:16px; color:var(--text);">${ds.name}</h4>
+              <h4 style="margin:0; font-size:16px; color:var(--text);">${dsEscape(ds.name)}</h4>
             </div>
-            <span class="pill ${ds.is_default ? 'p2' : 'p1'}">${ds.type}</span>
+            <span class="pill ${ds.is_default ? 'p2' : 'p1'}">${dsEscape(ds.type)}</span>
           </div>
-          <div style="font-size:11px; color:var(--text3); font-family:var(--mono); margin-top:4px;">UID: ${ds.uid}</div>
+          <div style="font-size:11px; color:var(--text3); font-family:var(--mono); margin-top:4px;">UID: ${dsEscape(ds.uid)}</div>
         </div>
 
         <div style="border-top:1px solid rgba(255,255,255,0.05); padding-top:12px; display:flex; justify-content:space-between; align-items:center;">
-          <button class="btn btn-cyan" style="font-size:11px; padding:4px 10px;" onclick="testDs('${ds.uid}', this)">⚡ تست اتصال</button>
-          <button class="btn" style="font-size:11px; padding:4px 8px; border-color:var(--red); color:var(--red);" onclick="deleteDs('${ds.uid}')">حذف</button>
+          ${canManageDataSources ? '<button class="btn btn-cyan" data-action="test">⚡ تست اتصال</button><button class="btn" data-action="delete">حذف</button>' : ''}
         </div>
       `;
+      card.querySelector('[data-action="test"]')?.addEventListener('click', event => testDs(ds.uid, event.currentTarget));
+      card.querySelector('[data-action="delete"]')?.addEventListener('click', () => deleteDs(ds.uid));
       grid.appendChild(card);
     });
   } catch (err) {
-    grid.innerHTML = `<div style="grid-column: 1 / -1; color:var(--red); text-align:center;">${err.message}</div>`;
+    grid.innerHTML = `<div style="grid-column: 1 / -1; color:var(--red); text-align:center;">${dsEscape(err.message)}</div>`;
   }
 }
 

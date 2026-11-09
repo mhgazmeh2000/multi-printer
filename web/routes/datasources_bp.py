@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 from flask import Blueprint, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user
+from web.auth import admin_required
 
 from config.settings import POLL_INTERVAL
 from core.db import get_connection
@@ -60,9 +61,10 @@ def api_list_datasources():
 
 
 @bp.route('/api/datasources', methods=['POST'])
+@admin_required
 def api_create_datasource():
     """Creates a new data source."""
-    if not current_user.is_authenticated or current_user.role not in ("admin", "manager"):
+    if not current_user.is_authenticated or current_user.role != "admin":
         return jsonify({"error": "شما اجازه افزودن منبع داده جدید را ندارید."}), 403
 
     payload = request.get_json() or {}
@@ -85,12 +87,13 @@ def api_create_datasource():
         )
         conn.commit()
         return jsonify(ds), 201
-    except ValueError as ve:
+    except (ValueError, DataSourceError) as ve:
+        conn.rollback()
         return jsonify({"error": str(ve)}), 400
     except Exception as e:
         conn.rollback()
         log.error(f"Error creating data source: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "عملیات منبع داده ناموفق بود."}), 500
     finally:
         conn.close()
 
@@ -109,9 +112,10 @@ def api_get_datasource(uid: str):
 
 
 @bp.route('/api/datasources/<uid>', methods=['PUT'])
+@admin_required
 def api_update_datasource(uid: str):
     """Updates a data source configuration."""
-    if not current_user.is_authenticated or current_user.role not in ("admin", "manager"):
+    if not current_user.is_authenticated or current_user.role != "admin":
         return jsonify({"error": "شما اجازه ویرایش منبع داده را ندارید."}), 403
 
     payload = request.get_json() or {}
@@ -128,10 +132,13 @@ def api_update_datasource(uid: str):
             return jsonify({"error": "منبع داده یافت نشد."}), 404
         conn.commit()
         return jsonify({"status": "success", "message": "منبع داده با موفقیت به‌روزرسانی شد."})
+    except DataSourceError as exc:
+        conn.rollback()
+        return jsonify({"error": str(exc)}), 400
     except Exception as e:
         conn.rollback()
         log.error(f"Error updating data source {uid}: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "عملیات منبع داده ناموفق بود."}), 500
     finally:
         conn.close()
 
@@ -149,15 +156,19 @@ def api_delete_datasource(uid: str):
             return jsonify({"error": "منبع داده یافت نشد."}), 404
         conn.commit()
         return jsonify({"status": "success", "message": "منبع داده با موفقیت حذف شد."})
+    except DataSourceError as exc:
+        conn.rollback()
+        return jsonify({"error": str(exc)}), 400
     except Exception as e:
         conn.rollback()
         log.error(f"Error deleting data source {uid}: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "عملیات منبع داده ناموفق بود."}), 500
     finally:
         conn.close()
 
 
 @bp.route('/api/datasources/<uid>/test', methods=['POST'])
+@admin_required
 def api_test_datasource(uid: str):
     """Tests connectivity to the data source."""
     if not current_user.is_authenticated:
@@ -171,12 +182,13 @@ def api_test_datasource(uid: str):
         return jsonify({"status": "error", "message": str(de)}), 400
     except Exception as e:
         log.error(f"Connection test error for {uid}: {e}", exc_info=True)
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return jsonify({"status": "error", "message": "عملیات منبع داده ناموفق بود."}), 500
     finally:
         conn.close()
 
 
 @bp.route('/api/datasources/<uid>/query', methods=['POST'])
+@admin_required
 def api_query_datasource(uid: str):
     """Executes a query against the data source."""
     if not current_user.is_authenticated:
@@ -193,6 +205,6 @@ def api_query_datasource(uid: str):
         return jsonify({"error": str(de)}), 400
     except Exception as e:
         log.error(f"Query execution error for {uid}: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "عملیات منبع داده ناموفق بود."}), 500
     finally:
         conn.close()
