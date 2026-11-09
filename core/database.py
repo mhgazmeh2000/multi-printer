@@ -1188,6 +1188,32 @@ def _counter_columns_create_sql() -> str:
     return ",\n".join(f"            {name} {decl}" for name, decl in _COUNTER_BASE_COLUMNS)
 
 
+def _row_to_printer_counters(row) -> dict:
+    """Convert a row of `_COUNTERS_COLS` into the normalized counters dictionary."""
+    return {
+        "device_type": row[0],
+        "print_total": row[1],
+        "full_color": row[2],
+        "black_white": row[3],
+        "toner_level": row[4],
+        "manual_override": row[5] or 0,
+        "override_color": row[6],
+        "override_base_level": row[7],
+        "override_start_total": row[8],
+        "override_start_toner": row[9],
+        "yield_per_page": row[10] if row[10] is not None else 2000,
+        "force_estimate": row[11] or 0,
+        "yield_learning_failures": row[12] or 0,
+        "last_alert_codes": _load_json_list(row[13]),
+        "a3_total": row[14],
+        "a4_total": row[15],
+        "alert_codes": _load_json_list(row[16]),
+        **_load_cartridge_id_state(row[17]),
+        "toner_overrides": _load_json_dict(row[18]),
+        "updated_at": row[19],
+    }
+
+
 def load_printer_counters(ip: str) -> Optional[dict]:
     """Load the latest counter values from the database"""
     try:
@@ -1198,31 +1224,28 @@ def load_printer_counters(ip: str) -> Optional[dict]:
             ).fetchone()
         if not row:
             return None
-        return {
-            "device_type": row[0],
-            "print_total": row[1],
-            "full_color": row[2],
-            "black_white": row[3],
-            "toner_level": row[4],
-            "manual_override": row[5] or 0,
-            "override_color": row[6],
-            "override_base_level": row[7],
-            "override_start_total": row[8],
-            "override_start_toner": row[9],
-            "yield_per_page": row[10] if row[10] is not None else 2000,
-            "force_estimate": row[11] or 0,
-            "yield_learning_failures": row[12] or 0,
-            "last_alert_codes": _load_json_list(row[13]),
-            "a3_total": row[14],
-            "a4_total": row[15],
-            "alert_codes": _load_json_list(row[16]),
-            **_load_cartridge_id_state(row[17]),
-            "toner_overrides": _load_json_dict(row[18]),
-            "updated_at": row[19],
-        }
+        return _row_to_printer_counters(row)
     except Exception as e:
         log.exception(f"Error loading counters for {ip}: {e}")
         return None
+
+
+def load_printer_counters_many(ips: list[str]) -> dict[str, dict]:
+    """Batch-load counter rows for multiple printer IPs in a single DB connection."""
+    clean_ips = list(dict.fromkeys([ip for ip in (ips or []) if ip]))
+    if not clean_ips:
+        return {}
+    placeholders = ", ".join(["?"] * len(clean_ips))
+    try:
+        with db_connection() as conn:
+            rows = conn.execute(
+                f"SELECT ip, {_COUNTERS_COLS} FROM printer_counters WHERE ip IN ({placeholders})",
+                tuple(clean_ips),
+            ).fetchall()
+        return {str(r[0]): _row_to_printer_counters(r[1:]) for r in rows if r and r[0]}
+    except Exception as e:
+        log.exception("Error batch-loading printer counters: %s", e)
+        return {}
 
 
 def save_printer_counters(ip: str, data: dict):

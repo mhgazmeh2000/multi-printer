@@ -22,11 +22,12 @@ import logging
 import math
 import os
 import re
+import threading
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 from core.database import db_connection
-from core.db import BACKEND_POSTGRESQL
+from core.db import BACKEND_POSTGRESQL, UndefinedTable
 from core.db import upsert_sql as _upsert_sql
 from core.db.schema import YIELD_TABLES as _PG_YIELD_TABLES, verify_postgres_tables
 from core.time_utils import as_utc_datetime, utc_now_iso
@@ -2468,151 +2469,194 @@ def register_manual_refill(*, ip: str, color: str, printer_model: str, cartridge
         )
 
 
+_YIELD_STATUS_CACHE_LOCK = threading.Lock()
+_YIELD_STATUS_SLOT_CACHE: Dict[tuple, dict] = {}
+_YIELD_STATUS_CACHE_MAX = 512
+
+
 def get_yield_status(ip: str = None) -> list:
-    ensure_yield_tables()
     params = []
     where = ""
     if ip:
         where = "WHERE printer_ip = ?"
         params.append(ip)
-    with db_connection() as conn:
-        rows = conn.execute(
-            f"""
-            SELECT printer_ip, color, printer_model, cartridge_name, cartridge_key,
-                   current_level, yield_per_page, yield_source, confidence,
-                   sample_count, total_weight, anchor_level, anchor_counter,
-                   last_refill_at, learned_at, cycle_start_counter, cycle_start_level,
-                   zero_reached_counter, pages_after_zero, cycle_status, updated_at
-            FROM cartridge_state
-            {where}
-            ORDER BY printer_ip, color
-            """,
-            params,
-        ).fetchall()
+    try:
+        with db_connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT printer_ip, color, printer_model, cartridge_name, cartridge_key,
+                       current_level, yield_per_page, yield_source, confidence,
+                       sample_count, total_weight, anchor_level, anchor_counter,
+                       last_refill_at, learned_at, cycle_start_counter, cycle_start_level,
+                       zero_reached_counter, pages_after_zero, cycle_status, updated_at
+                FROM cartridge_state
+                {where}
+                ORDER BY printer_ip, color
+                """,
+                params,
+            ).fetchall()
 
-        profiles_by_key: Dict[str, dict] = {}
-        snap_by_slot: Dict[Tuple[str, str], list] = {}
-        if rows:
-            try:
-                for pr in conn.execute(
-                    "SELECT cartridge_key, yield_per_page, confidence, sample_count, total_weight, source_printer_ip "
-                    "FROM cartridge_yield_profiles"
-                ).fetchall():
-                    if pr[0]:
-                        profiles_by_key[str(pr[0])] = {
-                            "cartridge_key": pr[0],
-                            "yield_per_page": pr[1],
-                            "confidence": pr[2],
-                            "sample_count": pr[3],
-                            "total_weight": pr[4],
-                            "source_printer_ip": pr[5],
-                        }
-            except Exception:
-                profiles_by_key = {}
+            profiles_by_key: Dict[str, dict] = {}
+            snap_by_slot: Dict[Tuple[str, str], list] = {}
+            if rows:
+                try:
+                    for pr in conn.execute(
+                        "SELECT cartridge_key, yield_per_page, confidence, sample_count, total_weight, source_printer_ip "
+                        "FROM cartridge_yield_profiles"
+                    ).fetchall():
+                        if pr[0]:
+                            profiles_by_key[str(pr[0])] = {
+                                "cartridge_key": pr[0],
+                                "yield_per_page": pr[1],
+                                "confidence": pr[2],
+                                "sample_count": pr[3],
+                                "total_weight": pr[4],
+                                "source_printer_ip": pr[5],
+                            }
+                except Exception:
+                    profiles_by_key = {}
 
-            try:
-                snap_rows = conn.execute(
-                    f"""
-                    SELECT printer_ip, color, usage_counter, toner_level, raw_level, source,
-                           valid, reject_reason, timestamp, cartridge_key, full_color, print_total
-                    FROM toner_snapshots_v2
-                    {where}
-                    ORDER BY id ASC
-                    """,
-                    params,
-                ).fetchall()
-                for sr in snap_rows:
-                    slot = (str(sr[0] or ""), str(sr[1] or "").lower())
-                    buf = snap_by_slot.setdefault(slot, [])
-                    buf.append(sr[2:])
-            except Exception:
-                snap_by_slot = {}
+                try:
+                    snap_rows = conn.execute(
+                        f"""
+                        SELECT printer_ip, color, usage_counter, toner_level, raw_level, source,
+                               valid, reject_reason, timestamp, cartridge_key, full_color, print_total
+                        FROM (
+                            SELECT id, printer_ip, color, usage_counter, toner_level, raw_level, source,
+                                   valid, reject_reason, timestamp, cartridge_key, full_color, print_total,
+                                   ROW_NUMBER() OVER (
+                                       PARTITION BY printer_ip, LOWER(color)
+                                       ORDER BY id DESC
+                                   ) AS rn
+                            FROM toner_snapshots_v2
+                            {where}
+                        ) ranked_snaps
+                        WHERE rn <= 400
+                        ORDER BY id ASC
+                        """,
+                        params,
+                    ).fetchall()
+                    for sr in snap_rows:
+                        slot = (str(sr[0] or ""), str(sr[1] or "").lower())
+                        buf = snap_by_slot.setdefault(slot, [])
+                        buf.append(sr[2:])
+                except Exception:
+                    snap_by_slot = {}
 
-        out = []
-        v2_active = _is_v2_estimator_enabled()
-        for r in rows:
-            p_ip = r[0]
-            c_name = str(r[1] or "").lower()
-            c_key = r[4]
-            cur_lv = r[5]
-            ypp_val = r[6]
-            item = {
-                "printer_ip": p_ip,
-                "color": r[1],
-                "printer_model": r[2],
-                "cartridge_name": r[3],
-                "cartridge_key": c_key,
-                "current_level": cur_lv,
-                "yield_per_page": ypp_val,
-                "yield_source": r[7],
-                "confidence": r[8],
-                "sample_count": r[9],
-                "total_weight": r[10],
-                "anchor_level": r[11],
-                "anchor_counter": r[12],
-                "last_refill_at": r[13],
-                "learned_at": r[14],
-                "cycle_start_counter": r[15],
-                "cycle_start_level": r[16],
-                "zero_reached_counter": r[17],
-                "pages_after_zero": r[18],
-                "cycle_status": r[19],
-                "updated_at": r[20],
-            }
-            slot_snaps = snap_by_slot.get((str(p_ip or ""), c_name), [])[-400:]
-            dec = estimate_cartridge_interval(
-                conn,
-                ip=p_ip,
-                color=c_name,
-                state=item,
-                profile=profiles_by_key.get(str(c_key or "")),
-                snap_rows=slot_snaps,
-            )
-            eff_cap = dec.capacity_pages if v2_active else int(ypp_val or dec.capacity_pages or DEFAULT_YIELD_PER_PAGE)
-            eta_p = (
-                int(round((max(0.0, min(100.0, float(cur_lv))) / 100.0) * eff_cap))
-                if cur_lv is not None
-                else None
-            )
-            cov_idx = dec.coverage_index
-            if not v2_active and dec.nominal_capacity_pages and eff_cap > 0:
-                cov_idx = round(max(0.15, min(6.0, float(dec.nominal_capacity_pages) / float(eff_cap))), 3)
+            out = []
+            v2_active = _is_v2_estimator_enabled()
+            for r in rows:
+                p_ip = r[0]
+                c_name = str(r[1] or "").lower()
+                c_key = r[4]
+                cur_lv = r[5]
+                ypp_val = r[6]
+                prof = profiles_by_key.get(str(c_key or ""))
+                slot_snaps = snap_by_slot.get((str(p_ip or ""), c_name), [])[-400:]
 
-            cyc_st = str(r[19] or "active")
-            pages_after_z = int(r[18] or 0)
-            sensor_state = cyc_st if cyc_st in ("overrun_alert", "chip_quarantined", "frozen_chip") else "healthy"
-            frozen_raw_lv = None
-            last_reset_reason = None
-            if slot_snaps:
-                if sensor_state != "healthy":
-                    frozen_raw_lv = _valid_level(slot_snaps[-1][2])
-                for s_row in reversed(slot_snaps):
-                    s_src = str(s_row[3] or "")
-                    if s_src.startswith("manual_reset:"):
-                        last_reset_reason = s_src.split(":", 1)[1] or None
-                        break
-                    if s_src == "manual_reset":
-                        break
+                prof_sig = tuple(sorted(prof.items())) if prof else None
+                snaps_sig = (
+                    (len(slot_snaps), tuple(slot_snaps[0]), tuple(slot_snaps[-1]), sum(hash(tuple(x)) for x in slot_snaps))
+                    if slot_snaps
+                    else (0,)
+                )
+                cache_key = (tuple(r), prof_sig, snaps_sig, v2_active)
 
-            item.update({
-                "sensor_state": sensor_state,
-                "chip_quarantined": cyc_st in ("chip_quarantined", "overrun_alert"),
-                "frozen_chip_level": frozen_raw_lv,
-                "overrun_pages": pages_after_z if sensor_state != "healthy" else 0,
-                "unregistered_refill_suspected": cyc_st == "overrun_alert",
-                "last_reset_reason": last_reset_reason,
-                "interval_capacity_pages": dec.capacity_pages,
-                "capacity_ci95": [dec.capacity_ci95[0], dec.capacity_ci95[1]],
-                "rel_ci95": dec.rel_ci95,
-                "capacity_method": dec.capacity_method,
-                "learning_state": dec.learning_state,
-                "nominal_capacity_pages": dec.nominal_capacity_pages,
-                "coverage_index": cov_idx,
-                "eta_pages": eta_p,
-                "n_plateaus": dec.n_plateaus,
-            })
-            out.append(item)
-    return out
+                with _YIELD_STATUS_CACHE_LOCK:
+                    cached_item = _YIELD_STATUS_SLOT_CACHE.get(cache_key)
+                if cached_item is not None:
+                    copied = dict(cached_item)
+                    if isinstance(copied.get("capacity_ci95"), list):
+                        copied["capacity_ci95"] = list(copied["capacity_ci95"])
+                    out.append(copied)
+                    continue
+
+                item = {
+                    "printer_ip": p_ip,
+                    "color": r[1],
+                    "printer_model": r[2],
+                    "cartridge_name": r[3],
+                    "cartridge_key": c_key,
+                    "current_level": cur_lv,
+                    "yield_per_page": ypp_val,
+                    "yield_source": r[7],
+                    "confidence": r[8],
+                    "sample_count": r[9],
+                    "total_weight": r[10],
+                    "anchor_level": r[11],
+                    "anchor_counter": r[12],
+                    "last_refill_at": r[13],
+                    "learned_at": r[14],
+                    "cycle_start_counter": r[15],
+                    "cycle_start_level": r[16],
+                    "zero_reached_counter": r[17],
+                    "pages_after_zero": r[18],
+                    "cycle_status": r[19],
+                    "updated_at": r[20],
+                }
+                dec = estimate_cartridge_interval(
+                    conn,
+                    ip=p_ip,
+                    color=c_name,
+                    state=item,
+                    profile=prof,
+                    snap_rows=slot_snaps,
+                )
+                eff_cap = dec.capacity_pages if v2_active else int(ypp_val or dec.capacity_pages or DEFAULT_YIELD_PER_PAGE)
+                eta_p = (
+                    int(round((max(0.0, min(100.0, float(cur_lv))) / 100.0) * eff_cap))
+                    if cur_lv is not None
+                    else None
+                )
+                cov_idx = dec.coverage_index
+                if not v2_active and dec.nominal_capacity_pages and eff_cap > 0:
+                    cov_idx = round(max(0.15, min(6.0, float(dec.nominal_capacity_pages) / float(eff_cap))), 3)
+
+                cyc_st = str(r[19] or "active")
+                pages_after_z = int(r[18] or 0)
+                sensor_state = cyc_st if cyc_st in ("overrun_alert", "chip_quarantined", "frozen_chip") else "healthy"
+                frozen_raw_lv = None
+                last_reset_reason = None
+                if slot_snaps:
+                    if sensor_state != "healthy":
+                        frozen_raw_lv = _valid_level(slot_snaps[-1][2])
+                    for s_row in reversed(slot_snaps):
+                        s_src = str(s_row[3] or "")
+                        if s_src.startswith("manual_reset:"):
+                            last_reset_reason = s_src.split(":", 1)[1] or None
+                            break
+                        if s_src == "manual_reset":
+                            break
+
+                item.update({
+                    "sensor_state": sensor_state,
+                    "chip_quarantined": cyc_st in ("chip_quarantined", "overrun_alert"),
+                    "frozen_chip_level": frozen_raw_lv,
+                    "overrun_pages": pages_after_z if sensor_state != "healthy" else 0,
+                    "unregistered_refill_suspected": cyc_st == "overrun_alert",
+                    "last_reset_reason": last_reset_reason,
+                    "interval_capacity_pages": dec.capacity_pages,
+                    "capacity_ci95": [dec.capacity_ci95[0], dec.capacity_ci95[1]],
+                    "rel_ci95": dec.rel_ci95,
+                    "capacity_method": dec.capacity_method,
+                    "learning_state": dec.learning_state,
+                    "nominal_capacity_pages": dec.nominal_capacity_pages,
+                    "coverage_index": cov_idx,
+                    "eta_pages": eta_p,
+                    "n_plateaus": dec.n_plateaus,
+                })
+                with _YIELD_STATUS_CACHE_LOCK:
+                    if len(_YIELD_STATUS_SLOT_CACHE) >= _YIELD_STATUS_CACHE_MAX:
+                        _YIELD_STATUS_SLOT_CACHE.clear()
+                    _YIELD_STATUS_SLOT_CACHE[cache_key] = {
+                        **item,
+                        "capacity_ci95": list(item["capacity_ci95"]),
+                    }
+                out.append(item)
+            return out
+    except UndefinedTable:
+        ensure_yield_tables()
+        return []
 
 
 def write_yield_status_report(path: str = "yield_status_report.txt") -> None:
