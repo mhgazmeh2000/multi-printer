@@ -171,8 +171,8 @@ class ReportingApiSecurityTests(unittest.TestCase):
         self.assertIn('const canManageDataSources = false;', html)
         if shutil.which("node"):
             for script in re.findall(r"<script[^>]*>(.*?)</script>", html, re.S):
-                subprocess.run(["node", "--check"], input=script, text=True,
-                               capture_output=True, check=True)
+                subprocess.run(["node", "--check"], input=script, text=True, encoding="utf-8",
+                               capture_output=True, check=True, timeout=30)
         for method, path in [
             ("post", "/api/datasources"), ("put", "/api/datasources/test"),
             ("post", "/api/datasources/test/query"), ("post", "/api/datasources/test/test"),
@@ -257,8 +257,8 @@ function removePrinter(ip,name) {removed={ip,name};}
 delegated({target:{closest:()=>({dataset:{printerAction:'remove',ip:p.ip}})},preventDefault(){}});
 console.log(JSON.stringify({offline,card,payload,removed,argument:jsArg(payload)}));
 '''
-        proc = subprocess.run(["node", "-"], input=script, text=True, cwd=ROOT,
-                              capture_output=True, check=True)
+        proc = subprocess.run(["node", "-"], input=script, text=True, encoding="utf-8", cwd=ROOT,
+                              capture_output=True, check=True, timeout=30)
         result = json.loads(proc.stdout)
         for key in ("offline", "card"):
             tags = _Tags(result[key]).tags
@@ -271,7 +271,7 @@ console.log(JSON.stringify({offline,card,payload,removed,argument:jsArg(payload)
         # Simulate the browser's attribute entity decoding then handler compilation.
         attrs = _Tags('<button onclick="capture(' + result["argument"] + ')"></button>').tags[0][1]
         js = "let got;function capture(x){got=x;}\n" + attrs["onclick"] + "\nconsole.log(JSON.stringify(got));"
-        actual = subprocess.run(["node", "-"], input=js, text=True, capture_output=True, check=True)
+        actual = subprocess.run(["node", "-"], input=js, text=True, encoding="utf-8", capture_output=True, check=True, timeout=30)
         self.assertEqual(json.loads(actual.stdout), result["payload"])
 
 

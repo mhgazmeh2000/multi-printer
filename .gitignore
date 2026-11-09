@@ -105,3 +105,6 @@ caches_readiness.json
 /pytest_*.txt
 
 .cloud-attachments/
+
+# Node-based DOM regression tooling
+node_modules/

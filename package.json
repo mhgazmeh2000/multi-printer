@@ -1,0 +1,18 @@
+{
+  "name": "multi-printer-ui-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DOM regression tests and pinned sources for locally vendored panel libraries",
+  "scripts": {
+    "test": "node --test tests/js/panel_security.test.cjs",
+    "vendor:panels": "node tools/vendor_panel_libraries.cjs"
+  },
+  "engines": {
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
+  },
+  "devDependencies": {
+    "dompurify": "3.4.17",
+    "jsdom": "31.0.0",
+    "marked": "18.1.3"
+  }
+}
