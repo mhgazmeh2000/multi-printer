@@ -304,10 +304,178 @@ function _buildOfficeGroupsFromSubnets(subnetsObj) {
 const _groupOpen = {};
 
 let sortableInstance = null;
+let _isDraggingOverviewCard = false;
+let _lastOverviewDragEndAt = 0;
+let _pendingOverviewPrinters = null;
+let _overviewEntrancePlayed = false;
+let _sortableResponsiveBound = false;
+let _sortableResizeTimer = null;
+const MOBILE_SORTABLE_MEDIA_QUERY = '(max-width: 768px), (hover: none) and (pointer: coarse)';
+
 let currentPrinters = [];
 const STORAGE_KEY = 'printer_order';
 const EXTRA_COUNTERS_ACCORDION_KEY = 'printer_extra_counters_open';
 const PAPER_SIZE_ACCORDION_KEY = 'printer_paper_size_open';
+
+function isMobileOverviewViewport() {
+  if (typeof window === 'undefined') return false;
+  if (typeof window.matchMedia === 'function') {
+    if (window.matchMedia(MOBILE_SORTABLE_MEDIA_QUERY).matches) return true;
+  }
+  return window.innerWidth <= 768;
+}
+
+function shouldEnableOverviewSortable() {
+  return !activeGroupFilter && !isMobileOverviewViewport();
+}
+
+function destroyOverviewSortable() {
+  if (sortableInstance) {
+    try {
+      sortableInstance.destroy();
+    } catch (e) {
+      console.warn('Sortable destroy error:', e);
+    }
+    sortableInstance = null;
+  }
+  _isDraggingOverviewCard = false;
+  if (typeof document !== 'undefined' && document.body) {
+    document.body.classList.remove('is-dragging');
+  }
+}
+
+function initOverviewSortable(grid) {
+  destroyOverviewSortable();
+  if (!grid) return;
+
+  const draggableCards = grid.querySelectorAll('.overview-card:not(.sensor-banner)');
+  if (typeof Sortable === 'undefined' || !shouldEnableOverviewSortable() || draggableCards.length <= 1) {
+    grid.classList.add('sortable-disabled');
+    grid.classList.remove('sortable-enabled');
+    return;
+  }
+
+  grid.classList.remove('sortable-disabled');
+  grid.classList.add('sortable-enabled');
+
+  sortableInstance = new Sortable(grid, {
+    draggable: '.overview-card:not(.sensor-banner)',
+    filter: '.sensor-banner',
+    preventOnFilter: false,
+    direction: 'vertical',
+    animation: 260,
+    easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+    sort: true,
+    swap: false,
+    swapThreshold: 0.68,
+    invertSwap: false,
+    forceFallback: true,
+    fallbackOnBody: true,
+    fallbackClass: 'sortable-fallback',
+    fallbackTolerance: 5,
+    delay: 0,
+    scroll: true,
+    scrollSensitivity: 65,
+    scrollSpeed: 14,
+    bubbleScroll: true,
+    chosenClass: 'sortable-chosen',
+    ghostClass: 'sortable-ghost',
+    dragClass: 'sortable-drag',
+    onMove: function(evt) {
+      if (evt.related && evt.related.classList.contains('sensor-banner')) {
+        return false;
+      }
+      return true;
+    },
+    onStart: function() {
+      _isDraggingOverviewCard = true;
+      grid.classList.remove('cards-entering');
+      document.body.classList.add('is-dragging');
+    },
+    onUnchoose: function() {
+      if (!_isDraggingOverviewCard) {
+        document.body.classList.remove('is-dragging');
+      }
+    },
+    onEnd: function(evt) {
+      _isDraggingOverviewCard = false;
+      _lastOverviewDragEndAt = Date.now();
+      document.body.classList.remove('is-dragging');
+
+      const moved = evt && evt.oldIndex !== undefined && evt.newIndex !== undefined && evt.oldIndex !== evt.newIndex;
+      if (moved) {
+        const items = grid.querySelectorAll('.overview-card');
+        const newOrder = Array.from(items)
+          .map(card => card.getAttribute('data-ip'))
+          .filter(Boolean);
+        savePrinterOrder(newOrder);
+
+        if (evt.item) {
+          evt.item.classList.remove('card-just-dropped');
+          void evt.item.offsetWidth;
+          evt.item.classList.add('card-just-dropped');
+          setTimeout(() => {
+            if (evt.item) evt.item.classList.remove('card-just-dropped');
+          }, 750);
+        }
+
+        toast('چیدمان کارت‌ها ذخیره شد', 's');
+        setTimeout(() => rebuildTabs(currentPrinters), 50);
+      }
+
+      if (_pendingOverviewPrinters) {
+        const pending = _pendingOverviewPrinters;
+        _pendingOverviewPrinters = null;
+        setTimeout(() => renderOverviewCards(pending), 120);
+      }
+    }
+  });
+}
+
+function syncOverviewSortableState() {
+  const grid = document.getElementById('overview-grid');
+  if (!grid) return;
+  const draggableCards = grid.querySelectorAll('.overview-card:not(.sensor-banner)');
+  const shouldEnable = shouldEnableOverviewSortable() && draggableCards.length > 1 && typeof Sortable !== 'undefined';
+
+  if (!shouldEnable) {
+    if (sortableInstance) destroyOverviewSortable();
+    grid.classList.add('sortable-disabled');
+    grid.classList.remove('sortable-enabled');
+  } else if (!sortableInstance) {
+    initOverviewSortable(grid);
+  }
+}
+
+function bindOverviewSortableResponsiveWatcher() {
+  if (_sortableResponsiveBound || typeof window === 'undefined') return;
+  _sortableResponsiveBound = true;
+
+  if (typeof window.matchMedia === 'function') {
+    const mql = window.matchMedia(MOBILE_SORTABLE_MEDIA_QUERY);
+    if (typeof mql.addEventListener === 'function') {
+      mql.addEventListener('change', syncOverviewSortableState);
+    } else if (typeof mql.addListener === 'function') {
+      mql.addListener(syncOverviewSortableState);
+    }
+  }
+
+  window.addEventListener('resize', () => {
+    if (_sortableResizeTimer) clearTimeout(_sortableResizeTimer);
+    _sortableResizeTimer = setTimeout(syncOverviewSortableState, 120);
+  }, { passive: true });
+}
+
+function onOverviewCardClick(evt, ip) {
+  if (_isDraggingOverviewCard || (Date.now() - _lastOverviewDragEndAt < 200)) {
+    if (evt) {
+      evt.preventDefault();
+      evt.stopPropagation();
+    }
+    return;
+  }
+  switchTab(ip);
+}
 
 function getDefaultPrinterOrder(printers) {
   const groups = {};
@@ -384,6 +552,10 @@ function savePrinterOrder(order) {
 function resetPrinterOrder() {
   if (!canAdmin()) { toast('دسترسی ندارید', 'e'); return; }
   localStorage.removeItem(STORAGE_KEY);
+  if (Array.isArray(allData) && allData.length) {
+    renderOverviewCards(allData);
+    rebuildTabs(allData);
+  }
   toast('ترتیب به حالت پیش‌فرض برگشت', 's');
   fetchData();
 }
@@ -423,7 +595,7 @@ function renderPrinterCard(p) {
       </div>`));
 
     return `
-      <div class="overview-card oc-online sensor-banner" data-ip="${p.ip}" onclick="switchTab('${p.ip}')" style="border-top:2px solid var(--orange)">
+      <div class="overview-card oc-online sensor-banner" data-ip="${p.ip}" onclick="onOverviewCardClick(event, '${p.ip}')" style="border-top:2px solid var(--orange)">
         <div class="oc-header">
           <div>
             <div class="oc-ip" style="color:var(--orange)">${p.ip} <span style="${badgeStyle}background:#ff9800;">دماسنج</span></div>
@@ -524,19 +696,28 @@ function renderPrinterCard(p) {
   }
 
   return `
-    <div class="overview-card ${warnCls}" data-ip="${p.ip}" onclick="switchTab('${p.ip}')">
+    <div class="overview-card ${warnCls}" data-ip="${p.ip}" onclick="onOverviewCardClick(event, '${p.ip}')">
       <div class="oc-header">
-        <div>
+        <div class="oc-header-info">
           <div class="oc-ip">${p.ip} ${typeBadge}</div>
           <div class="oc-name">${displayName}</div>
           <div class="oc-model">${p.device?.model || 'TOSHIBA'} · ${officeName}</div>
           ${cartIdHtml}
         </div>
-        ${online === true
-          ? `<div class="oc-pill pill-on"><span class="pill-dot" style="background:var(--green);box-shadow:0 0 5px var(--green)"></span>ONLINE</div>`
-          : online === false
-          ? `<div class="oc-pill pill-off"><span class="pill-dot" style="background:var(--red)"></span>OFFLINE</div>`
-          : `<div class="oc-pill" style="border:1px solid var(--border);color:var(--text3)">—</div>`}
+        <div class="oc-header-actions">
+          ${online === true
+            ? `<div class="oc-pill pill-on"><span class="pill-dot" style="background:var(--green);box-shadow:0 0 5px var(--green)"></span>ONLINE</div>`
+            : online === false
+            ? `<div class="oc-pill pill-off"><span class="pill-dot" style="background:var(--red)"></span>OFFLINE</div>`
+            : `<div class="oc-pill" style="border:1px solid var(--border);color:var(--text3)">—</div>`}
+          <span class="oc-drag-grip" title="کشیدن و رها کردن برای تغییر چیدمان" aria-hidden="true">
+            <svg viewBox="0 0 12 16" width="12" height="14" fill="currentColor" focusable="false">
+              <circle cx="3.5" cy="3" r="1.35"/><circle cx="8.5" cy="3" r="1.35"/>
+              <circle cx="3.5" cy="8" r="1.35"/><circle cx="8.5" cy="8" r="1.35"/>
+              <circle cx="3.5" cy="13" r="1.35"/><circle cx="8.5" cy="13" r="1.35"/>
+            </svg>
+          </span>
+        </div>
       </div>
 
       <div class="oc-stat-row">
@@ -1292,9 +1473,22 @@ function switchTab(id, el) {
 // ══════════════════════════════════════════════════
 function renderOverviewCards(printers) {
   const grid = document.getElementById('overview-grid');
+  if (!grid) return;
+
+  bindOverviewSortableResponsiveWatcher();
+
+  // Do not tear down the DOM while the user is actively dragging a card;
+  // defer the updated snapshot until the drop completes.
+  if (_isDraggingOverviewCard) {
+    _pendingOverviewPrinters = printers;
+    return;
+  }
+
   if (!printers.length) {
     grid.innerHTML = '<div style="padding:60px;text-align:center;color:var(--text3);font-family:var(--mono)">پرینتری تعریف نشده</div>';
-    if (sortableInstance) { try { sortableInstance.destroy(); } catch(e) {} sortableInstance = null; }
+    destroyOverviewSortable();
+    grid.classList.add('sortable-disabled');
+    grid.classList.remove('sortable-enabled', 'cards-entering');
     return;
   }
 
@@ -1312,43 +1506,17 @@ function renderOverviewCards(printers) {
   const orderedPrinters = sortPrintersForDisplay(displayPrinters);
   grid.innerHTML = orderedPrinters.map(p => renderPrinterCard(p)).join('');
 
-  if (sortableInstance) {
-    try {
-      sortableInstance.destroy();
-    } catch(e) {
-      console.warn("Sortable destroy error:", e);
-    }
-    sortableInstance = null;
+  if (!_overviewEntrancePlayed) {
+    _overviewEntrancePlayed = true;
+    grid.classList.add('cards-entering');
+    setTimeout(() => {
+      grid.classList.remove('cards-entering');
+    }, 850);
+  } else {
+    grid.classList.remove('cards-entering');
   }
 
-  // only allow moving when no filter is active
-  if (!activeGroupFilter) {
-    sortableInstance = new Sortable(grid, {
-        animation: 400,
-        easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
-        sort: true,
-        swap: true,
-        swapThreshold: 0.65,
-        fallbackTolerance: 5,
-        delay: 0,
-        chosenClass: 'sortable-chosen',
-        ghostClass: 'sortable-ghost',
-        dragClass: 'sortable-drag',
-        onChoose: function(evt) {
-          document.body.classList.add('is-dragging');
-        },
-        onUnchoose: function(evt) {
-          document.body.classList.remove('is-dragging');
-        },
-        onEnd: function(evt) {
-          document.body.classList.remove('is-dragging');
-          const items = grid.querySelectorAll('.overview-card');
-          const newOrder = Array.from(items).map(card => card.getAttribute('data-ip'));
-          savePrinterOrder(newOrder);
-          setTimeout(() => rebuildTabs(currentPrinters), 50);
-        }
-    });
-  }
+  initOverviewSortable(grid);
 }
 
 // ══════════════════════════════════════════════════

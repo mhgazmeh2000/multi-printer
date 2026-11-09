@@ -84,7 +84,7 @@ def create_app() -> Flask:
         MAIL_OAUTH_REFRESH_TOKEN=settings.MAIL_OAUTH_REFRESH_TOKEN,
         GOOGLE_CLIENT_ID=settings.GOOGLE_CLIENT_ID,
         GOOGLE_CLIENT_SECRET=settings.GOOGLE_CLIENT_SECRET,
-        ASSET_VERSION=os.getenv("ASSET_VERSION", "20261108-yield-v2"),
+        ASSET_VERSION=os.getenv("ASSET_VERSION", "20261109-sortable-v2"),
     )
 
     init_auth(app)
