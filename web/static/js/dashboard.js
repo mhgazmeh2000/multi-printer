@@ -695,6 +695,8 @@ function renderPrinterCard(p) {
     cartIdHtml = `<div class="oc-cart-id" style="margin-top:4px;font-size:10px;color:var(--text3);font-family:var(--mono);direction:ltr;text-align:left;white-space:normal;overflow-wrap:anywhere" title="شناسه‌ی معتبر کارتریج از backend موجود نیست">N/A</div>`;
   }
 
+  const hasCachedSnapshot = (p.counters && p.counters.total != null) || Object.keys(toners).length > 0;
+
   return `
     <div class="overview-card ${warnCls}" data-ip="${p.ip}" onclick="onOverviewCardClick(event, '${p.ip}')">
       <div class="oc-header">
@@ -709,6 +711,8 @@ function renderPrinterCard(p) {
             ? `<div class="oc-pill pill-on"><span class="pill-dot" style="background:var(--green);box-shadow:0 0 5px var(--green)"></span>ONLINE</div>`
             : online === false
             ? `<div class="oc-pill pill-off"><span class="pill-dot" style="background:var(--red)"></span>OFFLINE</div>`
+            : hasCachedSnapshot
+            ? `<div class="oc-pill" style="border:1px solid rgba(0,212,255,.35);color:var(--cyan);background:rgba(0,212,255,.08)" title="نمایش آخرین داده ثبت‌شده — در حال دریافت وضعیت زنده SNMP"><span class="pill-dot" style="background:var(--cyan)"></span>SYNCING</div>`
             : `<div class="oc-pill" style="border:1px solid var(--border);color:var(--text3)">—</div>`}
           <span class="oc-drag-grip" title="کشیدن و رها کردن برای تغییر چیدمان" aria-hidden="true">
             <svg viewBox="0 0 12 16" width="12" height="14" fill="currentColor" focusable="false">
@@ -800,27 +804,93 @@ window.addEventListener('online', () => {
   _immediateRefreshIfStale();
 });
 
-async function fetchData() {
+let _dataRevision = 0;
+let _logsRevision = 0;
+let _logsFetchInFlight = false;
+let _startupWarmupTimer = null;
+let _startupWarmupTicks = 0;
+const STARTUP_WARMUP_MAX_TICKS = 20;
+const STARTUP_WARMUP_INTERVAL_MS = 2500;
+
+async function fetchLogsInBackground() {
+  if (_logsFetchInFlight) return;
+  _logsFetchInFlight = true;
+  try {
+    const res = await fetch(`${API}/api/logs/all?limit=500`, { cache: 'no-store' });
+    if (res.status === 401 || res.status === 403 || !res.ok) return;
+    const lg = await res.json();
+    allEvents = lg.events || [];
+    _logsRevision += 1;
+    renderGlobalLog(allEvents);
+
+    if (activeTab && activeTab !== 'overview' && !activeTab.startsWith('group:')) {
+      const logId = 'plog-' + activeTab.replace(/\./g, '-');
+      if (document.getElementById(logId)) {
+        const printerEvents = allEvents.filter(e => e.printer_ip === activeTab);
+        renderLogTable(printerEvents, logId, logId + '-count');
+      }
+      const activePanel = document.getElementById('panel-' + activeTab.replace(/\./g, '-'));
+      if (activePanel) activePanel.dataset.renderedLogsRev = String(_logsRevision);
+    }
+
+    // Re-render sensor cards once on initial log load so SENSOR_CHANGE trend arrows appear
+    if (_logsRevision === 1 && allData.some(p => p.device_type === 'sensor') && !_isDraggingOverviewCard) {
+      renderOverviewCards(allData);
+    }
+  } catch (err) {
+    console.warn('Background log fetch skipped:', err);
+  } finally {
+    _logsFetchInFlight = false;
+  }
+}
+
+function _scheduleStartupWarmupIfNeeded(meta, st) {
+  const hasPendingInitialPoll = allData.some(p => p.online === null);
+  const awaitingFirstCycle = (meta && meta.poll_count === 0) || (hasPendingInitialPoll && Boolean(st && st.is_polling));
+  if (awaitingFirstCycle && _startupWarmupTicks < STARTUP_WARMUP_MAX_TICKS) {
+    if (!_startupWarmupTimer) {
+      _startupWarmupTimer = setTimeout(() => {
+        _startupWarmupTimer = null;
+        _startupWarmupTicks += 1;
+        fetchData({ silent: true });
+      }, STARTUP_WARMUP_INTERVAL_MS);
+    }
+  } else {
+    if (_startupWarmupTimer) {
+      clearTimeout(_startupWarmupTimer);
+      _startupWarmupTimer = null;
+    }
+    if (!hasPendingInitialPoll) {
+      _startupWarmupTicks = 0;
+    }
+  }
+}
+
+async function fetchData(opts = {}) {
+  const silent = Boolean(opts && opts.silent);
   if (_fetchInFlight) return; // prevent simultaneous fetches
   _fetchInFlight = true;
   // a manual/scheduled fetch cancels the pending timed retry
-  if (_retryTimer) { clearTimeout(_retryTimer); _retryTimer = null; }
-  setDot('fetch');
+  if (!silent && _retryTimer) { clearTimeout(_retryTimer); _retryTimer = null; }
+  if (!silent) setDot('fetch');
   try {
     const responses = await Promise.all([
-      fetch(`${API}/api/printers`,{cache:'no-store'}),
-      fetch(`${API}/api/status`,{cache:'no-store'}),
-      fetch(`${API}/api/logs/all`,{cache:'no-store'}),
+      fetch(`${API}/api/printers`, { cache: 'no-store' }),
+      fetch(`${API}/api/status`, { cache: 'no-store' }),
     ]);
     if (responses.some(response => response.status === 401)) {
       if (countTimer) clearInterval(countTimer);
+      if (_startupWarmupTimer) { clearTimeout(_startupWarmupTimer); _startupWarmupTimer = null; }
       window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;
       return;
     }
-    const [pr, st, lg] = await Promise.all(responses.map(response => response.json()));
-    allData   = pr.printers || [];
-    allEvents = lg.events   || [];
+    if (responses.some(response => !response.ok)) {
+      throw new Error(`HTTP ${responses.map(r => r.status).join('/')}`);
+    }
+    const [pr, st] = await Promise.all(responses.map(response => response.json()));
+    allData = pr.printers || [];
     serverInfo = st;
+    _dataRevision += 1;
     // Fresh CSRF token from /api/status — the page stays open for hours and the meta token
     // expires; this line prevents 400 responses on POSTs (discover, toner_reset, ...).
     if (st && st.csrf_token) {
@@ -830,25 +900,32 @@ async function fetchData() {
     updateMeta(pr.meta, st);
     rebuildTabs(allData);
     renderOverviewCards(allData);
-    renderGlobalLog(allEvents);
     renderAllPrinterPanels(allData);
     renderAccessPanel(st);
     populatePrinterSelect();
     setDot('on');
-    if (!isFirst) toast('آپدیت شد','s');
-    isFirst = false;
-    // success ⇒ reset backoff/banner; the normal cycle continues with resetCountdown
-    _retryDelay = RETRY_DELAY_BASE;
-    _errToastShown = false;
-    _lastFetchOkAt = Date.now();
-    _hideConnBanner();
-    resetCountdown();
-  } catch(e) {
+    if (!silent) {
+      if (!isFirst) toast('آپدیت شد', 's');
+      isFirst = false;
+      // success ⇒ reset backoff/banner; the normal cycle continues with resetCountdown
+      _retryDelay = RETRY_DELAY_BASE;
+      _errToastShown = false;
+      _lastFetchOkAt = Date.now();
+      _hideConnBanner();
+      resetCountdown();
+      fetchLogsInBackground();
+    } else {
+      _lastFetchOkAt = Date.now();
+    }
+    _scheduleStartupWarmupIfNeeded(pr.meta, st);
+  } catch (e) {
     console.error(e);
-    setDot('err');
-    // toast only for the initial failure — not repeated on every retry (anti-spam)
-    if (!_errToastShown) { toast('خطا در اتصال به سرور','e'); _errToastShown = true; }
-    scheduleFetchRetry(); // the Live loop never dies
+    if (!silent) {
+      setDot('err');
+      // toast only for the initial failure — not repeated on every retry (anti-spam)
+      if (!_errToastShown) { toast('خطا در اتصال به سرور', 'e'); _errToastShown = true; }
+      scheduleFetchRetry(); // the Live loop never dies
+    }
   } finally {
     _fetchInFlight = false;
   }
@@ -1460,6 +1537,18 @@ function switchTab(id, el) {
 
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   const panelId = id.replace(/\./g, '-');
+  if (id !== 'overview' && !id.startsWith('group:')) {
+    const targetPrinter = allData.find(x => x.ip === id);
+    const existingPanel = document.getElementById('panel-' + panelId);
+    if (
+      targetPrinter &&
+      (!existingPanel ||
+        existingPanel.dataset.renderedRev !== String(_dataRevision) ||
+        existingPanel.dataset.renderedLogsRev !== String(_logsRevision))
+    ) {
+      renderSinglePrinterPanel(targetPrinter);
+    }
+  }
   const panel = document.getElementById('panel-' + panelId) || document.getElementById('panel-overview');
   if (panel) {
     panel.classList.add('active');
@@ -1522,50 +1611,73 @@ function renderOverviewCards(printers) {
 // ══════════════════════════════════════════════════
 // PRINTER DETAIL & SENSOR DETAIL PANELS
 // ══════════════════════════════════════════════════
+function renderSinglePrinterPanel(p) {
+  if (!p || !p.ip) return null;
+  const id = 'panel-' + p.ip.replace(/\./g, '-');
+  let panel = document.getElementById(id);
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.id = id;
+    panel.className = 'tab-panel';
+    document.querySelector('.main').appendChild(panel);
+  }
+
+  const wasActive = panel.classList.contains('active') || activeTab === p.ip;
+  // sensor chart (with the user's filter and zoom) is preserved between periodic renders
+  const keptSensorSection = p.device_type === 'sensor' ? panel.querySelector('.sensor-ts-section') : null;
+  const keptUsageRoots = Array.from(panel.querySelectorAll('.ug-root[data-ug-mounted]'));
+  if (!keptSensorSection) destroyPrinterDailyChart(p.ip);
+
+  // detect device type
+  if (p.device_type === 'sensor') {
+    panel.innerHTML = buildSensorDetail(p);
+    if (keptSensorSection) {
+      const placeholder = panel.querySelector('.sensor-ts-section');
+      if (placeholder) placeholder.replaceWith(keptSensorSection);
+    }
+  } else {
+    panel.innerHTML = buildPrinterDetail(p);
+  }
+  // Print usage chart: keep the same DOM (filter, chart type, zoom); if there is no slot for it, free it
+  keptUsageRoots.forEach(node => {
+    const slot = Array.from(panel.querySelectorAll('.ug-root:not([data-ug-mounted])'))
+      .find(el => el.dataset.ugKey === node.dataset.ugKey);
+    if (slot) slot.replaceWith(node);
+    else if (window.PrintGuardUsageChart) window.PrintGuardUsageChart.dispose(node.dataset.ugKey);
+  });
+  if (window.PrintGuardUsageChart) window.PrintGuardUsageChart.mountAll(panel);
+
+  const logId = 'plog-' + p.ip.replace(/\./g, '-');
+  const printerEvents = allEvents.filter(e => e.printer_ip === p.ip);
+  renderLogTable(printerEvents, logId, logId + '-count');
+
+  panel.dataset.renderedRev = String(_dataRevision);
+  panel.dataset.renderedLogsRev = String(_logsRevision);
+
+  if (wasActive) {
+    schedulePrinterDailyChartLoad(p.ip, 80, !keptSensorSection);
+  }
+  return panel;
+}
+
 function renderAllPrinterPanels(printers) {
-  sortPrintersForDisplay(printers).forEach(p => {
-    const id = 'panel-' + p.ip.replace(/\./g,'-');
-    let panel = document.getElementById(id);
-    if (!panel) {
-      panel = document.createElement('div');
-      panel.id = id;
-      panel.className = 'tab-panel';
-      document.querySelector('.main').appendChild(panel);
-    }
-
-    const wasActive = panel.classList.contains('active') || activeTab === p.ip;
-    // sensor chart (with the user's filter and zoom) is preserved between periodic renders
-    const keptSensorSection = p.device_type === 'sensor' ? panel.querySelector('.sensor-ts-section') : null;
-    const keptUsageRoots = Array.from(panel.querySelectorAll('.ug-root[data-ug-mounted]'));
-    if (!keptSensorSection) destroyPrinterDailyChart(p.ip);
-    
-    // detect device type
-    if (p.device_type === 'sensor') {
-      panel.innerHTML = buildSensorDetail(p);
-      if (keptSensorSection) {
-        const placeholder = panel.querySelector('.sensor-ts-section');
-        if (placeholder) placeholder.replaceWith(keptSensorSection);
-      }
-    } else {
-      panel.innerHTML = buildPrinterDetail(p);
-    }
-    // Print usage chart: keep the same DOM (filter, chart type, zoom); if there is no slot for it, free it
-    keptUsageRoots.forEach(node => {
-      const slot = Array.from(panel.querySelectorAll('.ug-root:not([data-ug-mounted])'))
-        .find(el => el.dataset.ugKey === node.dataset.ugKey);
-      if (slot) slot.replaceWith(node);
-      else if (window.PrintGuardUsageChart) window.PrintGuardUsageChart.dispose(node.dataset.ugKey);
-    });
-    if (window.PrintGuardUsageChart) window.PrintGuardUsageChart.mountAll(panel);
-    
-    const logId = 'plog-' + p.ip.replace(/\./g,'-');
-    const printerEvents = allEvents.filter(e => e.printer_ip === p.ip);
-    renderLogTable(printerEvents, logId, logId+'-count');
-
-    if (wasActive) {
-      schedulePrinterDailyChartLoad(p.ip, 80, !keptSensorSection);
+  const validPanelIds = new Set(
+    (printers || []).filter(p => p && p.ip).map(p => 'panel-' + p.ip.replace(/\./g, '-'))
+  );
+  document.querySelectorAll('.tab-panel[id^="panel-"]').forEach(el => {
+    if (el.id !== 'panel-overview' && !validPanelIds.has(el.id)) {
+      el.remove();
     }
   });
+
+  // Lazy rendering: only rebuild the currently active printer panel on periodic refreshes.
+  // Inactive printer panels are rendered on-demand inside switchTab(id).
+  if (activeTab && activeTab !== 'overview' && !activeTab.startsWith('group:')) {
+    const activePrinter = (printers || []).find(p => p && p.ip === activeTab);
+    if (activePrinter) {
+      renderSinglePrinterPanel(activePrinter);
+    }
+  }
 }
 // ── Paper size block (Toshiba) ───────────────────────────────────────────────
 // The device reports size *classes*, not exact sizes. SNMP branches:
@@ -1660,7 +1772,16 @@ function buildPrinterDetail(p) {
       <button class="btn btn-cyan" style="margin-top:16px" onclick="removePrinter('${p.ip}','${p.name}')">× حذف پرینتر</button>
     </div>`;
 
-  if (p.online === null) return `<div style="padding:60px;text-align:center;color:var(--text3);font-family:var(--mono)">در حال بررسی...</div>`;
+  const hasCachedSnapshot = (p.counters && p.counters.total != null) || Object.keys(p.toners || {}).length > 0;
+  if (p.online === null && !hasCachedSnapshot) {
+    return `<div style="padding:60px;text-align:center;color:var(--text3);font-family:var(--mono)">در حال بررسی...</div>`;
+  }
+  const syncingBannerHtml = p.online === null
+    ? `<div style="margin-bottom:12px;padding:8px 12px;border-radius:8px;border:1px solid rgba(0,212,255,.35);background:rgba(0,212,255,.07);color:var(--cyan);font-size:11px;display:flex;align-items:center;gap:8px">
+         <span>⏳</span>
+         <span>در حال دریافت وضعیت زنده SNMP از پرینتر — داده‌های زیر آخرین مقادیر ثبت‌شده در دیتابیس هستند.</span>
+       </div>`
+    : '';
 
   const c = p.counters || {}; const pz = p.paper_sizes || {};
   const toners = p.toners || {};
@@ -1956,15 +2077,16 @@ function buildPrinterDetail(p) {
   ` : `<div class="section" style="margin-top:10px"><div class="section-title">📊 سایر شمارنده‌ها</div><div class="log-empty">اطلاعاتی موجود نیست</div></div>`;
 
   return `
+    ${syncingBannerHtml}
     <div class="section" style="margin-bottom:14px">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
         <div>
           <div style="font-family:var(--mono);font-size:12px;color:var(--cyan)">${p.ip}</div>
           ${nameLine}
-          <div style="font-family:var(--mono);font-size:10px;color:var(--text3);margin-top:2px">${dev.model} · S/N: ${dev.serial} · FW: ${dev.firmware} · Uptime: ${dev.uptime_str}</div>
+          <div style="font-family:var(--mono);font-size:10px;color:var(--text3);margin-top:2px">${dev.model || '—'} · S/N: ${dev.serial || '—'} · FW: ${dev.firmware || '—'} · Uptime: ${dev.uptime_str || '—'}</div>
         </div>
         <div style="display:flex;gap:8px;align-items:center">
-          <div style="text-align:center"><div style="font-family:var(--mono);font-size:9px;color:var(--text3)">Response</div><div style="font-family:var(--mono);font-size:13px;color:var(--cyan)">${p.poll_ms}ms</div></div>
+          <div style="text-align:center"><div style="font-family:var(--mono);font-size:9px;color:var(--text3)">Response</div><div style="font-family:var(--mono);font-size:13px;color:var(--cyan)">${p.poll_ms != null ? p.poll_ms + 'ms' : '—'}</div></div>
           ${printerDeleteButtonHtml}
         </div>
       </div>
@@ -3341,11 +3463,23 @@ async function triggerPoll() {
 function resetCountdown() {
   countdown = 40;
   if (countTimer) clearInterval(countTimer);
-  countTimer = setInterval(()=>{
-    countdown = Math.max(0, countdown-1);
-    document.getElementById('cfill').style.width = (countdown/40*100)+'%';
-    if (countdown<=0) { clearInterval(countTimer); fetchData(); }
-  },1000);
+  const cfill = document.getElementById('cfill');
+  if (cfill) {
+    cfill.style.transition = 'none';
+    cfill.style.width = '100%';
+    void cfill.offsetWidth;
+    cfill.style.transition = '';
+  }
+  countTimer = setInterval(() => {
+    countdown = Math.max(0, countdown - 1);
+    const bar = document.getElementById('cfill');
+    if (bar) bar.style.width = (countdown / 40 * 100) + '%';
+    if (countdown <= 0) {
+      clearInterval(countTimer);
+      countTimer = null;
+      fetchData();
+    }
+  }, 1000);
 }
 
 // ══════════════════════════════════════════════════
@@ -3795,7 +3929,6 @@ async function loadPrinterDailyChart(ip) {
 // INIT
 // ══════════════════════════════════════════════════
 fetchData();
-resetCountdown();
 
 // ══════════════════════════════════════════════════
 // PRINTER EDIT MODAL

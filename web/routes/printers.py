@@ -182,6 +182,81 @@ def _attach_yield_metadata(printer_data: dict, preloaded_states: dict = None) ->
     return printer_data
 
 
+def _build_unpolled_printer_entry(p: dict, prev: dict, state_by_color: dict) -> dict:
+    """Build an `/api/printers` entry for a configured printer awaiting its first SNMP poll.
+
+    Preserves ``online: None`` (never marking the device online/offline prematurely in
+    in-memory ``store.printer_data`` or metrics), while hydrating last-known persisted
+    counters, toners, model, and cartridge IDs so startup cards render immediately.
+    """
+    prev = prev or {}
+    state_by_color = state_by_color or {}
+    entry = {
+        "ip": p["ip"],
+        "name": p["name"],
+        "nickname": p.get("nickname", ""),
+        "device_type": p.get("device_type") or prev.get("device_type") or "unknown",
+        "brand": p.get("brand", "unknown"),
+        "group": p.get("group", ""),
+        "community": p.get("community", "public"),
+        "online": None,
+        "last_poll": prev.get("updated_at") if prev else None,
+        "pending_initial_poll": True,
+    }
+    counters = {}
+    if prev.get("print_total") is not None:
+        counters["total"] = prev["print_total"]
+    for src_key in ("full_color", "black_white", "a3_total", "a4_total"):
+        if prev.get(src_key) is not None:
+            counters[src_key] = prev[src_key]
+    if counters:
+        entry["counters"] = counters
+
+    toners = {}
+    for c_lc, c_row in state_by_color.items():
+        if not isinstance(c_row, dict) or c_row.get("current_level") is None:
+            continue
+        toners[c_lc] = {
+            "name": c_row.get("cartridge_name") or c_lc.title(),
+            "level": int(c_row["current_level"]),
+        }
+    if not toners and prev.get("toner_level") is not None:
+        toners["black"] = {
+            "name": "Black Toner",
+            "level": int(prev["toner_level"]),
+            "estimated": bool(prev.get("manual_override") or prev.get("force_estimate")),
+        }
+    if toners:
+        entry["toners"] = toners
+
+    model_name = next(
+        (
+            str(c_row.get("printer_model")).strip()
+            for c_row in state_by_color.values()
+            if isinstance(c_row, dict) and c_row.get("printer_model")
+        ),
+        None,
+    )
+    if model_name:
+        entry["device"] = {"model": model_name}
+
+    cart_ids = prev.get("cartridge_ids")
+    if isinstance(cart_ids, dict) and cart_ids:
+        entry["cartridge_ids"] = dict(cart_ids)
+    cart_state = prev.get("cartridge_state")
+    if isinstance(cart_state, dict) and cart_state:
+        entry["cartridge_state"] = dict(cart_state)
+        sig_q = {
+            c: st.get("signal_quality")
+            for c, st in cart_state.items()
+            if isinstance(st, dict) and st.get("signal_quality")
+        }
+        if sig_q:
+            entry["cartridge_signal_quality"] = sig_q
+
+    return entry
+
+
 @bp.route('/api/printers')
 def api_printers():
     """Return the printers the current user may see, with their latest data."""
@@ -204,17 +279,10 @@ def api_printers():
         for key in ("device_type", "brand", "group"):
             if configured.get(key) and not data.get(key):
                 data[key] = configured[key]
-    seen = {d["ip"] for d in snap}
-    for p in cfg:
-        if p["ip"] not in seen:
-            snap.append({
-                "ip": p["ip"], "name": p["name"], "nickname": p.get("nickname", ""),
-                "device_type": p.get("device_type", "unknown"),
-                "brand": p.get("brand", "unknown"),
-                "group": p.get("group", ""),
-                "community": p.get("community", "public"),
-                "online": None, "last_poll": None
-            })
+
+    all_ips = [ip for ip in (list(cfg_by_ip.keys()) + [d.get("ip") for d in snap]) if ip]
+    store._prev.warm_many(all_ips)
+
     preloaded_states = {}
     try:
         from core.yield_engine import get_yield_status
@@ -225,6 +293,19 @@ def api_printers():
                 preloaded_states.setdefault(r_ip, {})[r_color] = row
     except Exception:
         preloaded_states = {}
+
+    seen = {d["ip"] for d in snap if d.get("ip")}
+    for p in cfg:
+        p_ip = p.get("ip")
+        if p_ip and p_ip not in seen:
+            snap.append(
+                _build_unpolled_printer_entry(
+                    p,
+                    store._prev.get(p_ip) or {},
+                    preloaded_states.get(p_ip) or {},
+                )
+            )
+
     snap = [_attach_yield_metadata(d, preloaded_states=preloaded_states) for d in snap]
     return jsonify({"printers": snap, "meta": {
         "total": len(cfg),

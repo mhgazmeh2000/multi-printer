@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 from config.settings import PRINTERS_FILE, DEFAULT_PRINTERS
 from core.database import (
     load_printer_counters,
+    load_printer_counters_many,
     save_printer_counters,
     delete_printer_counters,
     update_missing_yield_list,
@@ -81,6 +82,17 @@ class PrevStore:
             # The data is in the database
             self._cache[ip] = db_data
             return db_data.copy()
+
+    def warm_many(self, ips: list[str]) -> None:
+        """Warm the cache for all missing IPs in one database query."""
+        with self._lock:
+            missing = [ip for ip in (ips or []) if ip and ip not in self._cache]
+            if not missing:
+                return
+            fetched = load_printer_counters_many(missing)
+            for ip in missing:
+                row = fetched.get(ip)
+                self._cache[ip] = row.copy() if row else None
 
     def set(self, ip: str, data: dict):
         """Save new values ​​for a printer (in cache and database) with baseline protection."""

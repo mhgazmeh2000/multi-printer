@@ -395,7 +395,12 @@ def poll_all():
                         return
                     processed_ips.add(ip)
                 try:
-                    results[ip] = collect(p)
+                    res = collect(p)
+                    results[ip] = res
+                    # Publish each printer immediately so responsive LAN devices appear in
+                    # the dashboard within ~1s instead of waiting behind offline SNMP timeouts.
+                    with store.data_lock:
+                        store.printer_data[ip] = res
                 except Exception as e:
                     log.error(f"Error polling {ip}: {e}")
 
