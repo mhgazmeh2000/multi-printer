@@ -98,6 +98,7 @@ let isAdmin = true;
 function canAdmin() {{ return isAdmin; }}
 function getOfficeGroup(ip) {{ return ip.startsWith('172.16.25.') ? 'hq' : 'other'; }}
 function escapeHtml(s) {{ return String(s ?? ''); }}
+function jsArg(s) {{ return JSON.stringify(String(s ?? '')); }}
 function fmtN(n) {{ return Number(n || 0).toLocaleString('en-US'); }}
 function signalQualityBadge() {{ return ''; }}
 function sensorValueHtml(o) {{ return `<span>${{o.value ?? '-'}}</span>`; }}

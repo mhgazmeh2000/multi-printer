@@ -11,13 +11,9 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.datasources.base import DataSourceError, DataSourceSecurityError
+from core.dashboard.sql_security import sanitize_select, readonly_reporting, MAX_REPORT_ROWS
 
 IDENTIFIER_RE = re.compile(r"^[a-zA-Z0-9_]+$")
-
-PROHIBITED_SQL_KEYWORDS = re.compile(
-    r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|REPLACE|GRANT|REVOKE|EXEC|EXECUTE|CALL|VACUUM|INTO)\b",
-    re.IGNORECASE,
-)
 
 ALLOWED_TABLES = {
     "daily_stats",
@@ -27,7 +23,6 @@ ALLOWED_TABLES = {
     "logs",
     "printer_counters",
     "toner_snapshots_v2",
-    "users",
     "security_events",
 }
 
@@ -101,7 +96,7 @@ def build_prebuilt_sql(query_id: str, params: Dict[str, Any]) -> Tuple[str, Tupl
         raise DataSourceError(f"کوئری آماده ناشناخته: {query_id}")
 
     if query_id == "printer_pages_summary":
-        days = int(params.get("days", 30))
+        days = max(1, min(int(params.get("days", 30)), MAX_REPORT_ROWS))
         printer_ip = params.get("printer_ip", "").strip()
         if printer_ip:
             sql = """
@@ -126,15 +121,16 @@ def build_prebuilt_sql(query_id: str, params: Dict[str, Any]) -> Tuple[str, Tupl
         min_l = int(params.get("min_level", 0))
         max_l = int(params.get("max_level", 100))
         sql = """
-            SELECT ip, model, serial, print_total, last_seen
+            SELECT ip, print_total, toner_level, updated_at
             FROM printer_counters
+            WHERE toner_level >= ? AND toner_level <= ?
             ORDER BY ip ASC
             LIMIT 100
         """
-        return sql, ()
+        return sql, (min_l, max_l)
 
     elif query_id == "sensor_readings_recent":
-        days = int(params.get("days", 7))
+        days = max(1, min(int(params.get("days", 7)), 5))
         sql = """
             SELECT timestamp, printer_ip, kind, value, unit, status
             FROM sensor_readings
@@ -144,7 +140,7 @@ def build_prebuilt_sql(query_id: str, params: Dict[str, Any]) -> Tuple[str, Tupl
         return sql, (days * 100,)
 
     elif query_id == "cartridge_lifecycles":
-        lim = min(int(params.get("limit", 20)), 100)
+        lim = max(1, min(int(params.get("limit", 20)), 100))
         sql = """
             SELECT printer_ip, cartridge_color, cartridge_serial, pages_printed, estimated_yield_per_page, actual_yield_per_page, installed_at
             FROM cartridge_lifecycle
@@ -154,7 +150,7 @@ def build_prebuilt_sql(query_id: str, params: Dict[str, Any]) -> Tuple[str, Tupl
         return sql, (lim,)
 
     elif query_id == "security_alerts_active":
-        lim = min(int(params.get("limit", 25)), 100)
+        lim = max(1, min(int(params.get("limit", 25)), 100))
         sql = """
             SELECT timestamp, event_type, severity, user_identifier, ip_address, details
             FROM security_events
@@ -238,7 +234,7 @@ def build_visual_sql(spec: Dict[str, Any]) -> Tuple[str, Tuple[Any, ...]]:
         if IDENTIFIER_RE.fullmatch(o_field):
             order_clause = f" ORDER BY {o_field} {o_dir}"
 
-    limit = min(int(spec.get("limit", 100)), 1000)
+    limit = max(1, min(int(spec.get("limit", 100)), MAX_REPORT_ROWS))
 
     # Assemble SQL
     sql = f"SELECT {', '.join(select_parts)} FROM {table}"
@@ -255,40 +251,7 @@ def build_visual_sql(spec: Dict[str, Any]) -> Tuple[str, Tuple[Any, ...]]:
 
 def validate_and_sanitize_sql(raw_sql: str) -> str:
     """Validates raw SQL query for strict Read-Only enforcement and table access."""
-    clean = raw_sql.strip()
-    if not clean:
-        raise DataSourceError("متن کوئری SQL نمی‌تواند خالی باشد.")
-
-    upper = clean.upper()
-
-    # Must start with SELECT or WITH
-    if not (upper.startswith("SELECT") or upper.startswith("WITH")):
-        raise DataSourceSecurityError("فقط کوئری‌های خواندنی (SELECT / WITH) در سامانه مجاز هستند.")
-
-    # Check for multiple statements (semicolon followed by non-whitespace)
-    if ";" in clean:
-        parts = [p.strip() for p in clean.split(";") if p.strip()]
-        if len(parts) > 1:
-            raise DataSourceSecurityError("اجرای چندین دستور مجزا در یک کوئری مسدود شده است.")
-        clean = parts[0]
-
-    # Prohibited keywords check
-    if PROHIBITED_SQL_KEYWORDS.search(clean):
-        raise DataSourceSecurityError("دستورات مخرب یا تغییر ساختار و داده مسدود هستند.")
-
-    # Table access whitelist check
-    words = re.findall(r"\b[a-zA-Z0-9_]+\b", clean.lower())
-    table_hits = set(words).intersection(ALLOWED_TABLES)
-    if not table_hits:
-        raise DataSourceSecurityError(
-            f"کوئری باید به یکی از جداول مجاز سیستم مراجعه کند ({', '.join(sorted(ALLOWED_TABLES))})."
-        )
-
-    # Inject LIMIT if not specified
-    if "LIMIT" not in upper:
-        clean = f"{clean} LIMIT 500"
-
-    return clean
+    return sanitize_select(raw_sql, allowed_tables=ALLOWED_TABLES)
 
 
 # ─── Query Executor ───────────────────────────────────────────────────────────
@@ -324,11 +287,11 @@ def execute_query(conn: Any, query_spec: Dict[str, Any]) -> Dict[str, Any]:
         raise DataSourceError(f"حالت کوئری نامعتبر: {mode}. گزینه‌های مجاز: prebuilt, visual, sql")
 
     t0 = time.perf_counter()
-    cur = conn.execute(sql, sql_params)
+    with readonly_reporting(conn):
+        cur = conn.execute(sql, sql_params)
+        col_names = [desc[0] for desc in cur.description] if cur.description else []
+        raw_rows = cur.fetchmany(MAX_REPORT_ROWS)
     t1 = time.perf_counter()
-
-    col_names = [desc[0] for desc in cur.description] if cur.description else []
-    raw_rows = cur.fetchall()
 
     columns = [{"field": c, "title": c, "type": "text"} for c in col_names]
     rows = []

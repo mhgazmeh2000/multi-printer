@@ -50,3 +50,6 @@ alembic>=1.13,<2
 # Returns `ZoneInfoNotFoundError`. Clause 2 of the document docs/timezone-contract.md requires the same
 # (fixed offset +03:30 is not replaced, because it moves the data of the DST period).
 tzdata>=2024.1
+
+# SQL reporting: parse statements before executing user-supplied queries.
+sqlglot>=26,<31

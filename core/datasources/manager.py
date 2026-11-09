@@ -101,7 +101,7 @@ def create_datasource(
 
     ds_uid = uid or f"ds_{uuid.uuid4().hex[:10]}"
     now = _now_utc()
-    cfg_val = _dumps(config or {})
+    cfg_val = _dumps(driver_cls.validate_config(config or {}))
 
     conn.execute(
         """
@@ -201,7 +201,13 @@ def update_datasource(
         params.append(name.strip())
 
     if config is not None:
+        if not isinstance(config, dict):
+            raise DataSourceError("تنظیمات باید یک object باشد.")
         merged_cfg = merge_masked_config(config, existing["config"])
+        driver_cls = datasource_registry.get_driver(existing["type"])
+        if not driver_cls:
+            raise DataSourceError("درایور ناشناخته است.")
+        merged_cfg = driver_cls.validate_config(merged_cfg)
         updates.append("config = ?")
         params.append(_dumps(merged_cfg))
 

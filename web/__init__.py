@@ -84,7 +84,7 @@ def create_app() -> Flask:
         MAIL_OAUTH_REFRESH_TOKEN=settings.MAIL_OAUTH_REFRESH_TOKEN,
         GOOGLE_CLIENT_ID=settings.GOOGLE_CLIENT_ID,
         GOOGLE_CLIENT_SECRET=settings.GOOGLE_CLIENT_SECRET,
-        ASSET_VERSION=os.getenv("ASSET_VERSION", "20261107-fastpull-v3"),
+        ASSET_VERSION=os.getenv("ASSET_VERSION", "20261107-security-v4"),
     )
 
     init_auth(app)
@@ -234,14 +234,10 @@ def create_app() -> Flask:
             "dashboard.api_update_panel",
             "dashboard.api_delete_panel",
             "query_engine.api_prebuilt_catalog",
-            "query_engine.api_query_preview",
-            "query_engine.api_query_validate",
             "datasources.datasources_page",
             "datasources.api_list_drivers",
             "datasources.api_list_datasources",
-            "datasources.api_create_datasource",
             "datasources.api_get_datasource",
-            "datasources.api_update_datasource",
             "attendance.index",
             "attendance.api_stats",
         }
