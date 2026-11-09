@@ -518,10 +518,9 @@ html.light .btn-secondary:hover{background:rgba(100,100,120,.15);border-color:rg
   border-radius:10px;
   padding:10px 12px;        /* Reduce padding */
   cursor:pointer;
-  transition:all .25s;
   position:relative;
   overflow:hidden;
-  transition: ease all .5s 200ms;
+  transition:border-color .2s ease, box-shadow .2s ease, transform .2s cubic-bezier(0.22, 1, 0.36, 1), opacity .2s ease;
 }
 .overview-card:hover{border-color:var(--bdr2);box-shadow:0 6px 30px rgba(0,0,0,.4);transform:translateY(-2px)}
 .overview-card.oc-online{border-top:2px solid var(--cyan)}
@@ -533,7 +532,18 @@ html.light .btn-secondary:hover{background:rgba(100,100,120,.15);border-color:rg
   display:flex;
   justify-content:space-between;
   align-items:flex-start;
+  gap:8px;
   margin-bottom:6px;        /* Reduce margin */
+}
+.oc-header-info{
+  min-width:0;
+  flex:1;
+}
+.oc-header-actions{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  flex-shrink:0;
 }
 .oc-ip{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--cyan)}
 .oc-name{
@@ -1007,25 +1017,147 @@ html.light .stat-bar-wrapper { background: #e2e8f0; }
 .divider{height:1px;background:var(--border);margin:12px 0}
 .num{font-feature-settings:"tnum"}
 hr.light{border:none;border-top:1px solid var(--border);margin:14px 0}
-.overview-card.sortable-chosen {
-  transform: scale(1.02);
-  box-shadow: 0 16px 40px rgba(0,0,0,0.25);
-  border-color: rgba(0,212,255,0.35);
+/* ─── Overview Card Drag & Drop (SortableJS) ─── */
+.oc-drag-grip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  color: var(--text3);
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid transparent;
+  opacity: 0.36;
+  cursor: grab;
+  transition: opacity 0.18s ease, color 0.18s ease, background 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
 }
+.overview-grid.sortable-enabled .overview-card:not(.sensor-banner) {
+  cursor: grab;
+}
+.overview-grid.sortable-enabled .overview-card:not(.sensor-banner):hover .oc-drag-grip {
+  opacity: 0.86;
+  color: var(--text);
+  background: rgba(0, 212, 255, 0.07);
+  border-color: rgba(0, 212, 255, 0.22);
+}
+.overview-grid.sortable-enabled .oc-drag-grip:hover {
+  opacity: 1 !important;
+  color: var(--cyan) !important;
+  background: rgba(0, 212, 255, 0.14) !important;
+  border-color: rgba(0, 212, 255, 0.42) !important;
+}
+.overview-grid.sortable-disabled .overview-card {
+  cursor: pointer;
+}
+.overview-grid.sortable-disabled .oc-drag-grip {
+  display: none !important;
+}
+
+/* Global drag state: lock cursor & text selection, let SortableJS FLIP drive transform at 60fps */
+body.is-dragging,
+body.is-dragging * {
+  cursor: grabbing !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+body.is-dragging .overview-grid .overview-card {
+  animation: none !important;
+  /* Exclude transform from stylesheet transitions so SortableJS inline FLIP has zero lag */
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+}
+body.is-dragging .overview-grid .overview-card:not(.sortable-ghost):not(.sortable-fallback) {
+  opacity: 0.86;
+}
+body.is-dragging .overview-grid .overview-card:not(.sortable-ghost):not(.sortable-fallback):hover {
+  transform: none;
+}
+
+/* Chosen state (pointer down on card) */
+.overview-card.sortable-chosen:not(.sortable-ghost):not(.sortable-fallback) {
+  border-color: rgba(0, 212, 255, 0.48);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+}
+
+/* Floating card following cursor (appended to body via fallbackOnBody) */
+.overview-card.sortable-fallback,
 .overview-card.sortable-drag {
-  opacity: 0.85;
-  cursor: grabbing;
-  transform: scale(1.02) rotate(0.5deg);
-  box-shadow: 0 18px 36px rgba(0,0,0,0.28);
-  transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.35s ease, opacity 0.25s ease;
+  opacity: 0.97 !important;
+  scale: 1.025;
+  rotate: -0.6deg;
+  background: linear-gradient(165deg, #1c2235 0%, #131724 100%) !important;
+  border: 1.5px solid rgba(0, 212, 255, 0.72) !important;
+  border-top: 2.5px solid var(--cyan) !important;
+  box-shadow:
+    0 24px 52px rgba(0, 0, 0, 0.65),
+    0 0 0 4px rgba(0, 212, 255, 0.10),
+    0 0 28px rgba(0, 212, 255, 0.22) !important;
+  cursor: grabbing !important;
+  animation: none !important;
 }
+.overview-card.sortable-fallback .oc-drag-grip,
+.overview-card.sortable-drag .oc-drag-grip {
+  opacity: 1 !important;
+  color: var(--cyan) !important;
+  background: rgba(0, 212, 255, 0.16) !important;
+  border-color: rgba(0, 212, 255, 0.48) !important;
+}
+
+/* Drop-zone slot placeholder in grid */
 .overview-card.sortable-ghost {
-  opacity: 0.35;
-  background: rgba(0,212,255,0.06);
-  border: 1px dashed rgba(0,212,255,0.45);
-  transform: scale(0.99);
-  box-shadow: 0 10px 28px rgba(0,0,0,0.18);
+  opacity: 1 !important;
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(0, 212, 255, 0.055),
+    rgba(0, 212, 255, 0.055) 10px,
+    rgba(0, 212, 255, 0.015) 10px,
+    rgba(0, 212, 255, 0.015) 20px
+  ) !important;
+  border: 1.5px dashed rgba(0, 212, 255, 0.62) !important;
+  border-top: 1.5px dashed rgba(0, 212, 255, 0.62) !important;
+  box-shadow: inset 0 0 28px rgba(0, 212, 255, 0.09) !important;
+  animation: none !important;
 }
+.overview-card.sortable-ghost > * {
+  opacity: 0.11 !important;
+  filter: blur(0.6px);
+  pointer-events: none;
+}
+.overview-card.sortable-ghost::after {
+  content: 'محل قرارگیری کارت';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 5px 14px;
+  border-radius: 999px;
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  color: var(--cyan);
+  background: rgba(8, 9, 13, 0.88);
+  border: 1px solid rgba(0, 212, 255, 0.42);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  z-index: 3;
+  pointer-events: none;
+}
+
+/* Post-drop confirmation glow */
+@keyframes cardDropSettle {
+  0% {
+    border-color: var(--green);
+    box-shadow: 0 0 0 3px rgba(0, 230, 118, 0.28), 0 12px 30px rgba(0, 212, 255, 0.18);
+  }
+  100% {
+    border-color: var(--border);
+    box-shadow: none;
+  }
+}
+.overview-card.card-just-dropped {
+  animation: cardDropSettle 0.72s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
 .offline-message { color: var(--text3); }
 html.light .offline-message { color: #000000; }
 .offline-banner {
@@ -1037,24 +1169,6 @@ html.light .offline-message { color: #000000; }
 }
 .offline-banner h2 { color: var(--red); font-size: 24px; margin-bottom: 15px; }
 .offline-message { margin-bottom: 15px; font-size: 11px; font-family: var(--mono); }
-
-.overview-card {
-  transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
-  cursor: grab;
-}
-.overview-card:active { cursor: grabbing; }
-.sortable-drag {
-  opacity: 0.6;
-  transform: scale(0.98) rotate(1deg);
-  transition: all 0.2s ease;
-  cursor: grabbing;
-}
-.sortable-ghost {
-  opacity: 0.4;
-  background: var(--bg3);
-  border: 1px dashed var(--cyan);
-  transform: scale(0.99);
-}
 
 #modal-nickname .modal {
   background: var(--bg2);
@@ -2049,6 +2163,13 @@ html.light .topbar-dropdown-item:hover {
   .overview-grid {
     grid-template-columns: 1fr;
   }
+  .overview-grid .overview-card {
+    cursor: pointer !important;
+    touch-action: manipulation;
+  }
+  .overview-grid .oc-drag-grip {
+    display: none !important;
+  }
   .topbar {
     padding: 0 10px;
     height: auto;
@@ -2124,8 +2245,18 @@ html.light .ev-modal-overlay {
   to { transform: rotate(360deg); }
 }
 
-/* ─── Bug #15: fade-in animation for cards ─── */
-.overview-card {
+@media (hover: none) and (pointer: coarse) {
+  .overview-grid .overview-card {
+    cursor: pointer !important;
+    touch-action: manipulation;
+  }
+  .overview-grid .oc-drag-grip {
+    display: none !important;
+  }
+}
+
+/* ─── Bug #15: fade-in animation for cards (initial entrance only, never fights SortableJS) ─── */
+.overview-grid.cards-entering .overview-card {
   animation: cardFadeIn 0.4s ease forwards;
   opacity: 0;
 }
@@ -2139,16 +2270,16 @@ html.light .ev-modal-overlay {
     transform: translateY(0);
   }
 }
-/* Stagger delay for each card */
-.overview-card:nth-child(1) { animation-delay: 0.0s; }
-.overview-card:nth-child(2) { animation-delay: 0.05s; }
-.overview-card:nth-child(3) { animation-delay: 0.1s; }
-.overview-card:nth-child(4) { animation-delay: 0.15s; }
-.overview-card:nth-child(5) { animation-delay: 0.2s; }
-.overview-card:nth-child(6) { animation-delay: 0.25s; }
-.overview-card:nth-child(7) { animation-delay: 0.3s; }
-.overview-card:nth-child(8) { animation-delay: 0.35s; }
-.overview-card:nth-child(n+9) { animation-delay: 0.4s; }
+/* Stagger delay for each card during initial entrance */
+.overview-grid.cards-entering .overview-card:nth-child(1) { animation-delay: 0.0s; }
+.overview-grid.cards-entering .overview-card:nth-child(2) { animation-delay: 0.05s; }
+.overview-grid.cards-entering .overview-card:nth-child(3) { animation-delay: 0.1s; }
+.overview-grid.cards-entering .overview-card:nth-child(4) { animation-delay: 0.15s; }
+.overview-grid.cards-entering .overview-card:nth-child(5) { animation-delay: 0.2s; }
+.overview-grid.cards-entering .overview-card:nth-child(6) { animation-delay: 0.25s; }
+.overview-grid.cards-entering .overview-card:nth-child(7) { animation-delay: 0.3s; }
+.overview-grid.cards-entering .overview-card:nth-child(8) { animation-delay: 0.35s; }
+.overview-grid.cards-entering .overview-card:nth-child(n+9) { animation-delay: 0.4s; }
 
 /* ─── Bug #14: Improve color contrast in Theme Light ─── */
 html.light .form-input {
@@ -2510,6 +2641,47 @@ html.light .stats-card:hover {
   box-shadow: 0 10px 26px rgba(0, 134, 167, .16) !important;
 }
 html.light .overview-card { border-top: 3px solid #00d4ff !important; }
+html.light .oc-drag-grip {
+  color: #64748b;
+  background: rgba(0, 134, 167, 0.05);
+}
+html.light .overview-grid.sortable-enabled .overview-card:not(.sensor-banner):hover .oc-drag-grip {
+  color: #00587a;
+  background: rgba(0, 134, 167, 0.11);
+  border-color: rgba(0, 134, 167, 0.28);
+}
+html.light .overview-card.sortable-fallback,
+html.light .overview-card.sortable-drag {
+  background: linear-gradient(180deg, #ffffff 0%, #eaf8fc 100%) !important;
+  border: 1.5px solid #0086a7 !important;
+  border-top: 3px solid #00d4ff !important;
+  box-shadow:
+    0 24px 48px rgba(0, 88, 122, 0.24),
+    0 0 0 4px rgba(0, 212, 255, 0.18),
+    0 8px 20px rgba(15, 23, 42, 0.10) !important;
+}
+html.light .overview-card.sortable-ghost {
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(0, 134, 167, 0.075),
+    rgba(0, 134, 167, 0.075) 10px,
+    rgba(0, 212, 255, 0.025) 10px,
+    rgba(0, 212, 255, 0.025) 20px
+  ) !important;
+  border: 2px dashed rgba(0, 134, 167, 0.58) !important;
+  border-top: 2px dashed rgba(0, 134, 167, 0.58) !important;
+  box-shadow: inset 0 0 24px rgba(0, 134, 167, 0.08) !important;
+}
+html.light .overview-card.sortable-ghost::after {
+  color: #00587a;
+  background: rgba(255, 255, 255, 0.94);
+  border-color: rgba(0, 134, 167, 0.42);
+  box-shadow: 0 6px 18px rgba(0, 88, 122, 0.15);
+}
+html.light .overview-card.card-just-dropped {
+  border-color: #16a34a !important;
+  box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.22), 0 10px 26px rgba(0, 134, 167, 0.18) !important;
+}
 html.light .users-table th,
 html.light .log-table thead th,
 html.light .users-table thead th {
