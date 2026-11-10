@@ -1718,6 +1718,16 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
                     poll_timestamp=to_utc_z(datetime.fromtimestamp(start_time, tz=timezone.utc)),
                     paper_split=(toshiba_data or {}).get("paper_split"))
 
+    # PrevStore is the counter validator's source of truth. A rejected reading
+    # leaves its old total in place (anomaly/overflow); do not pass that reading
+    # to a second learner, or a transient zero will reset its anchor. Mask ALL
+    # bases so a derived black_white/full_color cannot bypass the total guard.
+    # Do not substitute the stored total either: it is not a fresh observation.
+    accepted_counters = store._prev.get(ip) or {}
+    yield_counters = {"total": total, "full_color": color, "black_white": bw}
+    if total_for_event is None or accepted_counters.get("print_total") != total_for_event:
+        yield_counters = {"total": None, "full_color": None, "black_white": None}
+
     # ─── New Yield Engine: per-cartridge/per-color learning based on history and anchor ───
     # This layer is independent of legacy logic and is designed for low power and color printers.
     yield_engine_meta = {}
@@ -1726,7 +1736,7 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
         yield_engine_meta = process_printer_yield_snapshot(
             ip=ip,
             printer_model=model,
-            counters={"total": total, "full_color": color, "black_white": bw},
+            counters=yield_counters,
             toners=toners,
             device_type=device_type,
             timestamp=to_utc_z(datetime.fromtimestamp(start_time, tz=timezone.utc)),
