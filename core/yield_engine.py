@@ -1134,6 +1134,11 @@ def _resolve_interval_prior(
     color = state.get("color") or "black"
     cat = _catalog_lookup(model, cart_name, color)
     cat_cap = _valid_device_capacity((cat or {}).get("yield_per_page"))
+    # A stored *catalog* reference is independent of this slot's consumption
+    # posterior, unlike auto_learn/cycle_learn or a self-published fleet profile.
+    # Preserve it when an incomplete model identity no longer matches the file.
+    if cat_cap is None and state.get("yield_source") == "catalog":
+        cat_cap = _valid_device_capacity(state.get("yield_per_page"))
     dev_cap = _valid_device_capacity(device_capacity_pages)
     if dev_cap is None and state.get("yield_source") == "device_capacity":
         dev_cap = _valid_device_capacity(state.get("yield_per_page"))
@@ -1154,6 +1159,67 @@ def _resolve_interval_prior(
     # Neither the slot's last posterior nor its own published profile is an
     # independent prior. Replaying identical evidence must not tighten its CI.
     return DEFAULT_YIELD_PER_PAGE, "default", None
+
+
+def _load_interval_snapshots(conn, *, ip: Optional[str] = None,
+                            color: Optional[str] = None, limit: int = 400) -> list:
+    """Fetch endpoints of recent telemetry runs, not the last N polling rows.
+
+    Window functions run in the DB (SQLite and PostgreSQL); at most 2*limit rows
+    per slot cross the connection. Retain source/validity/identity changes and
+    counter rollbacks as boundaries. Repeated constant-percent polls therefore
+    cannot evict all the informative consumption transitions from the window.
+    This does not expand or repair the underlying stored history.
+    """
+    clauses, params = [], []
+    if ip:
+        clauses.append("printer_ip = ?")
+        params.append(ip)
+    if color:
+        clauses.append("LOWER(color) = ?")
+        params.append(color.lower())
+    where = "WHERE " + " AND ".join(clauses) if clauses else ""
+    # Normalize only for null-safe SQL comparison, not for telemetry admission.
+    fields = ("toner_level", "raw_level", "source", "valid", "reject_reason",
+              "cartridge_key", "full_color")
+    # Full-color counts may increase within a plateau. Only their presence is a
+    # provenance boundary (dedicated color counter vs total-for-color fallback).
+    exprs = [f"COALESCE(CAST({f} AS TEXT), '')" for f in fields[:-1]]
+    exprs.append("CASE WHEN full_color IS NULL THEN 0 ELSE 1 END")
+    changes = " OR ".join(f"{e} <> LAG({e}) OVER w" for e in exprs)
+    params.append(max(1, int(limit)))
+    return conn.execute(f"""
+        WITH marked AS (
+            SELECT id, printer_ip, color, usage_counter, toner_level, raw_level,
+                   source, valid, reject_reason, timestamp, cartridge_key,
+                   full_color, print_total,
+                   CASE WHEN LAG(id) OVER w IS NULL
+                OR {changes}
+                OR usage_counter < LAG(usage_counter) OVER w
+                THEN 1 ELSE 0 END AS changed
+            FROM toner_snapshots_v2 {where}
+            WINDOW w AS (PARTITION BY printer_ip, LOWER(color) ORDER BY id)
+        ), runs AS (
+            SELECT *, SUM(changed) OVER (
+                PARTITION BY printer_ip, LOWER(color) ORDER BY id
+                ROWS UNBOUNDED PRECEDING) AS run_id
+            FROM marked
+        ), endpoints AS (
+            SELECT printer_ip, LOWER(color) AS slot_color, run_id,
+                   MIN(id) AS first_id, MAX(id) AS last_id
+            FROM runs GROUP BY printer_ip, LOWER(color), run_id
+        ), recent AS (
+            SELECT *, ROW_NUMBER() OVER (
+                PARTITION BY printer_ip, slot_color ORDER BY last_id DESC) AS rn
+            FROM endpoints
+        )
+        SELECT s.printer_ip, s.color, s.usage_counter, s.toner_level, s.raw_level,
+               s.source, s.valid, s.reject_reason, s.timestamp, s.cartridge_key,
+               s.full_color, s.print_total
+        FROM toner_snapshots_v2 s JOIN recent r
+          ON s.id = r.first_id OR s.id = r.last_id
+        WHERE r.rn <= ? ORDER BY s.id
+    """, params).fetchall()
 
 
 def estimate_cartridge_interval(
@@ -1179,17 +1245,8 @@ def estimate_cartridge_interval(
 
     if snap_rows is None:
         try:
-            fetched = conn.execute(
-                """
-                SELECT usage_counter, toner_level, raw_level, source, valid,
-                       reject_reason, timestamp, cartridge_key, full_color, print_total
-                FROM toner_snapshots_v2
-                WHERE printer_ip = ? AND color = ?
-                ORDER BY id DESC LIMIT ?
-                """,
-                (ip, color_norm, int(limit)),
-            ).fetchall()
-            snap_rows = list(reversed(fetched))
+            fetched = _load_interval_snapshots(conn, ip=ip, color=color_norm, limit=limit)
+            snap_rows = [r[2:] for r in fetched]
         except Exception as exc:
             log.debug("estimate_cartridge_interval snapshot query failed for %s/%s: %s", ip, color_norm, exc)
             snap_rows = []
@@ -1279,6 +1336,32 @@ def _apply_v2_state_decision(
     return dec
 
 
+def _interval_operational_fields(state: dict, dec: PosteriorYieldDecision,
+                                 *, v2_active: Optional[bool] = None) -> dict:
+    """Expose which estimate drives ETA; never label a new CI with old confidence."""
+    enabled = _is_v2_estimator_enabled() if v2_active is None else v2_active
+    forced = bool(state.get("force_estimate") or state.get("yield_source") == "forced_estimate")
+    source_map = {"prior_catalog": "catalog", "prior_device": "device_capacity",
+                  "prior_fleet": "shared_profile", "prior_default": "default"}
+    fields = {
+        "stored_yield_per_page": state.get("yield_per_page"),
+        "stored_yield_source": state.get("yield_source"),
+        "stored_confidence": state.get("confidence"),
+        "interval_confidence": dec.confidence,
+        "estimator": "forced_estimate" if forced else ("v2" if enabled else "legacy"),
+    }
+    cap = int(state.get("yield_per_page") or DEFAULT_YIELD_PER_PAGE)
+    if enabled and not forced:
+        cap = dec.capacity_pages
+        fields.update(yield_per_page=cap, confidence=dec.confidence,
+                      yield_source=source_map.get(dec.capacity_method, "auto_learn"))
+    if (not enabled or forced) and dec.nominal_capacity_pages and cap > 0:
+        fields["coverage_index"] = round(max(0.15, min(6.0, dec.nominal_capacity_pages / cap)), 3)
+    level = _valid_level(state.get("current_level"))
+    fields["eta_pages"] = int(round(level / 100.0 * cap)) if level is not None else None
+    return fields
+
+
 def _state_public_dict(
     state: dict,
     profile: Optional[dict] = None,
@@ -1332,6 +1415,7 @@ def _state_public_dict(
             "interval_capacity_pages": interval_decision.capacity_pages,
             "n_plateaus": interval_decision.n_plateaus,
         })
+        result.update(_interval_operational_fields(state, interval_decision))
     return result
 
 
@@ -2510,7 +2594,7 @@ def get_yield_status(ip: str = None) -> list:
                        current_level, yield_per_page, yield_source, confidence,
                        sample_count, total_weight, anchor_level, anchor_counter,
                        last_refill_at, learned_at, cycle_start_counter, cycle_start_level,
-                       zero_reached_counter, pages_after_zero, cycle_status, updated_at
+                       zero_reached_counter, pages_after_zero, cycle_status, updated_at, force_estimate
                 FROM cartridge_state
                 {where}
                 ORDER BY printer_ip, color
@@ -2539,25 +2623,7 @@ def get_yield_status(ip: str = None) -> list:
                     profiles_by_key = {}
 
                 try:
-                    snap_rows = conn.execute(
-                        f"""
-                        SELECT printer_ip, color, usage_counter, toner_level, raw_level, source,
-                               valid, reject_reason, timestamp, cartridge_key, full_color, print_total
-                        FROM (
-                            SELECT id, printer_ip, color, usage_counter, toner_level, raw_level, source,
-                                   valid, reject_reason, timestamp, cartridge_key, full_color, print_total,
-                                   ROW_NUMBER() OVER (
-                                       PARTITION BY printer_ip, LOWER(color)
-                                       ORDER BY id DESC
-                                   ) AS rn
-                            FROM toner_snapshots_v2
-                            {where}
-                        ) ranked_snaps
-                        WHERE rn <= 400
-                        ORDER BY id ASC
-                        """,
-                        params,
-                    ).fetchall()
+                    snap_rows = _load_interval_snapshots(conn, ip=ip)
                     for sr in snap_rows:
                         slot = (str(sr[0] or ""), str(sr[1] or "").lower())
                         buf = snap_by_slot.setdefault(slot, [])
@@ -2574,7 +2640,7 @@ def get_yield_status(ip: str = None) -> list:
                 cur_lv = r[5]
                 ypp_val = r[6]
                 prof = profiles_by_key.get(str(c_key or ""))
-                slot_snaps = snap_by_slot.get((str(p_ip or ""), c_name), [])[-400:]
+                slot_snaps = snap_by_slot.get((str(p_ip or ""), c_name), [])
 
                 prof_sig = tuple(sorted(prof.items())) if prof else None
                 snaps_sig = (
@@ -2615,6 +2681,7 @@ def get_yield_status(ip: str = None) -> list:
                     "pages_after_zero": r[18],
                     "cycle_status": r[19],
                     "updated_at": r[20],
+                    "force_estimate": r[21],
                 }
                 dec = estimate_cartridge_interval(
                     conn,
@@ -2624,16 +2691,6 @@ def get_yield_status(ip: str = None) -> list:
                     profile=prof,
                     snap_rows=slot_snaps,
                 )
-                eff_cap = dec.capacity_pages if v2_active else int(ypp_val or dec.capacity_pages or DEFAULT_YIELD_PER_PAGE)
-                eta_p = (
-                    int(round((max(0.0, min(100.0, float(cur_lv))) / 100.0) * eff_cap))
-                    if cur_lv is not None
-                    else None
-                )
-                cov_idx = dec.coverage_index
-                if not v2_active and dec.nominal_capacity_pages and eff_cap > 0:
-                    cov_idx = round(max(0.15, min(6.0, float(dec.nominal_capacity_pages) / float(eff_cap))), 3)
-
                 cyc_st = str(r[19] or "active")
                 pages_after_z = int(r[18] or 0)
                 sensor_state = cyc_st if cyc_st in ("overrun_alert", "chip_quarantined", "frozen_chip") else "healthy"
@@ -2663,10 +2720,10 @@ def get_yield_status(ip: str = None) -> list:
                     "capacity_method": dec.capacity_method,
                     "learning_state": dec.learning_state,
                     "nominal_capacity_pages": dec.nominal_capacity_pages,
-                    "coverage_index": cov_idx,
-                    "eta_pages": eta_p,
+                    "coverage_index": dec.coverage_index,
                     "n_plateaus": dec.n_plateaus,
                 })
+                item.update(_interval_operational_fields(item, dec, v2_active=v2_active))
                 with _YIELD_STATUS_CACHE_LOCK:
                     if len(_YIELD_STATUS_SLOT_CACHE) >= _YIELD_STATUS_CACHE_MAX:
                         _YIELD_STATUS_SLOT_CACHE.clear()

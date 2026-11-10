@@ -226,7 +226,7 @@ class StartupAndFastPullTests(unittest.TestCase):
         self.assertEqual(store.poll_stats["count"], 1)
 
     def test_get_yield_status_windowed_query_and_exact_cache_invalidation(self):
-        """get_yield_status bounds snapshots to 400 per slot, caches unchanged slots, and invalidates immediately on mutation."""
+        """get_yield_status bounds telemetry runs, caches unchanged slots, and invalidates immediately on mutation."""
         ip = "10.40.0.5"
         yield_engine.process_printer_yield_snapshot(
             ip=ip,
@@ -235,7 +235,7 @@ class StartupAndFastPullTests(unittest.TestCase):
             toners={"black": {"name": "CF259A", "level": 90, "raw_level": 90}},
             device_type="mono",
         )
-        # Insert 450 historical snapshots to exercise the ROW_NUMBER() <= 400 window query
+        # Insert 450 historical polls: 75 level runs should retain 150 endpoints.
         with database.db_connection(commit=True) as conn:
             for idx in range(450):
                 conn.execute(
@@ -265,11 +265,13 @@ class StartupAndFastPullTests(unittest.TestCase):
             first = yield_engine.get_yield_status(ip=ip)
             self.assertEqual(len(first), 1)
             self.assertEqual(spy_est.call_count, 1)
-            # Verify windowed query passed at most 400 snapshot rows
+            # Bound by 400 telemetry runs (<=800 endpoints), not 400 raw polls.
             passed_snaps = spy_est.call_args.kwargs["snap_rows"]
-            self.assertEqual(len(passed_snaps), 400)
-            # Ascending order preserved (oldest to newest within the 400-row tail)
-            self.assertLess(passed_snaps[0][0], passed_snaps[-1][0])
+            self.assertEqual(len(passed_snaps), 150)
+            self.assertLessEqual(len(passed_snaps), 800)
+            # Preserve the oldest informative plateau as well as the latest poll.
+            self.assertEqual(passed_snaps[0][0], 1000)
+            self.assertEqual(passed_snaps[-1][0], 3245)
 
             # Second call with identical DB state hits exact slot cache (0 estimator calls)
             second = yield_engine.get_yield_status(ip=ip)
