@@ -108,3 +108,7 @@ caches_readiness.json
 
 # Node-based DOM regression tooling
 node_modules/
+
+# Private fleet exports and local yield replay results (never commit telemetry).
+/yield-v2-diagnostic*.json
+/yield-v2-replay*.json

@@ -445,7 +445,10 @@ def segment_readings(
     current = ConsumptionSegment(break_reason="initial")
 
     n = len(obs_list)
+    counter_high_water = None
     for i, ob in enumerate(obs_list):
+        previous_high_water = counter_high_water
+        counter_high_water = max(counter_high_water or 0, ob.usage_counter)
         if not current.observations:
             current.observations.append(ob)
             if ob.level_nominal <= 0.0:
@@ -455,6 +458,7 @@ def segment_readings(
         prev = current.observations[-1]
         # 1a. Explicit hardware chip/serial swap
         if prev.chip_id and ob.chip_id and prev.chip_id != ob.chip_id:
+            counter_high_water = ob.usage_counter
             current.closed_by_refill = True
             current.refill_counter = ob.usage_counter
             segments.append(current)
@@ -467,6 +471,20 @@ def segment_readings(
         if ob.usage_counter < prev.usage_counter:
             segments.append(current)
             current = ConsumptionSegment(observations=[ob], break_reason="counter_reset")
+            if ob.level_nominal <= 0.0:
+                current.zero_reached_counter = ob.usage_counter
+            continue
+
+        # A counter excursion can return to its previous lifetime value after a
+        # reset/fallback poll. Do not interpret that recovery jump as printed pages.
+        # Keep genuine zero-based/new/reset counters: only split when a large jump
+        # reaches a high-water value already observed in this input series.
+        if (previous_high_water is not None
+                and prev.usage_counter < previous_high_water
+                and ob.usage_counter >= previous_high_water
+                and ob.usage_counter - prev.usage_counter > max(100, previous_high_water * 0.5)):
+            segments.append(current)
+            current = ConsumptionSegment(observations=[ob], break_reason="counter_recovery")
             if ob.level_nominal <= 0.0:
                 current.zero_reached_counter = ob.usage_counter
             continue
