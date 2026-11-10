@@ -745,13 +745,15 @@ _LEGACY_FALLBACK_WARNED: set = set()
 
 def _is_placeholder_model(model) -> bool:
     """True when a printer model is missing or a placeholder ('', None, 'Unknown')."""
-    return _norm_text(model) == "unknown"
+    norm = _norm_text(model)
+    # HP JetDirect network names are not model identities (production NPI9E8319 case).
+    return norm == "unknown" or bool(re.fullmatch(r"npi[0-9a-f]{6}", norm))
 
 
 def _is_placeholder_name(name, color) -> bool:
     """True when a cartridge name is missing, 'Unknown', or only the colour fallback."""
     norm = _norm_text(name)
-    return norm == "unknown" or norm == _norm_text(color)
+    return norm in ("unknown", "toner", "cartridge", _norm_text(color))
 
 
 def _key_has_placeholder(cartridge_key: str) -> bool:
@@ -760,7 +762,7 @@ def _key_has_placeholder(cartridge_key: str) -> bool:
     model_part = parts[0] if len(parts) > 0 else ""
     name_part = parts[1] if len(parts) > 1 else ""
     color_part = parts[2] if len(parts) > 2 else ""
-    return model_part == "unknown" or name_part in ("unknown", color_part)
+    return _is_placeholder_model(model_part) or _is_placeholder_name(name_part, color_part)
 
 
 def _identity_from_stored(state: dict, printer_model: str, cartridge_name: str, color: str,
@@ -1558,8 +1560,13 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
         # Reference capacity (device-declared first, then catalog) — the "principled" capacity anchor
         rated_capacity = device_capacity or catalog_capacity
 
+        # Replacement retires the previous cycle even if the new sensor is missing
+        # or only supplies a display/status estimate. That estimate must not seed it.
+        if hardware_swap and level_is_synthetic:
+            level_i = None
+
         # B-3: a display value (Canon status code, manual-override estimate) is shown but never learned from.
-        if level_is_synthetic:
+        if level_is_synthetic and not hardware_swap:
             state.update({"current_level": level_i, "updated_at": now})
             _record_snapshot(conn, ip, color, printer_model, cartridge_name, cartridge_key,
                              timestamp, counters, usage_counter, level_i, raw_level, source,
@@ -1630,13 +1637,13 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
                     })
 
         # M5: Physical swap of a cartridge with the SAME model & name (detected via chip_id/serial or supply_pages)
-        if hardware_swap and not swapped and level_i is not None and usage_counter is not None:
+        if hardware_swap and not swapped:
             pre_swap_lvl = _to_int(state.get("last_valid_level"))
-            if state.get("zero_reached_counter") is not None or (
+            if usage_counter is not None and (state.get("zero_reached_counter") is not None or (
                 pre_swap_lvl is not None
                 and (_to_int(state.get("cycle_start_level"), 100) - pre_swap_lvl) >= MIN_PARTIAL_CYCLE_DROP_PCT
                 and _to_int(state.get("cycle_start_counter")) == _to_int(state.get("anchor_counter"))
-            ):
+            )):
                 end_lvl = 0 if state.get("zero_reached_counter") is not None else pre_swap_lvl
                 cyc_upd = _maybe_close_cycle(
                     conn, state, ip=ip, color=color, printer_model=printer_model,
@@ -1673,7 +1680,8 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
                 _EXACT_ANCHOR_CACHE.pop((ip, color), None)
             _record_snapshot(conn, ip, color, printer_model, cartridge_name, cartridge_key,
                              timestamp, counters, usage_counter, level_i, raw_level, source,
-                             valid=True, reject_reason="hardware_cartridge_swap")
+                             valid=level_i is not None and usage_counter is not None,
+                             reject_reason="hardware_cartridge_swap")
             _upsert_state(conn, state)
             _upsert_profile_if_high(conn, state)
             profile = _load_profile(conn, cartridge_key)
@@ -2160,7 +2168,9 @@ def process_printer_yield_snapshot(*, ip: str, printer_model: str, counters: dic
     quarantined_set = {str(c).lower() for c in (quarantined_colors or ()) if c}
     virt_map = {str(k).lower(): v for k, v in (virtual_levels or {}).items()}
     ensure_yield_tables()
-    for color in sorted(toners.keys(), key=lambda c: _COLOR_ORDER.index(c) if c in _COLOR_ORDER else 99):
+    # A replacement ID may arrive while its supplies row is temporarily missing.
+    # Retire that slot's old anchors too, without inventing a displayed supply.
+    for color in sorted(set(toners) | swapped_set, key=lambda c: _COLOR_ORDER.index(c) if c in _COLOR_ORDER else 99):
         toner = toners.get(color) or {}
         if not isinstance(toner, dict):
             continue

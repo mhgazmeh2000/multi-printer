@@ -431,8 +431,9 @@ def evaluate_override_quarantine(
         except (TypeError, ValueError):
             snmp_valid = None
 
-    # 1. Hardware-proven swap (new chip_id / serial or supply_pages reset) with valid numeric sensor
-    if swapped and snmp_valid is not None:
+    # 1. Replacement evidence retires the OLD override even without a sensor.
+    # In that case the new level is unknown, not the old cartridge's virtual level.
+    if swapped:
         return {
             "release": True,
             "virtual_level": snmp_valid,

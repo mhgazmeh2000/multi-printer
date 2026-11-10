@@ -39,6 +39,7 @@ from core.snmp.oid_map import OIDS
 from core import store
 from core.collectors.base import (
     _counters_event,
+    _mirror_legacy_override_keys,
     apply_toner_override,
     evaluate_override_quarantine,
     _bootstrap_yield_from_history,
@@ -115,6 +116,10 @@ def _detect_toner_color(name: str) -> Optional[str]:
     for color, pattern in _TONER_COLOR_PATTERNS.items():
         if pattern.search(name):
             return color
+    # Compact Toshiba part numbers: T-FC415C, T-FC338EK (no separator).
+    compact = _re.search(r"\bt-?fc\d+[a-z]*?([cmyk])\b", name, _re.IGNORECASE)
+    if compact:
+        return {"c": "cyan", "m": "magenta", "y": "yellow", "k": "black"}[compact.group(1).lower()]
     for color, pattern in _TONER_PART_COLOR_PATTERNS:
         if pattern.search(name):
             return color
@@ -165,11 +170,62 @@ def _vendor_hint_from_identity(sys_desc: str = "", sys_object_id: str = "") -> O
     for token, hint in _SYS_VENDOR_HINTS:
         if token in ls:
             return hint
-    oid = sys_object_id or ""
+    oid = str(sys_object_id or "").strip().lstrip(".")
     for prefix, hint in _SYS_OBJECTID_HINTS:
-        if prefix in oid:
+        if oid == prefix or oid.startswith(prefix + "."):
             return hint
     return None
+
+
+def _hardware_swapped_colors(prev, ids, pages, quality, *, total=None, uptime=None):
+    """Conservative per-color evidence, not names, level jumps or static part codes.
+
+    Generation counters must increase; a reboot/reset or missing global counter cannot
+    make a supply-page decrease alone prove replacement. No extra network requests.
+    """
+    def mapping(value):
+        return value if isinstance(value, dict) else {}
+
+    def number(value):
+        if isinstance(value, bool) or not isinstance(value, (int, str)):
+            return None
+        try:
+            result = int(value)
+            return result if result >= 0 else None
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    old_ids = mapping(prev.get("cartridge_ids"))
+    old_pages = mapping(prev.get("cart_supply_pages"))
+    old_state = mapping(prev.get("cartridge_state"))
+    quality = mapping(quality)
+    swapped = set()
+    for color in ("black", "cyan", "magenta", "yellow"):
+        old_id = str(old_ids.get(color) or "").strip()
+        new_id = str(mapping(ids).get(color) or "").strip()
+        sq = quality.get(color)
+        old_sq = mapping(old_state.get(color)).get("signal_quality")
+        if old_id and new_id and old_id != new_id and (not old_sq or old_sq == sq):
+            if sq == "genuine" and not old_id.startswith(("part:", "model:", "toner_gen:")):
+                swapped.add(color)
+            elif sq == "generation":
+                # Brother encodes generation IDs as toner_gen:2.
+                old_gen = number(old_id.rsplit(":", 1)[-1])
+                new_gen = number(new_id.rsplit(":", 1)[-1])
+                if (old_id.rsplit(":", 1)[0] == new_id.rsplit(":", 1)[0]
+                        and old_gen is not None and new_gen is not None and new_gen > old_gen):
+                    swapped.add(color)
+
+    old_total, new_total = number(prev.get("print_total")), number(total)
+    old_up, new_up = number(prev.get("uptime")), number(uptime)
+    counter_continuous = old_total is not None and new_total is not None and new_total >= old_total
+    reboot = old_up is not None and new_up is not None and new_up < old_up
+    if counter_continuous and not reboot:
+        for color in ("black", "cyan", "magenta", "yellow"):
+            old, new = number(old_pages.get(color)), number(mapping(pages).get(color))
+            if old is not None and old >= 100 and new is not None and new < old * 0.5:
+                swapped.add(color)
+    return swapped
 
 
 def _toner_level_missing(toners: Dict) -> bool:
@@ -781,6 +837,8 @@ def detect_printer_type_from_supplies(supplies: List[Dict]) -> str:
     color_keywords = ["cyan", "magenta", "yellow", "سیان", "مژنتا", "color", "colour"]
     for t in toners:
         name_lower = t.get("name", "").lower()
+        if _detect_toner_color(name_lower) in ("cyan", "magenta", "yellow"):
+            return "color"
         for c in color_keywords:
             if c in name_lower:
                 return "color"
@@ -1077,6 +1135,8 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
     previous_type = (prev_snapshot.get("device_type") or "").strip().lower()
     detected_type = detect_printer_type_from_supplies(supplies) if supplies else "unknown"
     device_type = detected_type if detected_type != "unknown" else (configured_type or previous_type or "unknown")
+    if "color" in (detected_type, configured_type, previous_type):
+        device_type = "color"  # A partial supplies table cannot prove a color device became mono.
     if device_type == "color":
         # Attempting to read the color counter
         color = 0
@@ -1198,6 +1258,8 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
 
     # Converting toners to toners format
     toners = {}
+    toner_rows = [s for s in supplies if s.get("type_name") in ("toner", "cartridge")
+                  and "drum" not in str(s.get("name", "")).lower()]
     for s in supplies:
         if s["type_name"] in ("toner", "cartridge", "drum", "opc"):
             lowered_name = str(s.get("name", "")).lower()
@@ -1206,7 +1268,15 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
                 display_level = s["percent"]
             else:
                 # Bug #8: Using accurate color detection with regex
-                color_key = _detect_toner_color(s["name"]) or "black"
+                color_key = _detect_toner_color(s["name"])
+                if color_key is None:
+                    # Retain the historical fallback only for a single mono toner.
+                    # Unknown rows on a color/multi-supply device must not overwrite black.
+                    if device_type == "mono" and len(toner_rows) == 1:
+                        color_key = "black"
+                    else:
+                        log.debug("  [%s] ignoring supply with unknown color: %s", ip, s["name"])
+                        continue
                 display_level = _canon_display_percent(model, s["name"], s["percent"])
 
             # ✅ "Keep better value" protection: if for this key already real number
@@ -1413,88 +1483,6 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
             except Exception:
                 pass
 
-    # Apply toner manual override based on page consumption
-    prev_override = store._prev.get(ip) or {}
-    if prev_override.get('yield_per_page', 2000) == 2000 and not prev_override.get('force_estimate'):
-        boot = _bootstrap_yield_from_history(ip, prev_override)
-        if boot:
-            prev_override = store._prev.get(ip) or prev_override
-
-    pages_since_last_reset = get_pages_since_last_reset(prev_override, total)
-    # ✅ "Return manual value to default" fix: all colors with active override
-    # They get their display value from the per-color slot — not just the last color.
-    # Tracking of expired slots (count down) for on-the-spot clearing.
-    try:
-        from core.collectors.base import _normalize_overrides as _norm_ov, _overrides_valid_after_total as _ov_valid
-        _orig_overrides = dict(_norm_ov(prev_override))
-        _active_overrides = _ov_valid(_orig_overrides, total)
-    except Exception:
-        _orig_overrides = {}
-        _active_overrides = {}
-
-    _quarantined_colors = set()
-    _virtual_levels = {}
-    _overrides_mutated = (_active_overrides != _orig_overrides)
-    for ov_color in list(_active_overrides.keys()):
-        if ov_color not in toners:
-            continue
-        snmp_raw = toners[ov_color].get('raw_level', toners[ov_color].get('level'))
-        ov_entry = _active_overrides.get(ov_color) or {}
-        eval_res = evaluate_override_quarantine(
-            ov_entry,
-            total,
-            snmp_level=snmp_raw,
-            swapped=False,
-            fallback_yield=prev_override.get('yield_per_page', 2000),
-        )
-        if eval_res.get("release"):
-            _active_overrides.pop(ov_color, None)
-            _overrides_mutated = True
-            continue
-        if eval_res.get("updated_entry") != ov_entry:
-            _active_overrides[ov_color] = eval_res["updated_entry"]
-            _overrides_mutated = True
-        final_level = apply_toner_override(ip, total, toners[ov_color].get('level'), color=ov_color)
-        if final_level is None:
-            final_level = eval_res.get("virtual_level")
-        if final_level is not None:
-            toners[ov_color]['level'] = final_level
-            _virtual_levels[ov_color] = final_level
-            if eval_res.get("chip_quarantined"):
-                _quarantined_colors.add(ov_color)
-            if prev_override.get('force_estimate'):
-                toners[ov_color]['source'] = 'forced_estimate'
-            if final_level == 0:
-                toners[ov_color]['status'] = 'empty'
-            elif final_level <= 5:
-                toners[ov_color]['status'] = 'critical'
-            elif final_level <= 15:
-                toners[ov_color]['status'] = 'low'
-            else:
-                toners[ov_color]['status'] = 'ok'
-    if _overrides_mutated:
-        store._prev.set(ip, {"toner_overrides": _active_overrides})
-
-    # Warnings Warnings
-    alerts = []
-    for color_key, toner in toners.items():
-        level = toner.get("level")
-        if level is None:
-            continue
-        try:
-            level = int(level)
-        except (TypeError, ValueError):
-            continue
-        if level > TONER_ALERT_THRESHOLDS.get("warning", 15):
-            continue
-        status = "critical" if level <= TONER_ALERT_THRESHOLDS.get("critical", 5) else "low"
-        toner["status"] = "empty" if level == 0 else status
-        alerts.append({
-            "message": f"{toner.get('name', color_key)}: {toner['status']} ({level}%)",
-            # The warning code must be stable; SNMP table index may change between polls.
-            "code": f"toner:{color_key}",
-        })
-
     # ─── uptime ──────────────────────────────────────────────────
     # Important fix: failed read uptime should not be converted to int(0); Zero value in
     # _uptime_reset was incorrectly detecting "reboot" (276 false resets in real log).
@@ -1624,51 +1612,100 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
         if _tn:
             _current_supply_names[_ck] = str(_tn).strip()
 
-    # Detect hardware-proven cartridge swaps (M5: unique chip_id/serial change or supply_pages reset)
-    # before _counters_event mutates prev["cartridge_id_state"].
-    _swapped_colors = set()
-    try:
-        _prev_cid_raw = (prev or {}).get("cartridge_id_state")
-        _prev_cid = json.loads(_prev_cid_raw) if isinstance(_prev_cid_raw, str) else (_prev_cid_raw or {})
-        _old_ids = (_prev_cid.get("ids") or {}) if isinstance(_prev_cid, dict) else {}
-        _old_sp = (_prev_cid.get("supply_pages") or {}) if isinstance(_prev_cid, dict) else {}
-        for _sc, _new_id in (cartridge_ids_event or {}).items():
-            if not _new_id:
-                continue
-            if (cartridge_signal_quality or {}).get(_sc) == "static":
-                continue
-            _old_id = _old_ids.get(_sc)
-            if _old_id and str(_old_id) != str(_new_id):
-                _swapped_colors.add(_sc)
-        for _sc, _new_sp in (cartridge_pages_event or {}).items():
-            try:
-                _old_v = int(_old_sp.get(_sc))
-                _new_v = int(_new_sp)
-                if _old_v >= 100 and 0 <= _new_v < _old_v * 0.5:
-                    _swapped_colors.add(_sc)
-            except (TypeError, ValueError):
-                pass
-    except Exception:
-        _swapped_colors = set()
+    # Compare the normalized PrevStore snapshot before _counters_event updates it.
+    _swapped_colors = _hardware_swapped_colors(
+        prev, cartridge_ids_event, cartridge_pages_event, cartridge_signal_quality,
+        total=total_for_event, uptime=ut)
 
-    if _swapped_colors and _active_overrides:
-        _swap_cleared = False
-        for _sc in list(_swapped_colors):
-            if _sc in _active_overrides:
-                _active_overrides.pop(_sc, None)
-                _quarantined_colors.discard(_sc)
-                _virtual_levels.pop(_sc, None)
-                _swap_cleared = True
-                if _sc in toners and toners[_sc].get("raw_level") is not None:
-                    _rv_restore = toners[_sc]["raw_level"]
-                    toners[_sc]["level"] = _rv_restore
-                    toners[_sc]["status"] = (
-                        "empty" if _rv_restore == 0 else
-                        "critical" if _rv_restore <= 5 else
-                        "low" if _rv_restore <= 15 else "ok"
-                    )
-        if _swap_cleared:
-            store._prev.set(ip, {"toner_overrides": _active_overrides})
+    # Apply toner manual override based on page consumption
+    prev_override = store._prev.get(ip) or {}
+    if prev_override.get('yield_per_page', 2000) == 2000 and not prev_override.get('force_estimate'):
+        boot = _bootstrap_yield_from_history(ip, prev_override)
+        if boot:
+            prev_override = store._prev.get(ip) or prev_override
+            # Preserve history bootstrap in the snapshot later persisted by counters.
+            prev.update(prev_override)
+
+    pages_since_last_reset = get_pages_since_last_reset(prev_override, total)
+    # ✅ "Return manual value to default" fix: all colors with active override
+    # They get their display value from the per-color slot — not just the last color.
+    # Tracking of expired slots (count down) for on-the-spot clearing.
+    try:
+        from core.collectors.base import _normalize_overrides as _norm_ov, _overrides_valid_after_total as _ov_valid
+        _orig_overrides = dict(_norm_ov(prev_override))
+        _active_overrides = _ov_valid(_orig_overrides, total)
+    except Exception:
+        _orig_overrides = {}
+        _active_overrides = {}
+
+    _quarantined_colors = set()
+    _virtual_levels = {}
+    _overrides_mutated = (_active_overrides != _orig_overrides)
+    for ov_color in list(_active_overrides.keys()):
+        if ov_color not in toners and ov_color not in _swapped_colors:
+            continue
+        toner = toners.get(ov_color) or {}
+        snmp_raw = toner.get('raw_level', toner.get('level'))
+        ov_entry = _active_overrides.get(ov_color) or {}
+        eval_res = evaluate_override_quarantine(
+            ov_entry,
+            total,
+            snmp_level=snmp_raw,
+            swapped=(ov_color in _swapped_colors),
+            fallback_yield=prev_override.get('yield_per_page', 2000),
+        )
+        if eval_res.get("release"):
+            _active_overrides.pop(ov_color, None)
+            _overrides_mutated = True
+            continue
+        if eval_res.get("updated_entry") != ov_entry:
+            _active_overrides[ov_color] = eval_res["updated_entry"]
+            _overrides_mutated = True
+        final_level = apply_toner_override(ip, total, toners[ov_color].get('level'), color=ov_color)
+        if final_level is None:
+            final_level = eval_res.get("virtual_level")
+        if final_level is not None:
+            toners[ov_color]['level'] = final_level
+            _virtual_levels[ov_color] = final_level
+            if eval_res.get("chip_quarantined"):
+                _quarantined_colors.add(ov_color)
+            if prev_override.get('force_estimate'):
+                toners[ov_color]['source'] = 'forced_estimate'
+            if final_level == 0:
+                toners[ov_color]['status'] = 'empty'
+            elif final_level <= 5:
+                toners[ov_color]['status'] = 'critical'
+            elif final_level <= 15:
+                toners[ov_color]['status'] = 'low'
+            else:
+                toners[ov_color]['status'] = 'ok'
+    if _overrides_mutated:
+        override_update = {"toner_overrides": _active_overrides}
+        _mirror_legacy_override_keys(override_update, _active_overrides)
+        # _counters_event receives the earlier snapshot. Keep it consistent, or its
+        # legacy compatibility path would resurrect an override we just released.
+        prev.update(override_update)
+        store._prev.set(ip, override_update)
+
+    # Warnings Warnings
+    alerts = []
+    for color_key, toner in toners.items():
+        level = toner.get("level")
+        if level is None:
+            continue
+        try:
+            level = int(level)
+        except (TypeError, ValueError):
+            continue
+        if level > TONER_ALERT_THRESHOLDS.get("warning", 15):
+            continue
+        status = "critical" if level <= TONER_ALERT_THRESHOLDS.get("critical", 5) else "low"
+        toner["status"] = "empty" if level == 0 else status
+        alerts.append({
+            "message": f"{toner.get('name', color_key)}: {toner['status']} ({level}%)",
+            # The warning code must be stable; SNMP table index may change between polls.
+            "code": f"toner:{color_key}",
+        })
 
     _counters_event(ip, total_for_event, prev, alerts, [a["code"] for a in alerts],
                     full_color=color, black_white=bw_for_event, paper_size=paper_size,
