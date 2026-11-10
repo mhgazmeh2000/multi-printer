@@ -1187,38 +1187,43 @@ def _load_interval_snapshots(conn, *, ip: Optional[str] = None,
     exprs = [f"COALESCE(CAST({f} AS TEXT), '')" for f in fields[:-1]]
     exprs.append("CASE WHEN full_color IS NULL THEN 0 ELSE 1 END")
     changes = " OR ".join(f"{e} <> LAG({e}) OVER w" for e in exprs)
+    if conn.backend == BACKEND_POSTGRESQL:
+        # Compare one typed tuple rather than evaluating six text casts and six
+        # separate lag buffers per historical poll. Null text matches the legacy
+        # COALESCE contract; numeric fields retain their database types.
+        signature = ("ROW(toner_level, raw_level, COALESCE(source, ''), valid, "
+                     "COALESCE(reject_reason, ''), COALESCE(cartridge_key, ''), "
+                     "full_color IS NULL)")
+        changes = f"{signature} IS DISTINCT FROM LAG({signature}) OVER w"
     params.append(max(1, int(limit)))
     return conn.execute(f"""
         WITH marked AS (
-            SELECT id, printer_ip, color, usage_counter, toner_level, raw_level,
-                   source, valid, reject_reason, timestamp, cartridge_key,
-                   full_color, print_total,
+            SELECT id, printer_ip, LOWER(color) AS slot_color,
+                   LAG(id) OVER w AS previous_id, LEAD(id) OVER w AS next_id,
                    CASE WHEN LAG(id) OVER w IS NULL
                 OR {changes}
                 OR usage_counter < LAG(usage_counter) OVER w
                 THEN 1 ELSE 0 END AS changed
             FROM toner_snapshots_v2 {where}
             WINDOW w AS (PARTITION BY printer_ip, LOWER(color) ORDER BY id)
-        ), runs AS (
-            SELECT *, SUM(changed) OVER (
-                PARTITION BY printer_ip, LOWER(color) ORDER BY id
-                ROWS UNBOUNDED PRECEDING) AS run_id
-            FROM marked
-        ), endpoints AS (
-            SELECT printer_ip, LOWER(color) AS slot_color, run_id,
-                   MIN(id) AS first_id, MAX(id) AS last_id
-            FROM runs GROUP BY printer_ip, LOWER(color), run_id
+        ), edges AS (
+            SELECT * FROM marked WHERE changed = 1 OR next_id IS NULL
         ), recent AS (
-            SELECT *, ROW_NUMBER() OVER (
-                PARTITION BY printer_ip, slot_color ORDER BY last_id DESC) AS rn
-            FROM endpoints
+            SELECT id AS first_id,
+                   COALESCE(LEAD(CASE WHEN changed = 1 THEN previous_id ELSE id END)
+                       OVER (PARTITION BY printer_ip, slot_color ORDER BY id), id) AS last_id,
+                   changed,
+                   SUM(changed) OVER (
+                       PARTITION BY printer_ip, slot_color ORDER BY id DESC
+                       ROWS UNBOUNDED PRECEDING) AS rn
+            FROM edges
         )
         SELECT s.printer_ip, s.color, s.usage_counter, s.toner_level, s.raw_level,
                s.source, s.valid, s.reject_reason, s.timestamp, s.cartridge_key,
                s.full_color, s.print_total
         FROM toner_snapshots_v2 s JOIN recent r
           ON s.id = r.first_id OR s.id = r.last_id
-        WHERE r.rn <= ? ORDER BY s.id
+        WHERE r.changed = 1 AND r.rn <= ? ORDER BY s.id
     """, params).fetchall()
 
 
