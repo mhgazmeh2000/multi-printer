@@ -32,6 +32,8 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from core.yield_estimator import (  # noqa: E402
+    reading_to_interval,
+    snapshot_is_usable,
     BRAND_SPECS,
     MAX_PHYSICAL_YIELD,
     MIN_PHYSICAL_YIELD,
@@ -432,23 +434,25 @@ def run_db_replay(db_path: Optional[str] = None) -> Dict[str, object]:
             if u_cnt is None:
                 continue
             rej = str(r.get("reject_reason") or "")
-            if rej in ("synthetic_level", "status_coded_level", "quarantined_chip", "frozen_chip"):
+            if not snapshot_is_usable(r.get("valid", 1), rej):
                 continue
             raw_lv = r.get("raw_level") if r.get("raw_level") is not None else r.get("toner_level", r.get("toner_pct"))
             src_txt = str(r.get("source") or "poll").lower()
             lv_kind = str(r.get("level_kind") or ("http_scrape" if "http" in src_txt or "web" in src_txt else "percent"))
-            readings.append(
-                SupplyReading(
-                    usage_counter=int(u_cnt),
-                    raw_level=float(raw_lv) if raw_lv is not None else None,
-                    level_kind=lv_kind,
-                    provenance="http_scrape" if lv_kind == "http_scrape" else "rfc3805",
-                    observed_at=str(r.get(ts_col) or ""),
-                    vendor=model_txt,
-                    color=color,
-                    chip_id=str(r.get("cartridge_key") or "") or None,
-                )
+            candidate = SupplyReading(
+                usage_counter=u_cnt,
+                raw_level=raw_lv,
+                level_kind=lv_kind,
+                provenance="http_scrape" if lv_kind == "http_scrape" else "rfc3805",
+                observed_at=str(r.get(ts_col) or ""),
+                vendor=model_txt,
+                color=color,
+                chip_id=str(r.get("cartridge_key") or "") or None,
             )
+            # Also protect the legacy comparison and ETA from malformed rows;
+            # the v2 pure pipeline independently applies this same validation.
+            if reading_to_interval(candidate) is not None:
+                readings.append(candidate)
         if not readings:
             continue
 

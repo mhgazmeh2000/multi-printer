@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -225,38 +226,91 @@ class ConsumptionSegment:
     refill_counter: Optional[int] = None
 
 
+def _finite_number(value) -> Optional[float]:
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+        return number if math.isfinite(number) else None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _page_counter(value) -> Optional[int]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, str):
+        try:
+            parsed = int(value)
+            return parsed if parsed >= 0 else None
+        except ValueError:
+            return None
+    number = _finite_number(value)
+    return int(number) if number is not None and number >= 0 and number.is_integer() else None
+
+
+# `valid` historically describes acceptance of the v1 ratio sample, not just
+# sensor validity. Only these known sample-size/ratio rejects retain real raw
+# telemetry for the interval estimator. Unknown invalid reasons fail closed.
+_RATIO_ONLY_REJECTIONS = frozenset({
+    "not_enough_pages_yet", "quantization_1pct_noise", "estimated_yield_out_of_range",
+})
+_INVALID_TELEMETRY_REJECTIONS = frozenset({
+    "synthetic_level", "status_coded_level", "quarantined_chip", "frozen_chip",
+    "level_read_noise", "missing_level_or_counter", "counter_decreased_anchor_reset",
+    "missing_counter_manual_reset",
+})
+
+
+def snapshot_is_usable(valid, reject_reason) -> bool:
+    """Shared admission policy for live v2 estimation and offline DB backtests."""
+    reason = str(reject_reason or "")
+    if reason in _INVALID_TELEMETRY_REJECTIONS:
+        return False
+    return valid in (True, 1, "1") or reason in _RATIO_ONLY_REJECTIONS
+
+
 def _status_text_to_nominal(status_text: Optional[str], raw_level: Optional[float]) -> Optional[float]:
     txt = (status_text or "").strip().lower()
     if txt:
-        if any(k in txt for k in ("empty", "replace", "exhausted", "depleted", "out", "end")):
-            return 0.0
-        if any(k in txt for k in ("very low", "critical", "near end")):
+        # Specific low-band phrases must precede the broad terminal word "end".
+        if re.search(r"\b(very low|critical|near end)\b", txt):
             return 8.0
-        if any(k in txt for k in ("low", "prepare", "order", "warning")):
+        if re.search(r"\b(empty|replace|exhausted|depleted|out|end)\b", txt):
+            return 0.0
+        if re.search(r"\b(low|prepare|order|warning)\b", txt):
             return 15.0
-        if any(k in txt for k in ("ok", "normal", "good", "ready", "some remaining", "full")):
+        if re.search(r"\b(ok|normal|good|ready|some remaining|full)\b", txt):
             return 62.5
     if raw_level is not None and raw_level == -3.0:
-        # RFC 3805 -3 = "some remaining" (uninformative alone unless transitioning to low/0%)
-        return 62.5
+        return 62.5  # RFC 3805 "some remaining", not a measured percent
     return None
 
 
 def reading_to_interval(reading: SupplyReading, spec: Optional[BrandSpec] = None) -> Optional[IntervalObservation]:
     """Convert a SupplyReading into an interval constraint [L_lo, L_hi] (or None if synthetic/invalid)."""
-    if reading.usage_counter is None or reading.usage_counter < 0:
+    counter = _page_counter(reading.usage_counter)
+    quality = _finite_number(reading.counter_quality)
+    if counter is None or quality is None or not 0 < quality <= 1:
         return None
     kind = (reading.level_kind or "percent").lower()
     prov = (reading.provenance or "rfc3805").lower()
-    if kind == "synthetic":
+    if kind not in {"percent", "capacity_units", "http_scrape", "status_code"}:
         return None
 
-    lvl: Optional[float] = None
-    if reading.raw_level is not None:
-        try:
-            lvl = float(reading.raw_level)
-        except (TypeError, ValueError):
-            lvl = None
+    lvl = _finite_number(reading.raw_level)
+    if reading.raw_level is not None and lvl is None:
+        return None
+    max_capacity = _finite_number(reading.max_capacity)
+    if reading.max_capacity is not None and max_capacity is None:
+        return None
+    if kind == "capacity_units" and (max_capacity is None or max_capacity <= 0):
+        return None
+    step_hint = _finite_number(reading.step_hint_pct)
+    if reading.step_hint_pct is not None and (step_hint is None or step_hint <= 0 or step_hint > 100):
+        return None
 
     spec = spec or get_brand_spec(reading.vendor)
     chip_norm = (reading.chip_id or "").strip() or None
@@ -273,12 +327,12 @@ def reading_to_interval(reading: SupplyReading, spec: Optional[BrandSpec] = None
 
     # Raw capacity units (e.g. impressions, tenth-grams, 0.1% units where max_capacity > 100 and unit != 19)
     if (
-        (kind == "capacity_units" or (reading.max_capacity and reading.max_capacity > 100))
-        and reading.max_capacity
-        and reading.max_capacity > 100
+        (kind == "capacity_units" or (max_capacity and max_capacity > 100))
+        and max_capacity
+        and (kind == "capacity_units" or max_capacity > 100)
         and (not spec.unit_19_is_percent or reading.unit_code != 19)
     ):
-        max_c = float(reading.max_capacity)
+        max_c = max_capacity
         # If raw_level was passed in raw units [0..max_c] vs already scaled [0..100]:
         if 0.0 <= lvl <= max_c and (kind == "capacity_units" or lvl > 100.0):
             pct = (lvl / max_c) * 100.0
@@ -290,11 +344,11 @@ def reading_to_interval(reading: SupplyReading, spec: Optional[BrandSpec] = None
         lo = max(0.0, pct - half_w)
         hi = min(100.0, pct + half_w)
         return IntervalObservation(
-            usage_counter=int(reading.usage_counter),
+            usage_counter=counter,
             level_lo=lo,
             level_hi=hi,
             level_mid=0.5 * (lo + hi),
-            level_nominal=round(pct, 4),
+            level_nominal=pct,
             level_kind="capacity_units",
             provenance=prov,
             observed_at=reading.observed_at,
@@ -313,7 +367,7 @@ def reading_to_interval(reading: SupplyReading, spec: Optional[BrandSpec] = None
         else:
             lo, hi = 25.0, 100.0
         return IntervalObservation(
-            usage_counter=int(reading.usage_counter),
+            usage_counter=counter,
             level_lo=lo,
             level_hi=hi,
             level_mid=0.5 * (lo + hi),
@@ -328,17 +382,17 @@ def reading_to_interval(reading: SupplyReading, spec: Optional[BrandSpec] = None
     if kind == "http_scrape" or prov == "http_scrape":
         half_w = spec.scrape_half_width
     else:
-        step = reading.step_hint_pct if (reading.step_hint_pct and reading.step_hint_pct >= 1.0) else 1.0
+        step = step_hint if step_hint is not None and step_hint >= 1.0 else 1.0
         half_w = max(spec.percent_half_width, 0.5 * step)
 
     lo = max(0.0, lvl - half_w)
     hi = min(100.0, lvl + half_w)
     return IntervalObservation(
-        usage_counter=int(reading.usage_counter),
+        usage_counter=counter,
         level_lo=lo,
         level_hi=hi,
         level_mid=0.5 * (lo + hi),
-        level_nominal=round(lvl, 2),
+        level_nominal=lvl,
         level_kind=kind,
         provenance=prov,
         observed_at=reading.observed_at,
@@ -361,7 +415,10 @@ def _filter_transient_blips(obs_list: Sequence[IntervalObservation]) -> List[Int
             drop_from_prev = prev.level_nominal - cur.level_nominal
             pages_on_blip = cur.usage_counter - prev.usage_counter
             recover_diff = abs(prev.level_nominal - nxt.level_nominal)
-            if drop_from_prev >= 20.0 and 0 <= pages_on_blip <= 25 and recover_diff <= 5.0:
+            chip_ids = {o.chip_id for o in (prev, cur, nxt) if o.chip_id}
+            continuous = prev.usage_counter <= cur.usage_counter <= nxt.usage_counter
+            if (len(chip_ids) <= 1 and continuous and drop_from_prev >= 20.0
+                    and 0 <= pages_on_blip <= 25 and recover_diff <= 5.0):
                 # Transient single-poll blip: skip it so it neither breaks segments nor skews fit
                 idx += 1
                 continue
@@ -1059,6 +1116,8 @@ def combine_segments(
 
 def derive_ci_confidence(rel_ci95: float, *, counter_basis: str = "") -> str:
     """Derive confidence directly from relative 95% CI half-width (Layer 4 rule)."""
+    if _finite_number(rel_ci95) is None or rel_ci95 < 0:
+        return "low"
     if rel_ci95 <= 0.10 and not str(counter_basis or "").startswith("total_for_color"):
         return "high"
     if rel_ci95 <= 0.25:
@@ -1080,8 +1139,10 @@ def combine_with_prior(
 ) -> PosteriorYieldDecision:
     """Fuse interval likelihood estimate with hierarchical/catalog prior via Empirical Bayes."""
     spec = spec or DEFAULT_BRAND_SPEC
-    has_real_prior = bool(prior_yield and prior_yield > 0 and prior_source not in ("default", "", None))
-    eff_prior_y = float(prior_yield) if (prior_yield and prior_yield > 0) else float(DEFAULT_PRIOR_YIELD)
+    # Learned values from this very series are not independent Bayes priors.
+    has_real_prior = bool(prior_yield and prior_yield > 0
+                          and prior_source in ("catalog", "device_capacity", "shared_profile"))
+    eff_prior_y = float(prior_yield) if has_real_prior else float(DEFAULT_PRIOR_YIELD)
     base_cv = prior_cv if (prior_cv and prior_cv > 0) else (
         0.16 if prior_source == "shared_profile" else (spec.prior_cv if has_real_prior else 0.65)
     )
@@ -1112,7 +1173,9 @@ def combine_with_prior(
         lo_i = max(MIN_PHYSICAL_YIELD, int(round(100.0 / (r0 + 1.96 * sig0))))
         hi_i = min(MAX_PHYSICAL_YIELD, int(round(100.0 / max(1e-9, r0 - 1.96 * sig0))))
         rel_ci = round(1.96 * base_cv, 4)
-        conf = "high" if prior_source == "shared_profile" else ("medium" if has_real_prior else "low")
+        conf = derive_ci_confidence(rel_ci, counter_basis=counter_basis) if has_real_prior else "low"
+        if conf == "high":
+            conf = "medium"  # a prior alone is not locally converged consumption evidence
         return PosteriorYieldDecision(
             capacity_pages=cap_i,
             capacity_ci95=(lo_i, hi_i),

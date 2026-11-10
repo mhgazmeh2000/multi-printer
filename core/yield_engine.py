@@ -36,6 +36,7 @@ from core.yield_estimator import (
     SupplyReading,
     estimate_supply_series,
     get_brand_spec,
+    snapshot_is_usable,
 )
 
 log = logging.getLogger("PrinterMonitor")
@@ -1138,7 +1139,8 @@ def _resolve_interval_prior(
         dev_cap = _valid_device_capacity(state.get("yield_per_page"))
     nom_cap = dev_cap or cat_cap
 
-    if profile and profile.get("confidence") == "high" and _profile_is_trusted(profile, color):
+    if (profile and profile.get("source_printer_ip") != state.get("printer_ip")
+            and profile.get("confidence") == "high" and _profile_is_trusted(profile, color)):
         prof_y = _valid_device_capacity(profile.get("yield_per_page"))
         if prof_y:
             return prof_y, "shared_profile", nom_cap
@@ -1149,9 +1151,9 @@ def _resolve_interval_prior(
     fb = estimate_yield_fallback(model, color, default_pages=-1)
     if fb and fb > 0:
         return int(fb), "catalog", None
-    cur_src = state.get("yield_source") or "default"
-    cur_y = _to_int(state.get("yield_per_page"), DEFAULT_YIELD_PER_PAGE)
-    return cur_y, cur_src, None
+    # Neither the slot's last posterior nor its own published profile is an
+    # independent prior. Replaying identical evidence must not tighten its CI.
+    return DEFAULT_YIELD_PER_PAGE, "default", None
 
 
 def estimate_cartridge_interval(
@@ -1167,7 +1169,8 @@ def estimate_cartridge_interval(
     limit: int = 400,
 ) -> PosteriorYieldDecision:
     """Compute interval-censored Empirical Bayes yield & CI95 for (ip, color) from `toner_snapshots_v2`."""
-    state = state or {}
+    state = dict(state or {})
+    state["printer_ip"] = ip  # caller identity, even if a partial state was supplied
     model_txt = state.get("printer_model") or ""
     color_norm = (color or state.get("color") or "black").lower()
     prior_y, prior_src, nom_cap = _resolve_interval_prior(
@@ -1198,7 +1201,7 @@ def estimate_cartridge_interval(
         if u_cnt is None:
             continue
         rej = str(r[5] or "")
-        if rej in ("synthetic_level", _REJECT_DISPLAY_ONLY, _REJECT_QUARANTINED_CHIP, _REJECT_FROZEN_CHIP):
+        if not snapshot_is_usable(r[4], rej):
             continue
         raw_lv = r[2] if r[2] is not None else r[1]
         src_txt = str(r[3] or "poll").lower()
@@ -1210,8 +1213,8 @@ def estimate_cartridge_interval(
                 inferred_basis = "total_for_color"
         readings.append(
             SupplyReading(
-                usage_counter=int(u_cnt),
-                raw_level=float(raw_lv) if raw_lv is not None else None,
+                usage_counter=u_cnt,
+                raw_level=raw_lv,
                 level_kind=lv_kind,
                 provenance="http_scrape" if lv_kind == "http_scrape" else "rfc3805",
                 observed_at=str(r[6] or ""),
