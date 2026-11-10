@@ -14,7 +14,8 @@ import config.settings as settings
 from core import store
 import core.enhanced_collector as ec
 from core.database import db_connection, init_db, load_printer_counters
-from core.yield_engine import ensure_yield_tables, process_cartridge_snapshot, register_manual_refill
+from core.yield_engine import (ensure_yield_tables, process_cartridge_snapshot, register_manual_refill,
+                               _is_placeholder_name)
 
 
 class EvidencePolicyTests(unittest.TestCase):
@@ -36,6 +37,16 @@ class EvidencePolicyTests(unittest.TestCase):
                             ('Unknown supply', None)]:
             with self.subTest(name=name):
                 self.assertEqual(ec._detect_toner_color(name), color)
+
+    def test_generic_color_names_are_exact_slot_placeholders_not_part_prefixes(self):
+        for color in ('black', 'cyan', 'magenta', 'yellow'):
+            for name in (f'{color} Toner', f'{color} cartridge', f'Toner {color}',
+                         f'Cartridge {color}', 'Toner Cartridge'):
+                with self.subTest(color=color, name=name):
+                    self.assertTrue(_is_placeholder_name(name.upper(), color))
+            self.assertFalse(_is_placeholder_name(f'{color} Toner HP CF283A', color))
+            self.assertFalse(_is_placeholder_name(f'{color} Cartridge HP CF283A', color))
+        self.assertFalse(_is_placeholder_name('Cyan Toner', 'black'))
 
     def test_static_missing_and_generation_decrease_are_not_swaps(self):
         prev = {'cartridge_ids': {'black': 'toner_gen:3'}}
@@ -310,6 +321,178 @@ class CollectorPersistenceTests(unittest.TestCase):
         self.poll()
         self.assertEqual(self.state()['anchor_level'], 80)
         self.assertEqual(self.state()['anchor_counter'], self.total)
+
+    def _seed_learned_state(self):
+        with db_connection(commit=True) as conn:
+            conn.execute("UPDATE cartridge_state SET yield_per_page=4321, yield_source='auto_learn', "
+                         "sample_count=7, confidence='high', total_weight=8 WHERE printer_ip=?",
+                         (self.printer['ip'],))
+
+    def _assert_learning_unchanged(self, before):
+        after = self.state()
+        for key in ('cartridge_key', 'anchor_counter', 'anchor_level', 'cycle_start_counter',
+                    'last_counter', 'last_valid_level', 'yield_per_page', 'yield_source',
+                    'sample_count', 'total_weight'):
+            self.assertEqual(after[key], before[key], key)
+
+    def test_hp_generic_toner_roundtrip_preserves_learned_state(self):
+        self.model = 'HP LaserJet Pro MFP M225dn'
+        real_name = 'Black Cartridge HP CF283A'
+        self.supplies = [self.supply(real_name, 30)]
+        self.poll()
+        self._seed_learned_state()
+        before = self.state()
+        for name in ('Black Toner', real_name):
+            self.total += 10
+            self.uptime += 10000
+            self.supplies[0]['name'] = name
+            self.poll()
+            # Counter/last observation may advance, but identity and learning cannot restart.
+            after = self.state()
+            for key in ('cartridge_key', 'anchor_counter', 'anchor_level', 'cycle_start_counter',
+                        'yield_per_page', 'yield_source', 'sample_count', 'total_weight'):
+                self.assertEqual(after[key], before[key], key)
+
+    def test_v2_hp_generic_toner_roundtrip_preserves_learned_state(self):
+        with patch.dict(os.environ, {'YIELD_ESTIMATOR': 'v2'}):
+            self.test_hp_generic_toner_roundtrip_preserves_learned_state()
+
+    def test_initial_generic_toner_enriches_without_restarting_learning(self):
+        self.supplies[0]['name'] = 'Black Toner'
+        self.poll()
+        self._seed_learned_state()
+        before = self.state()
+        self.supplies[0]['name'] = 'Black Cartridge HP CF283A'
+        self.total += 10
+        self.poll()
+        after = self.state()
+        self.assertIn('cf283a', after['cartridge_key'])
+        for key in ('anchor_counter', 'yield_per_page', 'sample_count', 'total_weight'):
+            self.assertEqual(after[key], before[key], key)
+
+    def test_manual_refill_generic_toner_preserves_canonical_learning(self):
+        self.poll()
+        self._seed_learned_state()
+        before = self.state()
+        register_manual_refill(ip=self.printer['ip'], color='black', printer_model=self.model,
+                               cartridge_name='Black Toner', new_level=100,
+                               counters={'total': self.total + 10}, device_type='mono')
+        after = self.state()
+        for key in ('cartridge_key', 'yield_per_page', 'sample_count'):
+            self.assertEqual(after[key], before[key], key)
+        self.assertEqual(after['anchor_counter'], self.total + 10)
+
+    def test_serial_swap_with_generic_name_still_retires_override_and_anchor(self):
+        self.poll()
+        before = self.state()
+        self.override()
+        self.identity['ids']['black'] = 'serial-2'
+        self.supplies = [self.supply('Black Toner', 85)]
+        self.total += 10
+        self.poll()
+        self.assertEqual(self.state()['cartridge_key'], before['cartridge_key'])
+        self.assertEqual(self.state()['anchor_counter'], self.total)
+        self.assertEqual(self.state()['anchor_level'], 85)
+        self.assertFalse(load_printer_counters(self.printer['ip'])['toner_overrides'])
+
+    def test_rejected_zero_counter_cannot_reset_yield_anchor(self):
+        self.total = 60262
+        self.supplies[0]['percent'] = 30
+        self.poll()
+        self._seed_learned_state()
+        before = self.state()
+        self.total = 0
+        self.uptime += 10000
+        self.supplies[0]['percent'] = 25
+        self.poll()
+        self.assertEqual(load_printer_counters(self.printer['ip'])['print_total'], 60262)
+        self._assert_learning_unchanged(before)
+        with db_connection() as conn:
+            row = conn.execute('SELECT usage_counter, valid FROM toner_snapshots_v2 '
+                               'ORDER BY id DESC LIMIT 1').fetchone()
+            self.assertIsNone(row[0])
+            self.assertFalse(row[1])
+        self.total = 60562
+        self.supplies[0]['percent'] = 20
+        self.poll()
+        with db_connection() as conn:
+            row = conn.execute('SELECT start_counter, end_counter FROM yield_samples '
+                               'WHERE accepted = ? ORDER BY id DESC LIMIT 1', (True,)).fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(tuple(row), (60262, 60562))
+
+    def test_v2_rejected_zero_counter_cannot_reset_yield_anchor(self):
+        with patch.dict(os.environ, {'YIELD_ESTIMATOR': 'v2'}):
+            self.test_rejected_zero_counter_cannot_reset_yield_anchor()
+
+    def test_rejected_drop_masks_color_and_black_white_fallback_counters(self):
+        self.printer['device_type'] = 'color'
+        self.supplies += [self.supply('Cyan Toner HP 123C', 75)]
+        self.poll()
+        before = {c: self.state(c) for c in ('black', 'cyan')}
+        self.total = 9990
+        self.uptime += 10000
+        self.supplies[0]['percent'] = 65
+        self.supplies[1]['percent'] = 65
+        self.poll()
+        for color, old in before.items():
+            for key in ('anchor_counter', 'last_counter', 'anchor_level', 'last_valid_level'):
+                self.assertEqual(self.state(color)[key], old[key], (color, key))
+        with db_connection() as conn:
+            rows = conn.execute('SELECT usage_counter, valid FROM toner_snapshots_v2 '
+                                'ORDER BY id DESC LIMIT 2').fetchall()
+            self.assertTrue(all(r[0] is None and not r[1] for r in rows))
+
+    def test_real_counter_reset_with_reboot_still_resets_yield_anchor(self):
+        self.poll()
+        self.total = 10
+        self.uptime = 1000
+        # uptime is currently cache-only; retain the live process snapshot so
+        # this control provides the existing validator with real reboot evidence.
+        ec.collect_enhanced(dict(self.printer), save_to_db=True)
+        self.assertEqual(load_printer_counters(self.printer['ip'])['print_total'], 10)
+        self.assertEqual(self.state()['anchor_counter'], 10)
+
+    def test_rejected_counter_and_generic_name_together_do_not_restart_learning(self):
+        self.poll()
+        self._seed_learned_state()
+        before = self.state()
+        self.total = 0
+        self.uptime += 10000
+        self.supplies[0]['name'] = 'Black Toner'
+        self.poll()
+        self._assert_learning_unchanged(before)
+
+    def test_pending_overflow_is_not_a_yield_observation(self):
+        self.poll()
+        before = self.state()
+        self.total = 1_000_000_000
+        self.uptime += 10000
+        self.poll()
+        self.assertEqual(load_printer_counters(self.printer['ip'])['print_total'], 10000)
+        self._assert_learning_unchanged(before)
+        with db_connection() as conn:
+            row = conn.execute('SELECT usage_counter, valid FROM toner_snapshots_v2 '
+                               'ORDER BY id DESC LIMIT 1').fetchone()
+            self.assertIsNone(row[0])
+            self.assertFalse(row[1])
+        self.total = 10010
+        self.poll()
+        self.assertEqual(self.state()['last_counter'], 10010)
+
+    def test_generic_color_names_preserve_each_slots_part_identity(self):
+        for color in ('black', 'cyan', 'magenta', 'yellow'):
+            with self.subTest(color=color):
+                args = dict(ip=self.printer['ip'], color=color, printer_model='Color Test',
+                            level=70, counters={'total': 10000, 'full_color': 5000},
+                            device_type='color')
+                original = process_cartridge_snapshot(cartridge_name=f'{color} Toner HP PART123', **args)
+                generic = process_cartridge_snapshot(cartridge_name=f'{color} Toner', **args)
+                self.assertEqual(generic['cartridge_key'], original['cartridge_key'])
+                self.assertEqual(generic['anchor_counter'], original['anchor_counter'])
+                # A real part suffix remains identity-bearing.
+                changed = process_cartridge_snapshot(cartridge_name=f'{color} Toner HP PART456', **args)
+                self.assertNotEqual(changed['cartridge_key'], original['cartridge_key'])
 
     def test_manual_refill_with_network_alias_keeps_canonical_key(self):
         self.poll()

@@ -751,9 +751,18 @@ def _is_placeholder_model(model) -> bool:
 
 
 def _is_placeholder_name(name, color) -> bool:
-    """True when a cartridge name is missing, 'Unknown', or only the colour fallback."""
+    """Exact generic names carry no part identity; never match a part-name prefix.
+
+    SNMP/EWS fallbacks can alternate between e.g. ``Black Toner`` and the real
+    HP part name. Only the current slot's color is generic (cyan is not black).
+    """
     norm = _norm_text(name)
-    return norm in ("unknown", "toner", "cartridge", _norm_text(color))
+    color_norm = _norm_text(color)
+    generic = {"unknown", "toner", "cartridge", "toner cartridge", color_norm}
+    if color_norm in _COLOR_ORDER:
+        for noun in ("toner", "cartridge"):
+            generic.update((f"{color_norm} {noun}", f"{noun} {color_norm}"))
+    return norm in generic
 
 
 def _key_has_placeholder(cartridge_key: str) -> bool:
