@@ -84,6 +84,10 @@ DELETE، انتقال slot/id، backfill، TRUNCATE، rollback، interruption و
 
 گارد تفکیک تست‌ها: ۱۰۴۸ تست unittest-style دقیقاً در یک مسیر؛ `git diff --check`
 پاس شد. GitHub Actions با اجرای محلی یکی نیست و نتیجهٔ آن جداگانه باید بررسی شود.
+در نخستین Actions، jobِ 3.13 در نصب pgserver شکست خورد؛ metadata انتشار 0.1.4
+وجود wheel فقط تا CPython 3.12 و نبود sdist را تأیید کرد. workflow اصلاح شد تا
+آزمون‌های PostgreSQL مستقل روی 3.10–3.12 اجرا شوند؛ در 3.13 فقط این وابستگی
+اختیاری/تست‌های وابسته skip می‌شوند، نه اینکه آن مسیر اثبات‌شده اعلام شود.
 
 ### نتیجهٔ صادقانهٔ کل suite
 
