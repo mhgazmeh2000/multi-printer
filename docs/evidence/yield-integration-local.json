@@ -1,0 +1,71 @@
+{
+  "evidence_source": "local sandbox execution, owned disposable PostgreSQL and temporary SQLite only",
+  "base_commit": "882af2a726de91dca0653e3d0dd5ea3a4b321034",
+  "branch": "arena/45f4c530-multi-printer",
+  "application_reader_integrated": true,
+  "reader_flag": "YIELD_DERIVED_RUNS_ENABLED",
+  "reader_default_enabled": false,
+  "migration_revision": "0009",
+  "schema_namespace": "current application schema",
+  "initial_ready_marker": "absent; history fallback until explicit atomic rebuild",
+  "migration_applied_to_production": false,
+  "production_changed": false,
+  "deployment_ready": false,
+  "new_tests": {"integration": 16, "retry_cache": 6},
+  "focused_final": {
+    "command": "DB_BACKEND=sqlite PG_DSN= .venv/bin/python -m pytest -q tests/test_yield*.py tests/test_retention_policy.py tests/test_startup*.py tests/test_*migration*.py tests/test_db_*.py tests/test_cutover_readiness.py -k 'not test_after_cutover_z_is_green'",
+    "passed": 330,
+    "skipped": 15,
+    "deselected": 1,
+    "passed_subtests": 303,
+    "elapsed_seconds": 48.00,
+    "deselection_reason": "Known timestamp/cutover failure reproduced separately and on the clean base archive; not hidden as a passing full suite"
+  },
+  "verified_cases": [
+    "default-off reader and SQLite add no optional-schema SQL",
+    "missing schema, absent/unready marker and version mismatch use exact history",
+    "optional-column failure uses savepoint without rolling back earlier caller writes",
+    "ordered endpoints match independent oracle through historical bulk mutations, slot/id moves, deletes, backfill and truncate",
+    "interrupted rebuild rolls back and autocommit rebuild is rejected",
+    "downgrade preserves source; reinstall/rebuild restores derived reader",
+    "custom application schema migration and reader",
+    "active actual plan skips reference history windows and uses one-row source index lookups",
+    "full Alembic chain, downgrade to 0008 and reinstall on temporary databases",
+    "real app poll, accepted learning sample and refill retry injected commit conflict exactly once in both estimator modes",
+    "actual overlapping READ COMMITTED writers and stale REPEATABLE READ writer retried after 40001",
+    "retention whole-batch retry and open-transaction ownership guard",
+    "attempt-local exact anchors published only after successful commit",
+    "only 40001 and 40P01 retry; bounded to three attempts"
+  ],
+  "test_split": {
+    "unittest_style_count": 1048,
+    "pytest_testcase_count_outside_pytest_only": 1048,
+    "exactly_one_route": true
+  },
+  "full_suite": {
+    "green": false,
+    "first_attempt": "did not complete within 180-second tool budget; no success claimed",
+    "bounded_diagnostic": {
+      "maxfail": 10,
+      "passed": 667,
+      "skipped": 39,
+      "failures_including_subtests": 10,
+      "passed_subtests": 196,
+      "elapsed_seconds": 82.49,
+      "groups": ["backup_pg tooling unavailable", "cutover timestamp expectation", "JSONB old hardcoded head", "JSONB checks depend on local logs.db schema"]
+    },
+    "clean_base_reproduction": {
+      "source": "git archive of base commit; no branch switch or production connection",
+      "backup_cutover_generator_selection": {"passed": 52, "failed": 4, "skipped": 9},
+      "jsonb_scope_selection": {"passed": 2, "failed": 1},
+      "not_claimed": "Full baseline suite parity or baseline parity for local logs.db-dependent failures"
+    }
+  },
+  "unproven_release_gates": [
+    "GitHub Actions and full-suite failure reconciliation",
+    "sustained multi-process writer load with agreed commit-p95/WAL SLA",
+    "real application-role grants and operational restore/trigger-bypass invalidation",
+    "restart, restore and operational rollback rehearsal",
+    "longitudinal ETA calibration"
+  ]
+}

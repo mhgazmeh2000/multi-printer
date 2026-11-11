@@ -1,0 +1,42 @@
+{
+  "scope": "Linux PG16.2 synthetic wide rows, not Windows or real telemetry",
+  "rows": 2126300,
+  "slots": 48,
+  "measurements": [
+    {
+      "builder": "global",
+      "seconds": 10.1327,
+      "boundary_rows": 21264,
+      "exact_all_boundaries_equal": true
+    },
+    {
+      "builder": "slotwise",
+      "seconds": 10.9879,
+      "boundary_rows": 21264,
+      "exact_all_boundaries_equal": true,
+      "max_slot_seconds": 0.2261,
+      "slots_completed": 48
+    },
+    {
+      "builder": "slotwise",
+      "seconds": 10.7755,
+      "boundary_rows": 21264,
+      "exact_all_boundaries_equal": true,
+      "max_slot_seconds": 0.226,
+      "slots_completed": 48
+    },
+    {
+      "builder": "global",
+      "seconds": 10.539,
+      "boundary_rows": 21264,
+      "exact_all_boundaries_equal": true
+    }
+  ],
+  "base_bytes": 606617600,
+  "exact_full_ordered_output_equal": true,
+  "cluster_cleaned_up": true,
+  "prior_global_rebuild_sha256": "73bb7e961e8a22581a8bfd711d800e312ca2b49e97b4bd67fb8cbfb71d1a7bfb",
+  "windows_candidate_execution_reported": false,
+  "deployment_ready": false,
+  "targeted_tests_passed": 30
+}

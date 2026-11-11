@@ -515,7 +515,10 @@ class ConnectionAdapter:
     def commit(self) -> None:
         """Commit the current transaction."""
 
-        self._conn.commit()
+        try:
+            self._conn.commit()
+        except Exception as exc:
+            raise _translate_error(exc, self.backend) from exc
 
     def rollback(self) -> None:
         """Roll back the current transaction."""

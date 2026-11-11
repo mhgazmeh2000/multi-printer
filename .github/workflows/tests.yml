@@ -63,6 +63,11 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt -r requirements-dev.txt
 
+      # Run-boundary prototype and app integration own disposable local clusters. This is a
+      # Linux CI/test dependency only, not an application or Windows dependency.
+      - name: Install isolated yield test PostgreSQL
+        run: python -m pip install pgserver==0.1.4
+
       - name: Setup Node for DOM security regressions
         uses: actions/setup-node@v4
         with:
