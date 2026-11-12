@@ -89,5 +89,6 @@
     "pypi_release_metadata": "CPython wheels 3.9–3.12, no 3.13 wheel or source distribution",
     "correction": "Install optional pgserver only for matrix 3.10–3.12; explicit local-PG tests skip on 3.13",
     "subsequent_ci_result": "not yet verified"
-  }
+  },
+  "maintenance_boundary_superseded_by": "yield-maintenance-guard-local.json; revised 0009 is metadata-only; explicit maintenance now owns source index/triggers/build"
 }

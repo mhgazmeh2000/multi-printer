@@ -1,5 +1,42 @@
 # ادغام محلی مسیر derived runs — پیش‌فرض خاموش، انتشار مسدود
 
+## اصلاح مانع راه‌اندازی عادی — مرز جدید فعال‌سازی
+
+**در اصلاح جدید، اجرای معمول start/setup دیگر ایندکس/trigger مسیر yield را نصب
+نمی‌کند.** `0009` فقط سه جدول metadata خالی و ایندکس روی جدول خالیِ boundaries
+می‌سازد؛ به جدول source دست نمی‌زند و روی آن ACCESS EXCLUSIVE نمی‌گیرد.
+نام revision همچنان 0009 است؛ این PR هنوز merge/منتشر نشده و نصب تولیدی از
+نسخهٔ قبلی آن انجام نشده است. تاریخچهٔ اساسی Alembic حذف یا شرطی/stamp نشده است.
+
+`core/yield_run_maintenance.py` و `tools/yield_runs_maintenance.py` عملیات جداگانه
+دارند: نصب ایندکس source، چهار تابع، پنج trigger و rebuild کامل **همگی در یک
+تراکنش با تأیید صریح نگهداری** انجام می‌شوند. تا commit موفق هیچ حالت نیمه‌نصب
+یا marker آماده‌ای منتشر نمی‌شود. CLI بدون `--approve-maintenance` حتی config
+دیتابیس را import نمی‌کند؛ برای نگهداری reader باید خاموش باشد. خطا exit 1 دارد،
+متن DSN/raw error چاپ نمی‌شود و تراکنش rollback می‌شود؛ نتیجهٔ commit نامعلوم
+موفق تلقی یا retry نمی‌شود. source به‌وسیلهٔ فعال‌سازی/حذف، UPDATE/DELETE نمی‌شود.
+
+قفل فعال‌سازی/حذف روی source فقط در همین مسیر مصوب گرفته می‌شود: lock wait یک
+ثانیه، statement حداکثر ۱۲۰ ثانیه و بودجهٔ کار حداکثر ۶۰۰ ثانیه، قابل کاهش.
+caller مسئول commit/rollback است؛ autocommit، connection ازقبل داخل تراکنش، و
+isolation غیر READ COMMITTED رد می‌شوند. rebuild مستقیم بدون triggerهای صحیح و
+فعال نیز نمی‌تواند marker را ready کند. نصب دوباره روی اشیای موجود صریحاً رد
+می‌شود؛ نخست باید deactivation مصوب انجام شود، نه adopt کردن اشیای ناشناخته.
+
+`disable` در همان ابزار، trigger/ایندکس source/توابع را حذف و metadata را خالی
+می‌کند، اما سه جدول پایه و revision Alembic را نگه می‌دارد. اجرای مجدد start یا
+`upgrade head` آن را دوباره فعال نمی‌کند. downgrade کامل نیز در هر دو حالت فعال
+و غیرفعال کار می‌کند. نصب‌های آزمایشیِ قبلی همین PR که 0009 قدیمی را اجرا کرده‌اند
+**خودکار پاک نمی‌شوند**؛ برای آن‌ها deactivation مصوب یا downgrade لازم است.
+
+`start.ps1` اکنون در شکست upgrade یا آماده‌سازی داده، قبل از راه‌اندازی وب exit 1
+می‌دهد. `setup.ps1` نیز fail-closed است؛ مسیر خطرناک `stamp head` پس از شکست
+migration و تلاش تعمیر خودکار حذف شده است. UTF-8 BOM هر دو فایل حفظ شده است.
+
+این بخش جای توضیح قدیمی «migration خودش trigger نصب می‌کند» را می‌گیرد. ابزار
+نگهداری در این دور فقط روی PostgreSQL موقت اجرا شده؛ این سند مجوز اجرای آن روی
+تولید یا دستور اجرایی جدید برای مالک نیست.
+
 ## آنچه تحویل شده است
 
 - `core/yield_engine.py`: همان قرارداد ۱۲ستونی، ترتیب سراسری id و آخرین ۴۰۰ run
@@ -13,23 +50,16 @@
   پیشین تراکنش caller rollback نمی‌شوند. خطای timeout یا خطاهای دیگر در این
   لایه به‌عنوان «خلاصهٔ آماده» پذیرفته نمی‌شوند. fallbackهای سطح بالاتر قدیمی
   برنامه، به‌جز انتشار خطاهای retryable، تغییر نکرده‌اند.
-- migration `0009` و SQL نسخه‌دار `alembic/sql/0009_yield_runs.sql`:
-  سه جدول `yield_run_meta`، `yield_run_slots` و `yield_run_boundaries`، ایندکس
-  همسایگی و triggerهای INSERT/UPDATE/DELETE/TRUNCATE. source در schema جاری
-  برنامه می‌ماند؛ schema سفارشی نیز در تست واقعی بررسی شده است.
-- migration روی SQLite no-op است. روی PostgreSQL ساخت اولیهٔ تاریخچه انجام
-  نمی‌دهد و marker آماده درج نمی‌کند؛ در نتیجه نصب بدون rebuild از مرجع می‌خواند.
-  نداشتن seed row اضافی همچنین مانع تشخیص اشتباه دادهٔ واقعی توسط
-  `tools/auto_migrate.py` در مقصد تازه می‌شود.
-- `rebuild_yield_runs` یک primitive صریح نگهداری است، نه job خودکار یا فرمان
-  انتشار: تاریخچهٔ **کامل** هر slot را زیر ACCESS EXCLUSIVE می‌سازد، سپس marker
-  را آماده می‌کند. caller مسئول تراکنش، commit/rollback و timeoutهاست؛
-  autocommit=True رد می‌شود. هیچ truncate کردن پنجرهٔ تاریخچه یا shortcut مبتنی
-  بر MAX(id)/TTL وجود ندارد.
-- downgrade فقط triggerها، ایندکس و اشیای derived را به ترتیب وابستگی حذف
-  می‌کند؛ از CASCADE استفاده نمی‌کند و source را تغییر نمی‌دهد. نصب/حذف در
-  تراکنش با lock-wait محدود ۵ ثانیه انجام می‌شود. این عدد، سقف زمان کل migration
-  یا rebuild نیست.
+- migration `0009` و SQL `alembic/sql/0009_yield_runs.sql` فقط metadata سبک
+  را در schema جاری برنامه می‌سازند؛ روی SQLite no-op هستند. marker آماده درج
+  نمی‌شود، بنابراین نصب عادی از reader قبلی استفاده می‌کند.
+- SQL سنگین نسخه‌دار در `alembic/sql/0009_yield_runs_activation.sql` فقط از مسیر
+  نگهداری صریح بالا اجرا می‌شود، نه Alembic/start/setup. schema سفارشی تست شده است.
+- `rebuild_yield_runs` فقط پس از فعال‌سازی صحیح writer maintenance کار می‌کند؛
+  تمام تاریخچه را می‌سازد، نه پنجره‌ای کوتاه‌شده یا TTL/MAX(id) به‌عنوان معیار تازگی.
+- downgrade کامل با IF EXISTS اشیای optional را پاک می‌کند؛ CASCADE ندارد و
+  source حفظ می‌شود. قفل source در downgrade دستی نیز همچنان نیاز به پنجرهٔ
+  نگهداری دارد. سقف lock wait در downgrade پنج ثانیه است، نه سقف کل عملیات.
 
 ## نویسندگان و مرز retry
 
@@ -55,6 +85,18 @@ striped داخل process رقابت همین slot را محدود می‌کنن�
 sequence gap ناشی از rollback طبیعی است و فرض id پیوسته وجود ندارد.
 
 ## تست و شواهد
+
+نتیجهٔ اصلاح مرز نگهداری در `evidence/yield-maintenance-guard-local.json` جداگانه
+ثبت شده است: **۳۴۴ passed، ۲۰ skipped، یک deselected و ۳۰۳ subtest passed در
+۵۱٫۷۰ ثانیه** با همان انتخاب فرمان زیر. تست امنیت جداگانه نیز ۱۶ passed و ۳۷
+subtest passed داشت. گارد تفکیک اکنون ۱۰۵۹ تست unittest-style را دقیقاً یک‌بار
+می‌شمارد. پنج skip جدید محلی، تست‌های subprocess واقعی PowerShell هستند که در
+job ویندوز CI اضافه شده‌اند؛ نبود PowerShell محلی را اثبات آن مسیر نمی‌نامیم.
+برابری source، rollback کامل نصب/حذف، عدم فعال‌سازی با start/upgrade مجدد، سازگاری
+با 0009 آزمایشی قدیمی، و race حذف هم‌زمان با rebuild روی PG موقت تست شده‌اند.
+
+**اعداد باقیِ این بخش، تاریخچهٔ بستهٔ قبلی‌اند، نه نتیجهٔ CI commit جدید.**
+
 
 شاهد ماشین‌خوان: `evidence/yield-integration-local.json`.
 
@@ -111,7 +153,7 @@ DELETE، انتقال slot/id، backfill، TRUNCATE، rollback، interruption و
 یا دستور جدیدی از مالک درخواست نمی‌شود.
 
 خاموش‌کردن flag فقط reader را به تاریخچه برمی‌گرداند؛ **هزینهٔ triggerهای نصب‌شده
-را متوقف نمی‌کند**. حذف هزینهٔ writer نیازمند downgrade مصوب است. پیش از downgrade
+را متوقف نمی‌کند**. حذف هزینهٔ writer نیازمند deactivation یا downgrade مصوب است. پیش از آن
 نیز flag خاموش باشد؛ fallback پس از حذف اشیا در تست بررسی شده است. source باقی
 می‌ماند و برای فعال‌سازی دوباره rebuild کامل لازم است.
 

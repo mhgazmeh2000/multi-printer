@@ -336,30 +336,19 @@ Write-Host ' [OK] پایگاه‌داده printguard آماده و پاسخگو 
 
 Write-Host ''
 Write-Host ' [6/7] اعمال ساختار جداول با Alembic...'
-$repairCount = 0
+# Never stamp a failed migration as applied. An error requires explicit repair.
+# Yield source index/triggers/build are NOT part of ordinary upgrade head.
+$env:ALEMBIC_DB_URL = $pgDsn
 $step6Ok = $false
 $alembicHead = ''
-while ($true) {
-    # KEPT: the URL is reset to the .env value at the start of every attempt (as in setup.bat).
-    $env:ALEMBIC_DB_URL = $pgDsn
-    $alembicHead = ''
-    if ((Invoke-Quiet $PyCmd @('-m', 'alembic', 'upgrade', 'head')) -eq 0) {
-        $currentLines = @(& $PyCmd -m alembic current 2>$null)
-        $firstLine = $currentLines | Where-Object { $_ -and ([string]$_).Trim() } | Select-Object -First 1
-        if ($firstLine) { $alembicHead = (([string]$firstLine).Trim() -split '\s+')[0] }
-    }
-    if ($alembicHead) { $step6Ok = $true; break }
-    if ($repairCount -ge 2) { break }
-    $repairCount++
-    Write-Host "        [هشدار] اعمال اسکیمای Alembic با مشکل مواجه شد. اجرای تعمیر $repairCount از 2..."
-    if ($repairCount -eq 1) {
-        Write-Host '        - اقدام تعمیر ۱: تنظیم فرمت صریح postgresql+psycopg ...'
-        # KEPT: as in setup.bat, this override is reset at the start of the next attempt.
-        $env:ALEMBIC_DB_URL = $pgDsn.Replace('postgresql://', 'postgresql+psycopg://')
-    } else {
-        Write-Host '        - اقدام تعمیر ۲: انطباق سرشاخه با alembic.ini ...'
-        Invoke-Quiet $PyCmd @('-m', 'alembic', '--config', $AlembicIni, 'stamp', 'head') | Out-Null
-        Invoke-Quiet $PyCmd @('-m', 'alembic', '--config', $AlembicIni, 'upgrade', 'head') | Out-Null
+$migrationCode = Invoke-Quiet $PyCmd @('-m', 'alembic', 'upgrade', 'head')
+if ($migrationCode -eq 0) {
+    $currentLines = @(& $PyCmd -m alembic current 2>$null)
+    $currentCode = $LASTEXITCODE
+    $firstLine = $currentLines | Where-Object { $_ -and ([string]$_).Trim() } | Select-Object -First 1
+    if (($currentCode -eq 0) -and $firstLine) {
+        $alembicHead = (([string]$firstLine).Trim() -split '\s+')[0]
+        $step6Ok = $true
     }
 }
 if (-not $step6Ok) {

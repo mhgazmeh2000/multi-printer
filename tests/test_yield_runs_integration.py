@@ -12,6 +12,7 @@ from alembic.operations import Operations
 from core.db.connection import ConnectionAdapter
 from core.yield_engine import _load_interval_snapshots, _interval_history_query
 from core.yield_runs import rebuild_yield_runs
+from core.yield_run_maintenance import enable_yield_runs, disable_yield_runs
 from tests.test_yield_query_lab import fixture, oracle
 from tests.test_yield_run_prototype import private_server, psycopg, pgserver
 
@@ -74,7 +75,7 @@ def assert_exact(conn):
 def install_build(conn, uri):
     conn.rollback()
     migrate(uri, 'upgrade')
-    rebuild_yield_runs(conn)
+    enable_yield_runs(conn, approved=True)
     conn.commit()
 
 
@@ -88,7 +89,7 @@ def test_absent_disabled_unready_unknown_and_ready(appdb, monkeypatch):
     migrate(uri, 'upgrade')
     assert conn.execute('SELECT ready FROM yield_run_meta').fetchone() is None
     assert_exact(conn)  # deliberately empty summaries, unready: exact history
-    rebuild_yield_runs(conn)
+    enable_yield_runs(conn, approved=True)
     conn.commit()
     assert_exact(conn)
     conn.execute('UPDATE yield_run_meta SET version=999')
@@ -151,7 +152,7 @@ def test_downgrade_preserves_source_and_reader_falls_back(appdb):
     assert conn.execute("SELECT to_regclass('yield_run_meta')").fetchone()[0] is None
     conn.rollback()
     migrate(uri, 'upgrade')
-    rebuild_yield_runs(conn)
+    enable_yield_runs(conn, approved=True)
     conn.commit()
     assert_exact(conn)
 
@@ -206,7 +207,7 @@ def test_custom_app_schema_migration_and_reader(appdb):
                 migration().upgrade()
         conn.execute('SET search_path=custom_app')
         insert(conn, fixture(7, 500))
-        rebuild_yield_runs(conn)
+        enable_yield_runs(conn, approved=True)
         conn.commit()
         assert_exact(conn)
         with engine.begin() as connection:
@@ -236,7 +237,7 @@ def test_full_migration_chain_roundtrip_and_real_poll_refill_commit_retry(appdb,
     conn.execute('DROP TABLE toner_snapshots_v2')
     conn.commit()
     migrate_chain(uri)
-    rebuild_yield_runs(conn)
+    enable_yield_runs(conn, approved=True)
     conn.commit()
     @contextmanager
     def app_connection(*, commit=False, **kwargs):
@@ -301,7 +302,7 @@ def test_full_migration_chain_roundtrip_and_real_poll_refill_commit_retry(appdb,
     assert _load_interval_snapshots(conn)
     conn.rollback()
     migrate_chain(uri)
-    rebuild_yield_runs(conn)
+    enable_yield_runs(conn, approved=True)
     conn.commit()
 
 
@@ -380,3 +381,186 @@ def test_rebuild_refuses_autocommit(appdb):
     with pytest.raises(ValueError, match='autocommit=False'):
         rebuild_yield_runs(conn)
     conn.raw_connection.autocommit = False
+
+
+def source_objects(conn):
+    return conn.execute("""SELECT
+        (SELECT count(*) FROM pg_trigger WHERE tgrelid='toner_snapshots_v2'::regclass
+         AND tgname LIKE 'yield_runs_%'),
+        to_regclass('yield_runs_snapshot_neighbor') IS NOT NULL""").fetchone()
+
+
+def test_routine_upgrade_never_locks_source_or_installs_writer_overhead(appdb):
+    conn, uri = appdb
+    insert(conn, fixture(7, 200))
+    before = conn.execute('SELECT * FROM toner_snapshots_v2 ORDER BY id').fetchall()
+    conn.rollback()
+    with psycopg.connect(uri) as blocker:
+        # Upgrade must succeed even while another transaction excludes source
+        # access. The old 0009 failed here; lightweight metadata never touches it.
+        blocker.execute('LOCK TABLE toner_snapshots_v2 IN ACCESS EXCLUSIVE MODE')
+        migrate(uri, 'upgrade')
+    assert source_objects(conn) == (0, False)
+    assert conn.execute('SELECT * FROM toner_snapshots_v2 ORDER BY id').fetchall() == before
+    conn.rollback()
+    with pytest.raises(RuntimeError, match='ACTIVATION_REQUIRED'):
+        rebuild_yield_runs(conn)
+    conn.rollback()
+    assert conn.execute('SELECT ready FROM yield_run_meta').fetchone() is None
+    assert_exact(conn)
+
+
+def test_activation_failure_rolls_back_every_object_and_keeps_source(appdb):
+    conn, uri = appdb
+    insert(conn, fixture(31, 500))
+    migrate(uri, 'upgrade')
+    before = conn.execute('SELECT * FROM toner_snapshots_v2 ORDER BY id').fetchall()
+    conn.rollback()
+    def interrupt(phase, info):
+        if phase == 'BUILD_BOUNDARIES_SLOT' and info['ordinal'] == 2:
+            raise RuntimeError('activation-injected')
+    with pytest.raises(RuntimeError, match='activation-injected'):
+        enable_yield_runs(conn, approved=True, progress=interrupt)
+    conn.rollback()
+    assert source_objects(conn) == (0, False)
+    assert conn.execute('SELECT * FROM toner_snapshots_v2 ORDER BY id').fetchall() == before
+    assert conn.execute('SELECT ready FROM yield_run_meta').fetchone() is None
+    assert_exact(conn)
+    # A later explicit, successful activation is atomic and exact.
+    enable_yield_runs(conn, approved=True)
+    conn.commit()
+    assert source_objects(conn) == (5, True)
+    assert conn.execute('SELECT version, ready FROM yield_run_meta').fetchone() == (1, True)
+    assert_exact(conn)
+
+
+def test_activation_lock_failure_is_bounded_and_leaves_no_installation(appdb):
+    conn, uri = appdb
+    migrate(uri, 'upgrade')
+    with psycopg.connect(uri) as blocker:
+        blocker.execute('LOCK TABLE toner_snapshots_v2 IN SHARE MODE')
+        with pytest.raises(Exception) as error:
+            enable_yield_runs(conn, approved=True, timeout_seconds=3)
+        assert error.value.sqlstate == '55P03'
+        conn.rollback()
+    assert source_objects(conn) == (0, False)
+    assert_exact(conn)
+
+
+def test_deactivation_failure_rollback_and_success_remove_only_overhead(appdb, monkeypatch):
+    conn, uri = appdb
+    insert(conn, fixture(7, 300))
+    install_build(conn, uri)
+    before = conn.execute('SELECT * FROM toner_snapshots_v2 ORDER BY id').fetchall()
+    conn.rollback()
+    original = conn.execute
+    def fail(sql, params=()):
+        if sql.startswith('DROP INDEX'):
+            raise RuntimeError('disable-injected')
+        return original(sql, params)
+    with monkeypatch.context() as patch:
+        patch.setattr(conn, 'execute', fail)
+        with pytest.raises(RuntimeError, match='disable-injected'):
+            disable_yield_runs(conn, approved=True)
+    conn.rollback()
+    assert source_objects(conn) == (5, True)
+    assert_exact(conn)
+    disable_yield_runs(conn, approved=True)
+    conn.commit()
+    assert source_objects(conn) == (0, False)
+    assert conn.execute('SELECT * FROM toner_snapshots_v2 ORDER BY id').fetchall() == before
+    assert conn.execute('SELECT ready FROM yield_run_meta').fetchone() is None
+    assert_exact(conn)
+    # Source writes still work; no summary maintenance reappears on its own.
+    conn.execute("UPDATE toner_snapshots_v2 SET source='disabled' WHERE id=2")
+    conn.commit()
+    assert conn.execute('SELECT count(*) FROM yield_run_boundaries').fetchone()[0] == 0
+    assert_exact(conn)
+    enable_yield_runs(conn, approved=True)
+    conn.commit()
+    assert_exact(conn)
+
+
+def test_repeated_upgrade_head_does_not_reactivate_after_deactivation(appdb):
+    conn, uri = appdb
+    conn.execute('DROP TABLE toner_snapshots_v2')
+    conn.commit()
+    migrate_chain(uri)
+    assert source_objects(conn) == (0, False)
+    conn.rollback()
+    enable_yield_runs(conn, approved=True)
+    conn.commit()
+    disable_yield_runs(conn, approved=True)
+    conn.commit()
+    migrate_chain(uri)  # exactly what start/setup run; already at 0009
+    assert source_objects(conn) == (0, False)
+    assert_exact(conn)
+
+
+def test_activation_rejects_existing_installation_and_non_read_committed(appdb):
+    conn, uri = appdb
+    install_build(conn, uri)
+    with pytest.raises(RuntimeError, match='ALREADY_INSTALLED'):
+        enable_yield_runs(conn, approved=True)
+    conn.rollback()
+    assert source_objects(conn) == (5, True)
+    assert_exact(conn)
+    conn.raw_connection.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
+    with pytest.raises(ValueError, match='READ_COMMITTED'):
+        disable_yield_runs(conn, approved=True)
+    conn.rollback()
+    conn.raw_connection.isolation_level = psycopg.IsolationLevel.READ_COMMITTED
+    assert_exact(conn)
+
+
+def test_unready_original_0009_layout_can_be_explicitly_deactivated(appdb):
+    """Compatibility for private pre-merge trials of the original heavy 0009."""
+    conn, uri = appdb
+    insert(conn, fixture(7, 100))
+    migrate(uri, 'upgrade')
+    # The original version installed these objects but never inserted ready meta.
+    script = (ROOT/'alembic/sql/0009_yield_runs_activation.sql').read_text().replace('__APP_SCHEMA__', 'public')
+    for statement in script.split('-- yield-runs-statement')[1:]:
+        conn.execute(statement)
+    conn.commit()
+    assert source_objects(conn) == (5, True)
+    assert conn.execute('SELECT ready FROM yield_run_meta').fetchone() is None
+    conn.rollback()
+    disable_yield_runs(conn, approved=True)
+    conn.commit()
+    assert source_objects(conn) == (0, False)
+    assert conn.execute("SELECT to_regprocedure('yield_run_maintain()')").fetchone()[0] is None
+    assert_exact(conn)
+
+
+def test_rebuild_cannot_mark_ready_after_concurrent_deactivation(appdb):
+    from concurrent.futures import ThreadPoolExecutor
+    from tests.test_yield_run_prototype import wait_for_lock
+    conn, uri = appdb
+    insert(conn, fixture(7, 100))
+    install_build(conn, uri)
+    disabling = ConnectionAdapter(psycopg.connect(uri), backend='postgresql')
+    rebuilding = ConnectionAdapter(psycopg.connect(uri), backend='postgresql')
+    try:
+        disable_yield_runs(disabling, approved=True)  # hold DDL/source lock uncommitted
+        def rebuild():
+            try:
+                rebuilding.execute("SET LOCAL statement_timeout='5s'")
+                rebuild_yield_runs(rebuilding)
+                rebuilding.commit()
+                return 'incorrectly-ready'
+            except RuntimeError as error:
+                rebuilding.rollback()
+                return str(error)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(rebuild)
+            wait_for_lock(conn.raw_connection, rebuilding.raw_connection.info.backend_pid)
+            conn.rollback()
+            disabling.commit()
+            assert pending.result(timeout=6) == 'EXPLICIT_YIELD_MAINTENANCE_ACTIVATION_REQUIRED'
+        assert source_objects(conn) == (0, False)
+        assert conn.execute('SELECT ready FROM yield_run_meta').fetchone() is None
+        assert_exact(conn)
+    finally:
+        disabling.close()
+        rebuilding.close()

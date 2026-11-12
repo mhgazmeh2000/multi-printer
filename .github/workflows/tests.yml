@@ -141,4 +141,4 @@ jobs:
       - name: Panel DOM security regressions
         run: npm test
       - name: Security tests including explicit UTF-8 subprocess IO
-        run: python -m unittest -v tests.test_security_hardening
+        run: python -m unittest -v tests.test_security_hardening tests.test_yield_maintenance_guard

@@ -109,8 +109,22 @@ def rebuild_yield_runs(conn, *, progress=None, max_slots=None):
         raise ValueError("PostgreSQL required")
     if conn.raw_connection.autocommit:
         raise ValueError("Atomic rebuild requires autocommit=False and caller-owned commit/rollback")
+    if conn.execute('SHOW transaction_isolation').fetchone()[0] != 'read committed':
+        raise ValueError('READ_COMMITTED_REBUILD_REQUIRED')
     notify('REBUILD_LOCK')
     conn.execute('LOCK TABLE toner_snapshots_v2 IN ACCESS EXCLUSIVE MODE')
+    # Check under the source lock: deactivation cannot race the ready marker.
+    installed = conn.execute("""SELECT count(*)=5 AND COALESCE(bool_and(tgenabled='O'), false)
+        FROM pg_trigger WHERE tgrelid='toner_snapshots_v2'::regclass AND NOT tgisinternal
+        AND (tgname, tgfoid) IN (
+            ('yield_runs_lock', to_regprocedure('yield_run_lock_slots()')),
+            ('yield_runs_insert', to_regprocedure('yield_run_maintain()')),
+            ('yield_runs_delete', to_regprocedure('yield_run_maintain()')),
+            ('yield_runs_update', to_regprocedure('yield_run_maintain()')),
+            ('yield_runs_truncate', to_regprocedure('yield_run_clear_runs()')))
+        """).fetchone()[0]
+    if not installed:
+        raise RuntimeError('EXPLICIT_YIELD_MAINTENANCE_ACTIVATION_REQUIRED')
     conn.execute('''INSERT INTO yield_run_meta VALUES (true, 1, false)
         ON CONFLICT (singleton) DO UPDATE SET ready=false''')
     conn.execute('TRUNCATE yield_run_boundaries')

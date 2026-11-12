@@ -1,10 +1,10 @@
-"""Install opt-in, transactionally maintained yield run boundaries (initially unready).
+"""Create lightweight, initially unready yield metadata; no source-table DDL.
 
 Revision ID: 0009
 Revises: 0008
 
-No history build in upgrade: the offline atomic rebuild is a separate approved
-maintenance operation. Reader flag defaults OFF. SQLite is intentionally a no-op.
+Source index, writer triggers and initial build belong to explicit approved
+maintenance, NOT Alembic upgrade/startup. SQLite is intentionally a no-op.
 """
 from pathlib import Path
 
@@ -20,9 +20,8 @@ depends_on = None
 def upgrade():
     if op.get_context().dialect.name != 'postgresql':
         return
-    # Bound the exclusive-lock wait, not the history length. DDL is transactional.
+    # No lock/index/trigger on the source table during routine upgrade.
     op.execute("SET LOCAL lock_timeout = '5s'")
-    op.execute('LOCK TABLE toner_snapshots_v2 IN ACCESS EXCLUSIVE MODE')
     script = (Path(__file__).resolve().parents[1] / 'sql/0009_yield_runs.sql').read_text(encoding='utf-8')
     context = op.get_context()
     # Offline generation follows Alembic's default schema; online respects the
@@ -39,10 +38,10 @@ def downgrade():
     op.execute("SET LOCAL lock_timeout = '5s'")
     op.execute('LOCK TABLE toner_snapshots_v2 IN ACCESS EXCLUSIVE MODE')
     for trigger in ('lock', 'insert', 'delete', 'update', 'truncate'):
-        op.execute(f'DROP TRIGGER yield_runs_{trigger} ON toner_snapshots_v2')
-    op.execute('DROP INDEX yield_runs_snapshot_neighbor')
+        op.execute(f'DROP TRIGGER IF EXISTS yield_runs_{trigger} ON toner_snapshots_v2')
+    op.execute('DROP INDEX IF EXISTS yield_runs_snapshot_neighbor')
     # Explicit dependency order: never CASCADE into source/application objects.
     for function in ('clear_runs()', 'maintain()', 'repair_one(bigint)', 'lock_slots()'):
-        op.execute(f'DROP FUNCTION yield_run_{function}')
+        op.execute(f'DROP FUNCTION IF EXISTS yield_run_{function}')
     for table in ('boundaries', 'slots', 'meta'):
         op.execute(f'DROP TABLE yield_run_{table}')

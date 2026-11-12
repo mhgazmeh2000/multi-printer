@@ -141,8 +141,19 @@ if ($dbBackend -ieq 'postgresql') {
     Write-Host ' [OK] اتصال به PostgreSQL پایدار است.'
 
     $env:ALEMBIC_DB_URL = $pgDsn
-    Invoke-Quiet $PyCmd @('-m', 'alembic', 'upgrade', 'head') | Out-Null
+    # Routine upgrade is lightweight for yield runs; explicit maintenance is separate.
+    $migrationCode = Invoke-Quiet $PyCmd @('-m', 'alembic', 'upgrade', 'head')
+    if ($migrationCode -ne 0) {
+        Write-Host '  [ERROR] ارتقای ساختار دیتابیس ناموفق بود؛ برنامه اجرا نمی‌شود. نیاز به بررسی مدیر دارد.'
+        Pop-Location
+        exit 1
+    }
     & $PyCmd 'tools\auto_migrate.py' | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host '  [ERROR] آماده‌سازی داده‌ها ناموفق بود؛ برنامه اجرا نمی‌شود.'
+        Pop-Location
+        exit 1
+    }
 } else {
     Write-Host '        نوع پایگاه‌داده: SQLite (logs.db)'
 }
