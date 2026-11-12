@@ -1929,6 +1929,14 @@ function buildPrinterDetail(p) {
         : 'شناسه‌ی معتبر Chip ID/Serial برای این Cartridge در backend موجود نیست';
       const chipIdHtml = `<div class="supply-chip-id" style="margin-top:6px;font-size:10.5px;color:var(--text2);font-family:var(--mono);direction:ltr;text-align:left;white-space:normal;overflow-wrap:anywhere" title="${escapeHtml(identityTitle)}">${escapeHtml(identityValue)}</div>`;
 
+      // Device-level counter deltas since observed tracking began, not a measured toner yield.
+      const usagePagesText = (typeof td.supply_pages === 'number' && Number.isFinite(td.supply_pages) && td.supply_pages >= 0) ? fmtN(td.supply_pages) : '—';
+      const usageHtml = `<div class="supply-usage" title="شمارندهٔ کل دستگاه برای مشکی و شمارندهٔ تمام‌رنگی برای رنگ‌ها؛ تاریخ شروع ردیابی لزوماً تاریخ نصب واقعی نیست و صفحات، مصرف دقیق تونر نیستند." style="margin-top:6px;font-size:10.5px;color:var(--text2);display:grid;grid-template-columns:auto 1fr;gap:2px 8px">
+            <span>صفحات از شروع ردیابی:</span><strong class="num">${usagePagesText}</strong>
+            <span>شروع ردیابی این کارتریج:</span><span class="num">${escapeHtml(td.first_install_date || '—')}</span>
+            <span>آخرین افزایش شمارنده:</span><span class="num">${escapeHtml(td.last_use_date || '—')}</span>
+          </div>`;
+
       return `
         <article class="supply-card">
           <div class="supply-card-head">
@@ -1947,6 +1955,7 @@ function buildPrinterDetail(p) {
             ${hasLevel ? `<span class="supply-card-level num">${level}%</span>` : ''}
           </div>
           ${chipIdHtml}
+          ${usageHtml}
 
           <div class="supply-card-progress">
             <div class="supply-card-progress-fill${hasLevel ? '' : ' is-empty'}" style="width:${hasLevel ? level : 0}%;background:${hasLevel ? `linear-gradient(90deg,${progressGradient})` : 'linear-gradient(90deg, rgba(123,134,160,.2), rgba(123,134,160,.08))'}"></div>

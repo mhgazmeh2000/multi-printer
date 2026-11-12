@@ -186,6 +186,9 @@ def _load_cartridge_id_state(value):
             state = data.get("cartridge_state")
             if isinstance(state, dict) and state:
                 out["cartridge_state"] = state
+            usage = data.get("supply_usage")
+            if isinstance(usage, dict) and usage:
+                out["supply_usage"] = usage
     except Exception:
         pass
     return out
@@ -202,10 +205,16 @@ def _dump_cartridge_id_state(data: dict):
     state = data.get("cartridge_state")
     if not isinstance(state, dict):
         state = {}
-    if not ids and not pages and not state:
+    usage = data.get("supply_usage")
+    if not isinstance(usage, dict):
+        usage = {}
+    if not ids and not pages and not state and not usage:
         return None
     try:
-        return json.dumps({"ids": ids, "supply_pages": pages, "cartridge_state": state}, ensure_ascii=False)
+        payload = {"ids": ids, "supply_pages": pages, "cartridge_state": state}
+        if usage:
+            payload["supply_usage"] = usage
+        return json.dumps(payload, ensure_ascii=False)
     except Exception:
         return None
 

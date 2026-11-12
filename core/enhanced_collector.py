@@ -1861,6 +1861,11 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
         color = prev_counters.get("full_color", color)
         bw = prev_counters.get("black_white", bw)
 
+    try:
+        _track_supply_usage(ip, prev, toners, yield_counters, cartridge_ids_event,
+                            cartridge_identity_type)
+    except Exception as exc:
+        log.debug("  [%s] supply usage tracking failed: %s", ip, exc)
     vendor_counters = (toshiba_data or {}).get("counters", {})
     return {
         "ip": ip, "name": name, "nickname": nickname, "brand": brand,
@@ -1908,3 +1913,31 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
         "cartridge_signal_quality": cartridge_signal_quality or {},
         "cartridge_identity_type": cartridge_identity_type or {},
     }
+
+
+def _track_supply_usage(ip, prev, toners, counters, cartridge_ids, identity_types):
+    """Count per-cartridge usage on this poll (system counters only; see core/supply_usage.py).
+
+    A new record starts when a colour has no record yet, when a manual reset stored one, or when
+    a genuine chip/serial identity changes. Records are saved with the cartridge state.
+    """
+    from core.supply_usage import advance_record, counter_basis, genuine_cartridge_ids, tracking_lock
+
+    if not isinstance(toners, dict):
+        return
+    with tracking_lock(ip):
+        today = utc_now_iso()[:10]
+        prev = store._prev.get(ip) or prev or {}
+        current = prev.get("supply_usage") if isinstance(prev.get("supply_usage"), dict) else {}
+        genuine = genuine_cartridge_ids(cartridge_ids, identity_types)
+        updated = dict(current)
+        for colour in toners:
+            ck = str(colour).lower()
+            basis = counter_basis(ck, counters)
+            if basis is None and ck not in current:
+                continue
+            new_rec = advance_record(current.get(ck), basis, genuine.get(ck), today)
+            if new_rec != current.get(ck):
+                updated[ck] = new_rec
+        if updated != current:
+            store._prev.set(ip, {"supply_usage": updated})

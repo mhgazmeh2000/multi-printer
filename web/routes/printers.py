@@ -23,7 +23,9 @@ from flask import Blueprint, jsonify, request
 from flask_login import current_user
 
 from core import store
+from core.supply_usage import counter_basis, genuine_cartridge_ids, new_record, usage_view, tracking_lock
 from core.database import add_event
+from core.time_utils import utc_now_iso
 from core.poller import collect, poll_one
 from core.oid.scanner import scan_printer_oids
 from config.settings import POLL_INTERVAL, TONER_ALERT_THRESHOLDS
@@ -177,6 +179,12 @@ def _attach_yield_metadata(printer_data: dict, preloaded_states: dict = None) ->
                             toner["frozen_chip_level"] = int(raw_cand)
                     if not toner.get("last_reset_reason") and ov_entry.get("reset_reason") in ("empty", "dirty"):
                         toner["last_reset_reason"] = ov_entry.get("reset_reason")
+            # System-counted usage of this cartridge (see core/supply_usage.py); not read from the device.
+            _usage_map = prev.get("supply_usage") if isinstance(prev.get("supply_usage"), dict) else {}
+            _usage = usage_view(_usage_map.get(color_lc))
+            toner["supply_pages"] = _usage["pages"]
+            toner["first_install_date"] = _usage["first_install_date"]
+            toner["last_use_date"] = _usage["last_use_date"]
             enriched_toners[color] = toner
         printer_data["toners"] = enriched_toners
     return printer_data
@@ -891,30 +899,42 @@ def toner_reset(ip):
             'chip_quarantined': True,
         }
 
-        new_prev = {
-            **prev,
-            # A manual reset should sync the counter baseline with the current snapshot;
-            # Otherwise, the next poll may make a PRINT or COUNTER_RESET error.
-            'print_total': current_total,
-            'full_color': current_full_color if current_full_color is not None else prev.get('full_color'),
-            'black_white': current_black_white if current_black_white is not None else prev.get('black_white'),
-            # Preserve the real SNMP chip reading (or None on chip-less models) instead of
-            # writing the virtual override level into raw prev['toner_level'].
-            'toner_level': raw_black_level if color == 'black' else prev.get('toner_level'),
-            'manual_override': 1,
-            'override_color': color,
-            'override_base_level': new_level,
-            'override_start_total': current_total,
-            'override_start_toner': new_level,
-            'yield_per_page': learned_yield,
-            'force_estimate': prev.get('force_estimate', 0),
-            'yield_learning_failures': prev.get('yield_learning_failures', 0),
-            'alert_codes': cleared_alert_codes,
-            'last_alert_codes': cleared_alert_codes,
-            'uptime': prev.get('uptime'),
-            'toner_overrides': overrides,
-        }
-        store._prev.set(ip, new_prev)
+        with tracking_lock(ip):
+            # Cartridge replaced by the manual reset: system usage counting restarts for this colour.
+            latest = store._prev.get(ip) or {}
+            usage_map = dict(latest.get('supply_usage') or {}) if isinstance(latest.get('supply_usage'), dict) else {}
+            genuine_ids = genuine_cartridge_ids(printer.get('cartridge_ids'), printer.get('cartridge_identity_type'))
+            usage_map[color] = new_record(
+                counter_basis(color, counters),
+                genuine_ids.get(color),
+                utc_now_iso()[:10],
+            )
+
+            new_prev = {
+                **prev,
+                'supply_usage': usage_map,
+                # A manual reset should sync the counter baseline with the current snapshot;
+                # Otherwise, the next poll may make a PRINT or COUNTER_RESET error.
+                'print_total': current_total,
+                'full_color': current_full_color if current_full_color is not None else prev.get('full_color'),
+                'black_white': current_black_white if current_black_white is not None else prev.get('black_white'),
+                # Preserve the real SNMP chip reading (or None on chip-less models) instead of
+                # writing the virtual override level into raw prev['toner_level'].
+                'toner_level': raw_black_level if color == 'black' else prev.get('toner_level'),
+                'manual_override': 1,
+                'override_color': color,
+                'override_base_level': new_level,
+                'override_start_total': current_total,
+                'override_start_toner': new_level,
+                'yield_per_page': learned_yield,
+                'force_estimate': prev.get('force_estimate', 0),
+                'yield_learning_failures': prev.get('yield_learning_failures', 0),
+                'alert_codes': cleared_alert_codes,
+                'last_alert_codes': cleared_alert_codes,
+                'uptime': prev.get('uptime'),
+                'toner_overrides': overrides,
+            }
+            store._prev.set(ip, new_prev)
 
         username = current_user.username if current_user.is_authenticated else 'سیستم'
         reason_fa_map = {

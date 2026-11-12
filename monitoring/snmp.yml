@@ -217,7 +217,7 @@ modules:
     - name: general_oids_2
       oid: 1.3.6.1.4.1.11.2.3.9.1.1.7.0
       type: gauge
-      help: "PrintGuard printer_hp: general_oids_2 [core/enhanced_collector.py:308]"
+      help: "PrintGuard printer_hp: general_oids_2 [core/enhanced_collector.py:364]"
       # type inferred, not declared in code — enhanced_collector.py:245 same int()/0..100 loop
       # ignore_values: ["-2", "-3"]
     - name: hp_scan_color
@@ -259,13 +259,13 @@ modules:
     - name: general_oids
       oid: 1.3.6.1.4.1.11.2.3.9.4.2.1.4.1.2.1.5.5.1.1
       type: gauge
-      help: "PrintGuard printer_hp: general_oids [core/enhanced_collector.py:306]"
+      help: "PrintGuard printer_hp: general_oids [core/enhanced_collector.py:362]"
       # type inferred, not declared in code — enhanced_collector.py:243-249 int(val) + 0..100 guard
       # ignore_values: ["-2", "-3"]
     - name: hp_npcl_pct_oid
       oid: 1.3.6.1.4.1.11.2.3.9.4.2.1.4.1.2.4.1.2.1.5.5.1.1
       type: gauge
-      help: "PrintGuard printer_hp: hp_npcl_pct_oid [core/enhanced_collector.py:62]"
+      help: "PrintGuard printer_hp: hp_npcl_pct_oid [core/enhanced_collector.py:63]"
       # type inferred, not declared in code — enhanced_collector.py:53 _HP_NPCL_PCT_OID → percent path
       # ignore_values: ["-2", "-3"]
 
@@ -303,13 +303,13 @@ modules:
     - name: canon_alternate_oids
       oid: 1.3.6.1.4.1.1602.1.2.1.1.1.1.1
       type: gauge
-      help: "PrintGuard printer_canon: canon_alternate_oids [core/enhanced_collector.py:83]"
+      help: "PrintGuard printer_canon: canon_alternate_oids [core/enhanced_collector.py:84]"
       # type inferred, not declared in code — enhanced_collector.py:258-264 int(val) + 0..100 guard
       # ignore_values: ["-2", "-3"]
     - name: canon_alternate_oids_2
       oid: 1.3.6.1.4.1.1602.1.2.1.1.1.2.1
       type: gauge
-      help: "PrintGuard printer_canon: canon_alternate_oids_2 [core/enhanced_collector.py:84]"
+      help: "PrintGuard printer_canon: canon_alternate_oids_2 [core/enhanced_collector.py:85]"
       # type inferred, not declared in code — enhanced_collector.py:258-264 same loop
       # ignore_values: ["-2", "-3"]
     - name: canon_serial
@@ -421,7 +421,7 @@ modules:
     - name: brother_drum_oid
       oid: 1.3.6.1.4.1.2435.2.3.9.4.2.1.5.5.1.2
       type: gauge
-      help: "PrintGuard printer_brother: brother_drum_oid [core/enhanced_collector.py:89]"
+      help: "PrintGuard printer_brother: brother_drum_oid [core/enhanced_collector.py:90]"
       # type inferred, not declared in code — enhanced_collector.py:80 BROTHER_DRUM_OID → drum life percent
       # ignore_values: ["-2", "-3"]
 

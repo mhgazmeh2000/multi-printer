@@ -13,7 +13,7 @@
 - با احتساب probeها: 146
 - پیمانهٔ خام (هر رشتهٔ OID-شکل، حتی دُم/پیشوند/probe): 169 — 33 تای آن در ماتریس **نیست** و مبنای `generator.yml` نمی‌شود
 - پایهٔ ساخت که از ماتریس بیرون رفت (`OID_BASE`/`BASE`): 1 — `1.3.6.1.4.1.1129.2.3.50`
-- رشته‌هایی که OID شمرده **نشده‌اند**: 1 جدول در §۶ (کوتاه‌تر از ۷ جزء، یا پیشوند برند‌یابی/regex)
+- رشته‌هایی که OID شمرده **نشده‌اند**: 2 جدول در §۶ (کوتاه‌تر از ۷ جزء، یا پیشوند برند‌یابی/regex)
 
 ### چرا «یک عدد» نیست
 
@@ -118,7 +118,7 @@
 | `1.3.6.1.4.1.2435.2.3.9.4.2.1.5` | walk | brother | code | — | `core/collectors/cartridge_discovery.py:83` |
 | `1.3.6.1.4.1.2435.2.3.9.4.2.1.5.1.1.6.0` | get | val | code | — | `core/collectors/cartridge_id.py:317` |
 | `1.3.6.1.4.1.2435.2.3.9.4.2.1.5.5.1.1` | get | brother_black | code | — | `core/collectors/brother.py:185` (+1) |
-| `1.3.6.1.4.1.2435.2.3.9.4.2.1.5.5.1.2` | get | BROTHER_DRUM_OID | code | — | `core/enhanced_collector.py:89` |
+| `1.3.6.1.4.1.2435.2.3.9.4.2.1.5.5.1.2` | get | BROTHER_DRUM_OID | code | — | `core/enhanced_collector.py:90` |
 | `1.3.6.1.4.1.2435.2.4.3.99.3.1.6.1.2.1` | get | bro_model | identity | str | `core/oid/catalog.py:97` (+2) |
 | `1.3.6.1.4.1.2435.2.4.3.99.3.1.6.1.2.3` | get | bro_serial | identity | str | `core/oid/catalog.py:98` (+2) |
 | `1.3.6.1.4.1.2435.2.4.3.1240.6.5.0` | get | bro_firmware | identity | str | `core/oid/catalog.py:99` (+1) |
@@ -130,11 +130,11 @@
 | `1.3.6.1.4.1.11.2.3.9.1.1.3.1.1.1.1.2.0` | get | hp_model | identity | str | `core/oid/catalog.py:87` (+2) |
 | `1.3.6.1.4.1.11.2.3.9.1.1.3.1.1.1.1.3.0` | get | hp_serial | identity | str | `core/oid/catalog.py:88` (+2) |
 | `1.3.6.1.4.1.11.2.3.9.1.1.3.1.1.1.1.7.0` | get | hp_firmware | identity | str | `core/oid/catalog.py:89` (+1) |
-| `1.3.6.1.4.1.11.2.3.9.1.1.7.0` | get | general_oids | code | — | `core/enhanced_collector.py:308` |
+| `1.3.6.1.4.1.11.2.3.9.1.1.7.0` | get | general_oids | code | — | `core/enhanced_collector.py:364` |
 | `1.3.6.1.4.1.11.2.3.9.4.2.1.1.6` | walk | hp | code | — | `core/collectors/cartridge_discovery.py:78` |
 | `1.3.6.1.4.1.11.2.3.9.4.2.1.4` | walk | hp | code | — | `core/collectors/cartridge_discovery.py:79` |
-| `1.3.6.1.4.1.11.2.3.9.4.2.1.4.1.2.1.5.5.1.1` | get | general_oids | code | — | `core/enhanced_collector.py:306` |
-| `1.3.6.1.4.1.11.2.3.9.4.2.1.4.1.2.4.1.2.1.5.5.1.1` | get | _HP_NPCL_PCT_OID | code | — | `core/enhanced_collector.py:62` (+1) |
+| `1.3.6.1.4.1.11.2.3.9.4.2.1.4.1.2.1.5.5.1.1` | get | general_oids | code | — | `core/enhanced_collector.py:362` |
+| `1.3.6.1.4.1.11.2.3.9.4.2.1.4.1.2.4.1.2.1.5.5.1.1` | get | _HP_NPCL_PCT_OID | code | — | `core/enhanced_collector.py:63` (+1) |
 | `1.3.6.1.4.1.11.2.3.9.6.1.1.3.1` | get | hp_scan_color | counter | int | `core/oid/catalog.py:93` (+1) |
 | `1.3.6.1.4.1.11.2.3.9.6.1.1.5.1` | get | hp_print_color | counter | int | `core/oid/catalog.py:92` (+1) |
 | `1.3.6.1.4.1.11.2.3.9.6.1.1.6.1` | get | hp_copy_color | counter | int | `core/oid/catalog.py:90` (+1) |
@@ -148,8 +148,8 @@
 |---|---|---|---|---|---|
 | `1.3.6.1.4.1.1602.1.1.1.1.0` | get | canon_model | identity | str | `core/oid/catalog.py:76` (+2) |
 | `1.3.6.1.4.1.1602.1.1.1.4.0` | get | canon_firmware | identity | str | `core/oid/catalog.py:78` (+1) |
-| `1.3.6.1.4.1.1602.1.2.1.1.1.1.1` | get | CANON_ALTERNATE_OIDS | code | — | `core/enhanced_collector.py:83` |
-| `1.3.6.1.4.1.1602.1.2.1.1.1.2.1` | get | CANON_ALTERNATE_OIDS | code | — | `core/enhanced_collector.py:84` |
+| `1.3.6.1.4.1.1602.1.2.1.1.1.1.1` | get | CANON_ALTERNATE_OIDS | code | — | `core/enhanced_collector.py:84` |
+| `1.3.6.1.4.1.1602.1.2.1.1.1.2.1` | get | CANON_ALTERNATE_OIDS | code | — | `core/enhanced_collector.py:85` |
 | `1.3.6.1.4.1.1602.1.2.1.4.0` | get | canon_serial | identity | str | `core/oid/catalog.py:77` (+3) |
 | `1.3.6.1.4.1.1602.1.11.1.1.1.3.1` | get | canon_lbp_total | counter | int | `core/oid/catalog.py:84` (+1) |
 | `1.3.6.1.4.1.1602.1.11.1.1.1.3.3` | get | alt_lbp_total | code | — | `core/collectors/canon.py:280` |
@@ -211,17 +211,17 @@
 
 | OID | ماژول | تکرارها |
 |---|---|---|
-| `1.3.6.1.4.1.1129.2.3.50.1.2.3.1.3.1.1` | `printer_toshiba` | `core/snmp/oid_map.py:18` · `core/enhanced_collector.py:1174` |
+| `1.3.6.1.4.1.1129.2.3.50.1.2.3.1.3.1.1` | `printer_toshiba` | `core/snmp/oid_map.py:18` · `core/enhanced_collector.py:1234` |
 | `1.3.6.1.4.1.1129.2.3.50.1.2.3.1.4.1.1` | `printer_toshiba` | `core/snmp/oid_map.py:20` |
-| `1.3.6.1.4.1.1129.2.3.50.1.2.4.1.8.1.1` | `printer_toshiba` | `core/snmp/oid_map.py:19` · `core/enhanced_collector.py:1188` |
+| `1.3.6.1.4.1.1129.2.3.50.1.2.4.1.8.1.1` | `printer_toshiba` | `core/snmp/oid_map.py:19` · `core/enhanced_collector.py:1248` |
 | `1.3.6.1.4.1.1129.2.3.50.1.3.5.1.1.4.1.1` | `printer_toshiba` | `core/snmp/oid_map.py:63` |
 | `1.3.6.1.4.1.1129.2.3.50.1.3.5.1.1.4.1.2` | `printer_toshiba` | `core/snmp/oid_map.py:64` |
 | `1.3.6.1.4.1.1129.2.3.50.1.3.5.1.1.5.1.1` | `printer_toshiba` | `core/snmp/oid_map.py:59` |
 | `1.3.6.1.4.1.1129.2.3.50.1.3.5.1.1.5.1.2` | `printer_toshiba` | `core/snmp/oid_map.py:60` |
-| `1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.2.1.1` | `printer_toshiba` | `core/snmp/oid_map.py:23` · `core/enhanced_collector.py:1085` |
+| `1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.2.1.1` | `printer_toshiba` | `core/snmp/oid_map.py:23` · `core/enhanced_collector.py:1145` |
 | `1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.2.1.2` | `printer_toshiba` | `core/snmp/oid_map.py:29` |
 | `1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.2.1.3` | `printer_toshiba` | `core/snmp/oid_map.py:24` |
-| `1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.2.1.4` | `printer_toshiba` | `core/snmp/oid_map.py:22` · `core/enhanced_collector.py:1053` |
+| `1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.2.1.4` | `printer_toshiba` | `core/snmp/oid_map.py:22` · `core/enhanced_collector.py:1111` |
 | `1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.3.1.1` | `printer_toshiba` | `core/snmp/oid_map.py:25` |
 | `1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.3.1.3` | `printer_toshiba` | `core/snmp/oid_map.py:26` |
 | `1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.4.1.1` | `printer_toshiba` | `core/snmp/oid_map.py:27` |
@@ -230,43 +230,43 @@
 | `1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.9.1.1` | `printer_toshiba` | `core/snmp/oid_map.py:55` |
 | `1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.9.1.3` | `printer_toshiba` | `core/snmp/oid_map.py:56` |
 | `1.3.6.1.4.1.2435.2.3.9.1.1.1.1.3.0` | `printer_brother` | `core/collectors/brother.py:155` |
-| `1.3.6.1.4.1.2435.2.3.9.4.2.1.5.5.1.1` | `printer_brother` | `core/enhanced_collector.py:88` |
-| `1.3.6.1.4.1.2435.2.4.3.99.3.1.6.1.2.1` | `printer_brother` | `core/collectors/brother.py:147` · `core/enhanced_collector.py:1177` |
-| `1.3.6.1.4.1.2435.2.4.3.99.3.1.6.1.2.3` | `printer_brother` | `core/collectors/brother.py:151` · `core/enhanced_collector.py:1191` |
+| `1.3.6.1.4.1.2435.2.3.9.4.2.1.5.5.1.1` | `printer_brother` | `core/enhanced_collector.py:89` |
+| `1.3.6.1.4.1.2435.2.4.3.99.3.1.6.1.2.1` | `printer_brother` | `core/collectors/brother.py:147` · `core/enhanced_collector.py:1237` |
+| `1.3.6.1.4.1.2435.2.4.3.99.3.1.6.1.2.3` | `printer_brother` | `core/collectors/brother.py:151` · `core/enhanced_collector.py:1251` |
 | `1.3.6.1.4.1.2435.2.4.3.1240.6.5.0` | `printer_brother` | `core/collectors/brother.py:154` |
-| `1.3.6.1.4.1.11.2.3.9.1.1.3.1.1.1.1.2.0` | `printer_hp` | `core/collectors/hp.py:193` · `core/enhanced_collector.py:1175` |
-| `1.3.6.1.4.1.11.2.3.9.1.1.3.1.1.1.1.3.0` | `printer_hp` | `core/collectors/hp.py:200` · `core/enhanced_collector.py:1189` |
+| `1.3.6.1.4.1.11.2.3.9.1.1.3.1.1.1.1.2.0` | `printer_hp` | `core/collectors/hp.py:193` · `core/enhanced_collector.py:1235` |
+| `1.3.6.1.4.1.11.2.3.9.1.1.3.1.1.1.1.3.0` | `printer_hp` | `core/collectors/hp.py:200` · `core/enhanced_collector.py:1249` |
 | `1.3.6.1.4.1.11.2.3.9.1.1.3.1.1.1.1.7.0` | `printer_hp` | `core/collectors/hp.py:203` |
-| `1.3.6.1.4.1.11.2.3.9.4.2.1.4.1.2.4.1.2.1.5.5.1.1` | `printer_hp` | `core/enhanced_collector.py:307` |
+| `1.3.6.1.4.1.11.2.3.9.4.2.1.4.1.2.4.1.2.1.5.5.1.1` | `printer_hp` | `core/enhanced_collector.py:363` |
 | `1.3.6.1.4.1.11.2.3.9.6.1.1.3.1` | `printer_hp` | `core/collectors/hp.py:231` |
 | `1.3.6.1.4.1.11.2.3.9.6.1.1.5.1` | `printer_hp` | `core/collectors/hp.py:227` |
 | `1.3.6.1.4.1.11.2.3.9.6.1.1.6.1` | `printer_hp` | `core/collectors/hp.py:229` |
 | `1.3.6.1.4.1.11.2.3.9.6.1.1.9.1` | `printer_hp` | `core/collectors/hp.py:228` |
 | `1.3.6.1.4.1.11.2.3.9.6.1.1.10.1` | `printer_hp` | `core/collectors/hp.py:230` |
 | `1.3.6.1.4.1.11.2.3.9.6.1.1.11.1` | `printer_hp` | `core/collectors/hp.py:232` |
-| `1.3.6.1.4.1.1602.1.1.1.1.0` | `printer_canon` | `core/collectors/canon.py:192` · `core/enhanced_collector.py:1176` |
+| `1.3.6.1.4.1.1602.1.1.1.1.0` | `printer_canon` | `core/collectors/canon.py:192` · `core/enhanced_collector.py:1236` |
 | `1.3.6.1.4.1.1602.1.1.1.4.0` | `printer_canon` | `core/collectors/canon.py:200` |
-| `1.3.6.1.4.1.1602.1.2.1.4.0` | `printer_canon` | `core/collectors/canon.py:197` · `core/enhanced_collector.py:1190` · `core/enhanced_collector.py:751` |
+| `1.3.6.1.4.1.1602.1.2.1.4.0` | `printer_canon` | `core/collectors/canon.py:197` · `core/enhanced_collector.py:1250` · `core/enhanced_collector.py:807` |
 | `1.3.6.1.4.1.1602.1.11.1.1.1.3.1` | `printer_canon` | `core/collectors/canon.py:228` |
 | `1.3.6.1.4.1.1602.1.11.1.1.1.3.4` | `printer_canon` | `core/collectors/canon.py:229` |
-| `1.3.6.1.4.1.1602.1.11.2.1.1.3.1` | `printer_canon` | `core/collectors/canon.py:223` · `core/enhanced_collector.py:676` |
+| `1.3.6.1.4.1.1602.1.11.2.1.1.3.1` | `printer_canon` | `core/collectors/canon.py:223` · `core/enhanced_collector.py:732` |
 | `1.3.6.1.4.1.1602.1.11.2.1.1.3.6` | `printer_canon` | `core/collectors/canon.py:224` |
 | `1.3.6.1.4.1.1602.1.11.2.1.1.3.9` | `printer_canon` | `core/collectors/canon.py:225` |
 | `1.3.6.1.4.1.1602.1.11.2.1.1.3.12` | `printer_canon` | `core/collectors/canon.py:226` |
-| `1.3.6.1.4.1.47206.1.0` | `sensor_ecs100g` | `core/collectors/base.py:1751` · `core/collectors/sensor.py:40` · `core/enhanced_collector.py:999` |
+| `1.3.6.1.4.1.47206.1.0` | `sensor_ecs100g` | `core/collectors/base.py:1752` · `core/collectors/sensor.py:40` · `core/enhanced_collector.py:1057` |
 | `1.3.6.1.4.1.47206.2.0` | `sensor_ecs100g` | `core/collectors/sensor.py:41` |
-| `1.3.6.1.4.1.47206.110.1.2.0` | `sensor_ecs100g` | `core/collectors/base.py:1752` · `core/enhanced_collector.py:1000` |
-| `1.3.6.1.4.1.47206.111.1.2.0` | `sensor_ecs100g` | `core/collectors/base.py:1753` · `core/enhanced_collector.py:1001` |
-| `1.3.6.1.2.1.1.1.0` | `printer_std` | `core/collectors/base.py:1744` · `core/collectors/canon.py:196` · `core/collectors/hp.py:197` · `core/enhanced_collector.py:989` … |
-| `1.3.6.1.2.1.1.2.0` | `printer_std` | `core/collectors/base.py:1743` · `core/enhanced_collector.py:1017` |
+| `1.3.6.1.4.1.47206.110.1.2.0` | `sensor_ecs100g` | `core/collectors/base.py:1753` · `core/enhanced_collector.py:1058` |
+| `1.3.6.1.4.1.47206.111.1.2.0` | `sensor_ecs100g` | `core/collectors/base.py:1754` · `core/enhanced_collector.py:1059` |
+| `1.3.6.1.2.1.1.1.0` | `printer_std` | `core/collectors/base.py:1745` · `core/collectors/canon.py:196` · `core/collectors/hp.py:197` · `core/enhanced_collector.py:1047` … |
+| `1.3.6.1.2.1.1.2.0` | `printer_std` | `core/collectors/base.py:1744` · `core/enhanced_collector.py:1075` |
 | `1.3.6.1.2.1.1.3.0` | `printer_std` | `core/collectors/brother.py:144` · `core/collectors/canon.py:154` · `core/collectors/hp.py:189` · `core/collectors/sensor.py:42` … |
-| `1.3.6.1.2.1.1.5.0` | `printer_std` | `core/collectors/brother.py:149` · `core/enhanced_collector.py:1178` · `core/enhanced_collector.py:646` |
-| `1.3.6.1.2.1.43.5.1.1.16.1` | `printer_std` | `core/collectors/brother.py:148` · `core/collectors/canon.py:194` · `core/collectors/hp.py:195` · `core/enhanced_collector.py:1173` |
-| `1.3.6.1.2.1.43.5.1.1.17.1` | `printer_std` | `core/collectors/brother.py:152` · `core/collectors/canon.py:199` · `core/collectors/hp.py:202` · `core/enhanced_collector.py:1187` … |
+| `1.3.6.1.2.1.1.5.0` | `printer_std` | `core/collectors/brother.py:149` · `core/enhanced_collector.py:1238` · `core/enhanced_collector.py:702` |
+| `1.3.6.1.2.1.43.5.1.1.16.1` | `printer_std` | `core/collectors/brother.py:148` · `core/collectors/canon.py:194` · `core/collectors/hp.py:195` · `core/enhanced_collector.py:1233` |
+| `1.3.6.1.2.1.43.5.1.1.17.1` | `printer_std` | `core/collectors/brother.py:152` · `core/collectors/canon.py:199` · `core/collectors/hp.py:202` · `core/enhanced_collector.py:1247` … |
 | `1.3.6.1.2.1.43.6.1.1.3.1.1` | `printer_std` | `core/collectors/brother.py:246` · `core/collectors/canon.py:405` · `core/collectors/hp.py:297` |
 | `1.3.6.1.2.1.43.10.2.1.4.1.1` | `printer_std` | `core/collectors/brother.py:157` · `core/collectors/brother.py:164` · `core/collectors/canon.py:216` · `core/collectors/canon.py:297` … |
-| `1.3.6.1.2.1.43.10.2.1.4.1.2` | `printer_std` | `core/collectors/brother.py:179` · `core/collectors/canon.py:217` · `core/enhanced_collector.py:674` · `core/enhanced_collector.py:1084` |
-| `1.3.6.1.2.1.43.10.2.1.4.1.3` | `printer_std` | `core/enhanced_collector.py:675` |
+| `1.3.6.1.2.1.43.10.2.1.4.1.2` | `printer_std` | `core/collectors/brother.py:179` · `core/collectors/canon.py:217` · `core/enhanced_collector.py:730` · `core/enhanced_collector.py:1144` |
+| `1.3.6.1.2.1.43.10.2.1.4.1.3` | `printer_std` | `core/enhanced_collector.py:731` |
 | `1.3.6.1.2.1.43.11.1.1.6.1.1` | `printer_std` | `core/collectors/cartridge_id.py:333` · `core/collectors/cartridge_id.py:346` |
 
 ## ۵. یتیم‌ها
@@ -290,6 +290,7 @@
 
 | پیشوند | نمونهٔ محل | چرا شمرده نشد |
 |---|---|---|
+| `127.0.0.1` | `tools/yield_copy_stage2.py:306` · `tools/yield_copy_stage2.py:324` | یا پیشوند برندیابی است یا «دُم» یک f-string/تابع ⇒ OID کاملِ یک برگ نیست |
 | `172.16.25` | `web/routes/discover.py:92` | یا پیشوند برندیابی است یا «دُم» یک f-string/تابع ⇒ OID کاملِ یک برگ نیست |
 
 از کاتالوگ، **22** OID فقط در `OID_CATALOG` آمده و در collectorها مستقیم نوشته نشده — اینها هم در ماتریس‌اند (کاتالوگ بخشی از قرارداد است).
@@ -300,4 +301,4 @@
 - نام متریک در generator از ستون «برچسب/کلید» می‌آید؛ اگر برچسب یک کلمهٔ مبهم باشد (نام برند یا کوتاه‌تر از ۶ حرف)، نام ظرف پیشوند می‌شود (`brother` داخل `CANDIDATE_SUBTREES` ⇒ `candidate_subtrees_brother`).
 - یتیم‌های §۵ در generator فقط **کامنت**‌اند (probe-only) و گیت مراقب است که متریک زنده نشوند؛ پوششِ یک یتیم با walk زیر درختش مجاز است (std: `43.11.1.1`).
 - OID تازه: اول کد (کاتالوگ/collector)، بعد `--write`. سند هیچ‌وقت جلوتر از کد نمی‌رود.
-<!-- sha256:ebb9a19a9a33 · tools/build_oid_matrix.py -->
+<!-- sha256:0c460668ef01 · tools/build_oid_matrix.py -->
