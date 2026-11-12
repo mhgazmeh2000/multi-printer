@@ -1,0 +1,63 @@
+{
+  "evidence_source": "local sandbox tests on owned disposable PostgreSQL and SQLite; no production connection",
+  "branch": "arena/45f4c530-multi-printer",
+  "parent_commit": "d6c3aceec8affce7a89e4a2de8f0cd83937d38b4",
+  "production_changed": false,
+  "supply_usage_patch_applied": false,
+  "ordinary_upgrade": {
+    "revision": "0009",
+    "creates": ["three empty metadata tables", "index on empty boundaries table"],
+    "source_table_lock": false,
+    "source_index_or_triggers": false,
+    "rebuild": false,
+    "proof": "upgrade succeeds while a second connection holds ACCESS EXCLUSIVE on source; source rows and absence of writer objects verified"
+  },
+  "explicit_maintenance": {
+    "cli": "python -m tools.yield_runs_maintenance enable|disable --approve-maintenance",
+    "approval_required_before_config_or_connection": true,
+    "reader_must_be_off_in_cli": true,
+    "one_caller_owned_transaction": true,
+    "source_index_triggers_and_rebuild_atomic": true,
+    "read_committed_required": true,
+    "lock_wait_seconds": 1,
+    "per_statement_max_seconds": 120,
+    "work_budget_max_seconds": 600,
+    "commit_outcome_not_blindly_retried": true,
+    "deactivation_preserves_source_and_alembic_revision": true,
+    "subsequent_upgrade_head_cannot_reactivate": true,
+    "old_unreleased_0009_installations_require_explicit_deactivation": true,
+    "rebuild_cannot_mark_ready_without_enabled_correct_triggers": true,
+    "trigger_check_is_under_source_lock": true
+  },
+  "startup_failure_handling": {
+    "start_exits_on_migration_or_auto_import_error": true,
+    "setup_exits_on_upgrade_or_current_revision_error": true,
+    "automatic_stamp_head_removed": true,
+    "utf8_bom_preserved": true,
+    "powershell_execution_proof": "5 subprocess tests added to existing Windows/Python 3.14 CI job; skipped locally because PowerShell is absent; CI result recorded separately"
+  },
+  "focused_final": {
+    "passed": 344,
+    "skipped": 20,
+    "deselected": 1,
+    "passed_subtests": 303,
+    "elapsed_seconds": 51.70,
+    "command": "DB_BACKEND=sqlite PG_DSN= .venv/bin/python -m pytest -q tests/test_yield*.py tests/test_retention_policy.py tests/test_startup*.py tests/test_*migration*.py tests/test_db_*.py tests/test_cutover_readiness.py -k 'not test_after_cutover_z_is_green'",
+    "deselection_reason": "Historical timestamp/cutover failure already reproduced on base; not a passing full-suite claim"
+  },
+  "additional_security_tests": {"passed": 16, "passed_subtests": 37, "elapsed_seconds": 8.99},
+  "test_split": {"unittest_style_count": 1059, "pytest_testcase_count": 1059, "exactly_one_route": true},
+  "verified_failure_cases": [
+    "no approval: zero SQL and CLI configuration imports refused",
+    "reader on: CLI refuses before opening connection",
+    "activation interrupted during second complete-history slot: source unchanged, no partial index/triggers/functions or ready state",
+    "actual conflicting source lock: SQLSTATE 55P03, no installed overhead after rollback",
+    "deactivation interrupted after dropping triggers: rollback restores active installation",
+    "successful deactivation then ordinary upgrade head: stays inactive",
+    "concurrent deactivation versus rebuild: rebuild refuses ready marker after lock release",
+    "private original heavy/unready 0009 layout: explicit cleanup succeeds",
+    "unknown existing installation and non-read-committed maintenance: fail closed"
+  ],
+  "deployment_ready_for_derived_activation": false,
+  "remaining_gates": ["CI for this commit", "real application-role grants", "sustained writes/commit-p95/WAL SLA", "operational restart/restore/rollback"]
+}

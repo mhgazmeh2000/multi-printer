@@ -1,0 +1,8 @@
+{
+  "scope": "user-supplied existing Windows test-log summary; no server restart",
+  "timeout_found": true,
+  "statement_found": true,
+  "statement_category": "build_boundaries_window",
+  "last_timeout_timestamp_timezone_unspecified": "2026-11-11 13:05:09.737",
+  "exact_statement_within_batch_known": true
+}

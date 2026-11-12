@@ -21,6 +21,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
+from core.db.retry import retry_transaction
+
 log = logging.getLogger(__name__)
 
 RETENTION_DAYS: Dict[str, int] = {
@@ -107,6 +109,13 @@ def purge_table(
         )
         return count
 
+    raw = getattr(conn, "raw_connection", conn)
+    if getattr(conn, "backend", None) == "postgresql" or is_pg_raw:
+        # This function owns and commits each batch. Never retry/roll back an
+        # unrelated caller's transaction that was already open at entry.
+        if raw.info.transaction_status != 0:  # psycopg TransactionStatus.IDLE
+            raise ValueError("Retention requires an idle PostgreSQL connection")
+
     total_deleted = 0
     query_sqlite = f"""
         DELETE FROM {table}
@@ -129,10 +138,20 @@ def purge_table(
         """
 
     while True:
-        cur = conn.execute(query, (cutoff_iso, batch_size))
-        deleted = cur.rowcount if cur.rowcount is not None and cur.rowcount >= 0 else 0
-        if hasattr(conn, "commit"):
-            conn.commit()
+        def delete_batch():
+            # Each batch is already a separately committed transaction. Replay
+            # only this whole batch, never previous successfully committed ones.
+            try:
+                cur = conn.execute(query, (cutoff_iso, batch_size))
+                deleted = cur.rowcount if cur.rowcount is not None and cur.rowcount >= 0 else 0
+                if hasattr(conn, "commit"):
+                    conn.commit()
+                return deleted
+            except Exception:
+                if hasattr(conn, "rollback"):
+                    conn.rollback()
+                raise
+        deleted = retry_transaction(delete_batch)
         total_deleted += deleted
         if deleted < batch_size:
             break

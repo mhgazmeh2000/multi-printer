@@ -63,6 +63,15 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt -r requirements-dev.txt
 
+      # Prototype/app integration own disposable local clusters. pgserver 0.1.4
+      # publishes CPython wheels through 3.12 only (no sdist/3.13 wheel).
+      # Exercise PG proofs on 3.10–3.12; 3.13 still runs the rest of the suite,
+      # with the explicitly optional local-PG tests skipped, not called proven.
+      # This is a test dependency, never an application/Windows dependency.
+      - name: Install isolated yield test PostgreSQL
+        if: matrix.python-version != '3.13'
+        run: python -m pip install pgserver==0.1.4
+
       - name: Setup Node for DOM security regressions
         uses: actions/setup-node@v4
         with:
@@ -132,4 +141,4 @@ jobs:
       - name: Panel DOM security regressions
         run: npm test
       - name: Security tests including explicit UTF-8 subprocess IO
-        run: python -m unittest -v tests.test_security_hardening
+        run: python -m unittest -v tests.test_security_hardening tests.test_yield_maintenance_guard

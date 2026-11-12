@@ -1,0 +1,88 @@
+{
+  "evidence_source": "user-reported Windows isolated-copy run",
+  "report_file_basename": "stage2-summary-20261111T100140Z-ae21da.json",
+  "scope": "approved isolated copy only; rollback-only lab schema",
+  "deployment_ready": false,
+  "production_changed": false,
+  "settings": {
+    "server_version": "17.5",
+    "shared_buffers": "128MB",
+    "work_mem": "4MB",
+    "max_parallel_workers_per_gather": "2",
+    "default_transaction_read_only": "on"
+  },
+  "lab_schema_rolled_back": true,
+  "mutation_timings_include_commit": false,
+  "real_copy_equality_tested": true,
+  "last_stage": "HISTORICAL_BACKFILL_PROBE_ROLLED_BACK",
+  "source_loader_column_types": {
+    "printer_ip": "text",
+    "color": "text",
+    "source": "text",
+    "reject_reason": "text",
+    "timestamp": "text",
+    "cartridge_key": "text",
+    "usage_counter": "int4",
+    "toner_level": "int4",
+    "raw_level": "int4",
+    "valid": "int4",
+    "full_color": "int4",
+    "print_total": "int4",
+    "id": "int8"
+  },
+  "source_index_count": 2,
+  "copy_seconds": 36.2306,
+  "clone_base_bytes": 623345664,
+  "baseline_update_up_to64": {
+    "wall_ms_excluding_commit": 14.626,
+    "exact_equal": null
+  },
+  "boundary_build_mode": "complete_history_per_slot_atomic",
+  "build_slots_completed": 51,
+  "build_slot_seconds": [
+    2.7395, 0.0462, 0.0137, 0.0099, 3.8548, 0.0518, 0.0145,
+    0.009, 4.3701, 4.5959, 5.17, 5.0841, 4.9308, 4.7936,
+    5.1572, 6.4378, 11.5524, 3.3169, 3.4489, 3.8891,
+    5.0012, 5.0946, 3.5751, 4.3056, 4.3073, 4.1443,
+    4.2863, 4.6194, 0.0057, 0.0038, 0.0085, 3.8177,
+    2.8043, 1.8713, 2.175, 3.5859, 4.4869, 9.055,
+    5.9535, 3.7942, 5.3705, 0.1673, 0.0365, 0.1968,
+    5.1556, 3.8291, 3.6535, 2.9608, 2.1313, 2.7883, 4.6258
+  ],
+  "build_slots_total": 51,
+  "build_slot_ordinal": 51,
+  "install_build_seconds": 197.5491,
+  "boundary_rows": 23140,
+  "actual_history_slots": 51,
+  "lab_relation_bytes": {
+    "toner_snapshots_v2": 729145344,
+    "boundaries": 4382720,
+    "slots": 32768
+  },
+  "comparison_slot_ordinal": 51,
+  "exact_ordered_equal": true,
+  "endpoint_rows": 9568,
+  "reference_slot_seconds_max": 13.4209,
+  "warm_full_fleet_reads": [0.291, 0.3368, 0.3719, 0.3709, 0.3454],
+  "proposed_read_goal_met": true,
+  "active_snapshot_scans": [
+    {
+      "Node Type": "Index Scan",
+      "Index Name": "toner_snapshots_v2_pkey",
+      "Actual Rows": 1,
+      "Actual Loops": 9568
+    }
+  ],
+  "server_reader_execution_ms": 316.452,
+  "mutations": {
+    "update_up_to64": {"wall_ms_excluding_commit": 160.528, "exact_equal": true},
+    "delete_latest": {"wall_ms_excluding_commit": 12.839, "exact_equal": true},
+    "move_slot": {"wall_ms_excluding_commit": 19.249, "exact_equal": true},
+    "append": {"wall_ms_excluding_commit": 8.751, "exact_equal": true},
+    "historical_backfill": {"wall_ms_excluding_commit": 13.876, "exact_equal": true}
+  },
+  "trial_completed": true,
+  "isolated_server_stopped": true,
+  "error": null,
+  "status": "STAGE2_TRIAL_COMPLETED"
+}

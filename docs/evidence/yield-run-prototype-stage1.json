@@ -1,0 +1,637 @@
+{
+  "scope": "synthetic local PostgreSQL 16.2 only; not Windows copy or production",
+  "application_path_changed": false,
+  "deployment_ready": false,
+  "test_summary": {
+    "passed": 152,
+    "subtests_passed": 469,
+    "skipped": 0,
+    "scope": "all tests/test_yield*.py plus startup/fast_pull; not the entire suite"
+  },
+  "workloads": {
+    "balanced": {
+      "scope": "local synthetic prototype only",
+      "rows": 2126300,
+      "slots": 48,
+      "plateau_polls": 100,
+      "production_changed": false,
+      "deployment_ready": false,
+      "settings": {
+        "server_version": "16.2",
+        "shared_buffers": "128MB",
+        "work_mem": "4MB",
+        "max_parallel_workers_per_gather": "2",
+        "fsync": "on",
+        "synchronous_commit": "on",
+        "full_page_writes": "on",
+        "statement_timeout": "30s"
+      },
+      "baseline_source_storage_bytes": 325304320,
+      "baseline_writes": {
+        "transactions": 200,
+        "p50_ms": 0.2878,
+        "p95_ms": 0.4145,
+        "total_seconds": 0.06,
+        "wal_bytes": 70264
+      },
+      "baseline_bulk": {
+        "batch_rows": 1000,
+        "operations": {
+          "update": {
+            "wall_ms": 5.4639,
+            "wal_bytes": 564272
+          },
+          "delete": {
+            "wall_ms": 1.1006,
+            "wal_bytes": 59224
+          },
+          "restore_insert": {
+            "wall_ms": 44.35,
+            "wal_bytes": 320552
+          }
+        }
+      },
+      "install_and_build_seconds": 10.1949,
+      "boundary_rows": 21264,
+      "storage_bytes": {
+        "toner_snapshots_v2": 427745280,
+        "boundaries": 3596288,
+        "slots": 32768
+      },
+      "reference_select_wall_seconds": 6.7484,
+      "first_derived_select_wall_seconds": 0.156,
+      "exact_ordered_output_equal": true,
+      "endpoint_rows": 38400,
+      "first_explain": {
+        "execution_ms": 97.347,
+        "planning_ms": 0.479,
+        "endpoint_rows": 38400,
+        "temp_read_blocks": 492,
+        "temp_written_blocks": 493
+      },
+      "warm_reads": [
+        {
+          "wall_seconds": 0.1207,
+          "exact_equal": true
+        },
+        {
+          "wall_seconds": 0.1288,
+          "exact_equal": true
+        },
+        {
+          "wall_seconds": 0.1443,
+          "exact_equal": true
+        },
+        {
+          "wall_seconds": 0.1575,
+          "exact_equal": true
+        },
+        {
+          "wall_seconds": 0.1443,
+          "exact_equal": true
+        }
+      ],
+      "actual_scan_nodes": [
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "meta",
+          "Index Name": "meta_pkey",
+          "Actual Rows": 1,
+          "Actual Loops": 1
+        },
+        {
+          "Node Type": "CTE Scan",
+          "Actual Rows": 1,
+          "Actual Loops": 1
+        },
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "slots",
+          "Index Name": "slots_pkey",
+          "Actual Rows": 48,
+          "Actual Loops": 1
+        },
+        {
+          "Node Type": "Bitmap Heap Scan",
+          "Relation Name": "boundaries",
+          "Actual Rows": 443,
+          "Actual Loops": 48
+        },
+        {
+          "Node Type": "Bitmap Index Scan",
+          "Index Name": "run_lab_boundary_slot",
+          "Actual Rows": 443,
+          "Actual Loops": 48
+        },
+        {
+          "Node Type": "Subquery Scan",
+          "Actual Rows": 38400,
+          "Actual Loops": 1
+        },
+        {
+          "Node Type": "CTE Scan",
+          "Actual Rows": 19200,
+          "Actual Loops": 1
+        },
+        {
+          "Node Type": "CTE Scan",
+          "Actual Rows": 19200,
+          "Actual Loops": 1
+        },
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "toner_snapshots_v2",
+          "Index Name": "toner_snapshots_v2_pkey",
+          "Actual Rows": 1,
+          "Actual Loops": 38400
+        },
+        {
+          "Node Type": "Subquery Scan",
+          "Actual Rows": 0,
+          "Actual Loops": 1
+        },
+        {
+          "Node Type": "CTE Scan",
+          "Actual Rows": 1,
+          "Actual Loops": 1
+        },
+        {
+          "Node Type": "Subquery Scan",
+          "Actual Rows": 0,
+          "Actual Loops": 0
+        },
+        {
+          "Node Type": "Subquery Scan",
+          "Actual Rows": 0,
+          "Actual Loops": 0
+        },
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "toner_snapshots_v2",
+          "Index Name": "run_lab_snapshot_neighbor",
+          "Actual Rows": 0,
+          "Actual Loops": 0
+        },
+        {
+          "Node Type": "Bitmap Heap Scan",
+          "Relation Name": "toner_snapshots_v2",
+          "Actual Rows": 0,
+          "Actual Loops": 0
+        },
+        {
+          "Node Type": "Bitmap Index Scan",
+          "Index Name": "toner_snapshots_v2_pkey",
+          "Actual Rows": 0,
+          "Actual Loops": 0
+        },
+        {
+          "Node Type": "Bitmap Index Scan",
+          "Index Name": "toner_snapshots_v2_pkey",
+          "Actual Rows": 0,
+          "Actual Loops": 0
+        }
+      ],
+      "active_full_snapshot_scans": [],
+      "local_warm_read_goal_met": true,
+      "derived_writes": {
+        "transactions": 200,
+        "p50_ms": 1.1385,
+        "p95_ms": 1.4922,
+        "total_seconds": 0.2361,
+        "wal_bytes": 143912
+      },
+      "equal_after_ingestion": true,
+      "derived_bulk": {
+        "batch_rows": 1000,
+        "operations": {
+          "update": {
+            "wall_ms": 59.7807,
+            "wal_bytes": 754608
+          },
+          "delete": {
+            "wall_ms": 33.1971,
+            "wal_bytes": 339560
+          },
+          "restore_insert": {
+            "wall_ms": 94.6956,
+            "wal_bytes": 636640
+          }
+        }
+      },
+      "equal_after_bulk": true,
+      "cluster_cleanup_completed": true
+    },
+    "dense": {
+      "scope": "local synthetic prototype only",
+      "rows": 2126300,
+      "slots": 48,
+      "plateau_polls": 1,
+      "production_changed": false,
+      "deployment_ready": false,
+      "settings": {
+        "server_version": "16.2",
+        "shared_buffers": "128MB",
+        "work_mem": "4MB",
+        "max_parallel_workers_per_gather": "2",
+        "fsync": "on",
+        "synchronous_commit": "on",
+        "full_page_writes": "on",
+        "statement_timeout": "30s"
+      },
+      "baseline_source_storage_bytes": 325304320,
+      "baseline_writes": {
+        "transactions": 200,
+        "p50_ms": 0.2077,
+        "p95_ms": 0.2712,
+        "total_seconds": 0.0424,
+        "wal_bytes": 70264
+      },
+      "baseline_bulk": {
+        "batch_rows": 1000,
+        "operations": {
+          "update": {
+            "wall_ms": 5.336,
+            "wal_bytes": 564272
+          },
+          "delete": {
+            "wall_ms": 1.1143,
+            "wal_bytes": 59224
+          },
+          "restore_insert": {
+            "wall_ms": 45.213,
+            "wal_bytes": 320528
+          }
+        }
+      },
+      "install_and_build_seconds": 19.4474,
+      "boundary_rows": 2126300,
+      "storage_bytes": {
+        "toner_snapshots_v2": 427745280,
+        "boundaries": 383737856,
+        "slots": 32768
+      },
+      "reference_select_wall_seconds": 8.3324,
+      "first_derived_select_wall_seconds": 0.0871,
+      "exact_ordered_output_equal": true,
+      "endpoint_rows": 19200,
+      "first_explain": {
+        "execution_ms": 55.095,
+        "planning_ms": 0.589,
+        "endpoint_rows": 19200,
+        "temp_read_blocks": 0,
+        "temp_written_blocks": 0
+      },
+      "warm_reads": [
+        {
+          "wall_seconds": 0.068,
+          "exact_equal": true
+        },
+        {
+          "wall_seconds": 0.0733,
+          "exact_equal": true
+        },
+        {
+          "wall_seconds": 0.0711,
+          "exact_equal": true
+        },
+        {
+          "wall_seconds": 0.0767,
+          "exact_equal": true
+        },
+        {
+          "wall_seconds": 0.055,
+          "exact_equal": true
+        }
+      ],
+      "actual_scan_nodes": [
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "meta",
+          "Index Name": "meta_pkey",
+          "Actual Rows": 1,
+          "Actual Loops": 1
+        },
+        {
+          "Node Type": "CTE Scan",
+          "Actual Rows": 1,
+          "Actual Loops": 1
+        },
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "slots",
+          "Index Name": "slots_pkey",
+          "Actual Rows": 48,
+          "Actual Loops": 1
+        },
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "boundaries",
+          "Index Name": "run_lab_boundary_slot",
+          "Actual Rows": 400,
+          "Actual Loops": 48
+        },
+        {
+          "Node Type": "Subquery Scan",
+          "Actual Rows": 19200,
+          "Actual Loops": 1
+        },
+        {
+          "Node Type": "CTE Scan",
+          "Actual Rows": 19200,
+          "Actual Loops": 1
+        },
+        {
+          "Node Type": "CTE Scan",
+          "Actual Rows": 19200,
+          "Actual Loops": 1
+        },
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "toner_snapshots_v2",
+          "Index Name": "toner_snapshots_v2_pkey",
+          "Actual Rows": 1,
+          "Actual Loops": 19200
+        },
+        {
+          "Node Type": "Subquery Scan",
+          "Actual Rows": 0,
+          "Actual Loops": 1
+        },
+        {
+          "Node Type": "CTE Scan",
+          "Actual Rows": 1,
+          "Actual Loops": 1
+        },
+        {
+          "Node Type": "Subquery Scan",
+          "Actual Rows": 0,
+          "Actual Loops": 0
+        },
+        {
+          "Node Type": "Subquery Scan",
+          "Actual Rows": 0,
+          "Actual Loops": 0
+        },
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "toner_snapshots_v2",
+          "Index Name": "run_lab_snapshot_neighbor",
+          "Actual Rows": 0,
+          "Actual Loops": 0
+        },
+        {
+          "Node Type": "Bitmap Heap Scan",
+          "Relation Name": "toner_snapshots_v2",
+          "Actual Rows": 0,
+          "Actual Loops": 0
+        },
+        {
+          "Node Type": "Bitmap Index Scan",
+          "Index Name": "toner_snapshots_v2_pkey",
+          "Actual Rows": 0,
+          "Actual Loops": 0
+        },
+        {
+          "Node Type": "Bitmap Index Scan",
+          "Index Name": "toner_snapshots_v2_pkey",
+          "Actual Rows": 0,
+          "Actual Loops": 0
+        }
+      ],
+      "active_full_snapshot_scans": [],
+      "local_warm_read_goal_met": true,
+      "derived_writes": {
+        "transactions": 200,
+        "p50_ms": 0.9207,
+        "p95_ms": 1.2511,
+        "total_seconds": 0.1929,
+        "wal_bytes": 877048
+      },
+      "equal_after_ingestion": true,
+      "derived_bulk": {
+        "batch_rows": 1000,
+        "operations": {
+          "update": {
+            "wall_ms": 70.2118,
+            "wal_bytes": 1691880
+          },
+          "delete": {
+            "wall_ms": 33.7623,
+            "wal_bytes": 399496
+          },
+          "restore_insert": {
+            "wall_ms": 95.2636,
+            "wal_bytes": 931896
+          }
+        }
+      },
+      "equal_after_bulk": true,
+      "cluster_cleanup_completed": true
+    },
+    "idle": {
+      "scope": "local synthetic prototype only",
+      "rows": 2126300,
+      "slots": 48,
+      "plateau_polls": 3000000,
+      "production_changed": false,
+      "deployment_ready": false,
+      "settings": {
+        "server_version": "16.2",
+        "shared_buffers": "128MB",
+        "work_mem": "4MB",
+        "max_parallel_workers_per_gather": "2",
+        "fsync": "on",
+        "synchronous_commit": "on",
+        "full_page_writes": "on",
+        "statement_timeout": "30s"
+      },
+      "baseline_source_storage_bytes": 325304320,
+      "baseline_writes": {
+        "transactions": 200,
+        "p50_ms": 0.2376,
+        "p95_ms": 0.3915,
+        "total_seconds": 0.0515,
+        "wal_bytes": 70264
+      },
+      "baseline_bulk": {
+        "batch_rows": 1000,
+        "operations": {
+          "update": {
+            "wall_ms": 4.665,
+            "wal_bytes": 564272
+          },
+          "delete": {
+            "wall_ms": 1.2933,
+            "wal_bytes": 59224
+          },
+          "restore_insert": {
+            "wall_ms": 46.6753,
+            "wal_bytes": 320528
+          }
+        }
+      },
+      "install_and_build_seconds": 9.4442,
+      "boundary_rows": 48,
+      "storage_bytes": {
+        "toner_snapshots_v2": 427745280,
+        "boundaries": 49152,
+        "slots": 32768
+      },
+      "reference_select_wall_seconds": 6.5635,
+      "first_derived_select_wall_seconds": 0.0024,
+      "exact_ordered_output_equal": true,
+      "endpoint_rows": 96,
+      "first_explain": {
+        "execution_ms": 0.49,
+        "planning_ms": 0.45,
+        "endpoint_rows": 96,
+        "temp_read_blocks": 0,
+        "temp_written_blocks": 0
+      },
+      "warm_reads": [
+        {
+          "wall_seconds": 0.0016,
+          "exact_equal": true
+        },
+        {
+          "wall_seconds": 0.0016,
+          "exact_equal": true
+        },
+        {
+          "wall_seconds": 0.0015,
+          "exact_equal": true
+        },
+        {
+          "wall_seconds": 0.0016,
+          "exact_equal": true
+        },
+        {
+          "wall_seconds": 0.0017,
+          "exact_equal": true
+        }
+      ],
+      "actual_scan_nodes": [
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "meta",
+          "Index Name": "meta_pkey",
+          "Actual Rows": 1,
+          "Actual Loops": 1
+        },
+        {
+          "Node Type": "CTE Scan",
+          "Actual Rows": 1,
+          "Actual Loops": 1
+        },
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "slots",
+          "Actual Rows": 48,
+          "Actual Loops": 1
+        },
+        {
+          "Node Type": "Seq Scan",
+          "Relation Name": "boundaries",
+          "Actual Rows": 1,
+          "Actual Loops": 48
+        },
+        {
+          "Node Type": "Subquery Scan",
+          "Actual Rows": 96,
+          "Actual Loops": 1
+        },
+        {
+          "Node Type": "CTE Scan",
+          "Actual Rows": 48,
+          "Actual Loops": 1
+        },
+        {
+          "Node Type": "CTE Scan",
+          "Actual Rows": 48,
+          "Actual Loops": 1
+        },
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "toner_snapshots_v2",
+          "Index Name": "toner_snapshots_v2_pkey",
+          "Actual Rows": 1,
+          "Actual Loops": 96
+        },
+        {
+          "Node Type": "Subquery Scan",
+          "Actual Rows": 0,
+          "Actual Loops": 1
+        },
+        {
+          "Node Type": "CTE Scan",
+          "Actual Rows": 1,
+          "Actual Loops": 1
+        },
+        {
+          "Node Type": "Subquery Scan",
+          "Actual Rows": 0,
+          "Actual Loops": 0
+        },
+        {
+          "Node Type": "Subquery Scan",
+          "Actual Rows": 0,
+          "Actual Loops": 0
+        },
+        {
+          "Node Type": "Index Scan",
+          "Relation Name": "toner_snapshots_v2",
+          "Index Name": "run_lab_snapshot_neighbor",
+          "Actual Rows": 0,
+          "Actual Loops": 0
+        },
+        {
+          "Node Type": "Bitmap Heap Scan",
+          "Relation Name": "toner_snapshots_v2",
+          "Actual Rows": 0,
+          "Actual Loops": 0
+        },
+        {
+          "Node Type": "Bitmap Index Scan",
+          "Index Name": "toner_snapshots_v2_pkey",
+          "Actual Rows": 0,
+          "Actual Loops": 0
+        },
+        {
+          "Node Type": "Bitmap Index Scan",
+          "Index Name": "toner_snapshots_v2_pkey",
+          "Actual Rows": 0,
+          "Actual Loops": 0
+        }
+      ],
+      "active_full_snapshot_scans": [],
+      "local_warm_read_goal_met": true,
+      "derived_writes": {
+        "transactions": 200,
+        "p50_ms": 1.0357,
+        "p95_ms": 1.4013,
+        "total_seconds": 0.2204,
+        "wal_bytes": 144032
+      },
+      "equal_after_ingestion": true,
+      "derived_bulk": {
+        "batch_rows": 1000,
+        "operations": {
+          "update": {
+            "wall_ms": 66.3616,
+            "wal_bytes": 742352
+          },
+          "delete": {
+            "wall_ms": 42.4136,
+            "wal_bytes": 336752
+          },
+          "restore_insert": {
+            "wall_ms": 100.5302,
+            "wal_bytes": 636632
+          }
+        }
+      },
+      "equal_after_bulk": true,
+      "cluster_cleanup_completed": true
+    }
+  }
+}

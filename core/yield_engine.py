@@ -18,6 +18,8 @@ so that the migration can be done without risk and the previous data is not corr
 from __future__ import annotations
 
 import json
+from contextvars import ContextVar
+from functools import wraps
 import logging
 import math
 import os
@@ -30,6 +32,8 @@ from core.database import db_connection
 from core.db import BACKEND_POSTGRESQL, UndefinedTable
 from core.db import upsert_sql as _upsert_sql
 from core.db.schema import YIELD_TABLES as _PG_YIELD_TABLES, verify_postgres_tables
+from core.db.retry import retry_transaction, raise_if_retryable
+from core.yield_runs import load_derived_snapshots
 from core.time_utils import as_utc_datetime, utc_now_iso
 from core.yield_estimator import (
     PosteriorYieldDecision,
@@ -132,6 +136,42 @@ def _normalize_replacement_reason(reason: Optional[str]) -> Optional[str]:
 # Sub-percent anchor cache for devices reporting high-resolution supply capacities (max > 100):
 # maps (ip, color) -> (anchor_counter, exact_level_pct, cartridge_key)
 _EXACT_ANCHOR_CACHE: Dict[Tuple[str, str], Tuple[int, float, str]] = {}
+_EXACT_ATTEMPT_CACHE = ContextVar("yield_exact_attempt_cache", default=None)
+_EXACT_SLOT_LOCKS = tuple(threading.RLock() for _ in range(64))
+
+
+def _exact_anchor_cache():
+    local = _EXACT_ATTEMPT_CACHE.get()
+    return _EXACT_ANCHOR_CACHE if local is None else local
+
+
+def _retry_yield_write(function):
+    """Retry the complete DB transaction; publish this slot's cache only after commit.
+
+    Striped process-local locks also prevent a failed attempt from overwriting a
+    concurrent call's sub-percent anchor. Database triggers arbitrate processes.
+    """
+    @wraps(function)
+    def wrapped(**kwargs):
+        key = (kwargs['ip'], (kwargs.get('color') or 'black').lower())
+        kwargs = dict(kwargs)
+        kwargs['timestamp'] = kwargs.get('timestamp') or _now()
+        with _EXACT_SLOT_LOCKS[hash(key) % len(_EXACT_SLOT_LOCKS)]:
+            def attempt():
+                local = {key: _EXACT_ANCHOR_CACHE[key]} if key in _EXACT_ANCHOR_CACHE else {}
+                token = _EXACT_ATTEMPT_CACHE.set(local)
+                try:
+                    result = function(**kwargs)  # returns only after context-manager commit
+                finally:
+                    _EXACT_ATTEMPT_CACHE.reset(token)
+                if key in local:
+                    _EXACT_ANCHOR_CACHE[key] = local[key]
+                else:
+                    _EXACT_ANCHOR_CACHE.pop(key, None)
+                return result
+            return retry_transaction(attempt)
+    return wrapped
+
 
 
 def _now() -> str:
@@ -905,6 +945,7 @@ def _robust_learned_yield(conn, ip: str, color: str, cartridge_key: str,
             (True, cartridge_key, ip, color, int(limit)),
         ).fetchall()
     except Exception as exc:
+        raise_if_retryable(exc)
         log.debug("robust yield query failed: %s", exc)
         return None, 0.0
     if any(r[4] for r in rows) and (ip, color) not in _LEGACY_FALLBACK_WARNED:
@@ -989,7 +1030,8 @@ def _detect_regime_shift(conn, ip: str, color: str, cartridge_key: str,
                ORDER BY id DESC LIMIT ?""",
             (True, cartridge_key, ip, color, int(limit)),
         ).fetchall()
-    except Exception:
+    except Exception as exc:
+        raise_if_retryable(exc)
         return None
     valid_rows = [
         (int(r[0]), max(0.0, float(r[1] or 0.0)), str(r[2] or ""))
@@ -1054,6 +1096,7 @@ def _recent_accepted_estimates(conn, ip: str, color: str, cartridge_key: str, li
             (True, cartridge_key, ip, color, int(limit)),
         ).fetchall()
     except Exception as exc:
+        raise_if_retryable(exc)
         log.debug("recent estimates query failed: %s", exc)
         return []
     return [int(r[0]) for r in rows if r[0]]
@@ -1163,6 +1206,15 @@ def _resolve_interval_prior(
 
 def _load_interval_snapshots(conn, *, ip: Optional[str] = None,
                             color: Optional[str] = None, limit: int = 400) -> list:
+    history_sql, params = _interval_history_query(conn, ip=ip, color=color, limit=limit)
+    derived = load_derived_snapshots(conn, history_sql, params, ip=ip, color=color, limit=limit)
+    if derived is not None:
+        return derived
+    return conn.execute(history_sql, params).fetchall()
+
+
+def _interval_history_query(conn, *, ip: Optional[str] = None,
+                            color: Optional[str] = None, limit: int = 400) -> tuple:
     """Fetch endpoints of recent telemetry runs, not the last N polling rows.
 
     Window functions run in the DB (SQLite and PostgreSQL); at most 2*limit rows
@@ -1196,7 +1248,7 @@ def _load_interval_snapshots(conn, *, ip: Optional[str] = None,
                      "full_color IS NULL)")
         changes = f"{signature} IS DISTINCT FROM LAG({signature}) OVER w"
     params.append(max(1, int(limit)))
-    return conn.execute(f"""
+    return f"""
         WITH marked AS (
             SELECT id, printer_ip, LOWER(color) AS slot_color,
                    LAG(id) OVER w AS previous_id, LEAD(id) OVER w AS next_id,
@@ -1224,7 +1276,7 @@ def _load_interval_snapshots(conn, *, ip: Optional[str] = None,
         FROM toner_snapshots_v2 s JOIN recent r
           ON s.id = r.first_id OR s.id = r.last_id
         WHERE r.changed = 1 AND r.rn <= ? ORDER BY s.id
-    """, params).fetchall()
+    """, params
 
 
 def estimate_cartridge_interval(
@@ -1253,6 +1305,7 @@ def estimate_cartridge_interval(
             fetched = _load_interval_snapshots(conn, ip=ip, color=color_norm, limit=limit)
             snap_rows = [r[2:] for r in fetched]
         except Exception as exc:
+            raise_if_retryable(exc)
             log.debug("estimate_cartridge_interval snapshot query failed for %s/%s: %s", ip, color_norm, exc)
             snap_rows = []
 
@@ -1517,7 +1570,8 @@ def _maybe_close_cycle(conn, state: dict, *, ip: str, color: str, printer_model:
                 pts = [p for p in pts if CYCLE_RATED_BAND[0] * rated_capacity <= p[0] <= CYCLE_RATED_BAND[1] * rated_capacity]
             if pts:
                 final_cycle_yield = int(round(_interpolated_weighted_median(pts)))
-    except Exception:
+    except Exception as exc:
+        raise_if_retryable(exc)
         pass
 
     new_sample_count = int(state.get("sample_count") or 0) + 1
@@ -1542,6 +1596,7 @@ def _maybe_close_cycle(conn, state: dict, *, ip: str, color: str, printer_model:
 _REJECT_DISPLAY_ONLY = "status_coded_level"
 
 
+@_retry_yield_write
 def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartridge_name: str,
                                level, raw_level=None, counters: dict, device_type: str,
                                timestamp: str = None, source: str = "poll",
@@ -1649,9 +1704,9 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
                               "cycle_start_timestamp": None, "zero_reached_counter": None,
                               "zero_reached_timestamp": None})
                 reject = _REJECT_DISPLAY_ONLY
-                _EXACT_ANCHOR_CACHE.pop((ip, color), None)
+                _exact_anchor_cache().pop((ip, color), None)
             elif exact_f is not None and usage_counter is not None and level_i is not None:
-                _EXACT_ANCHOR_CACHE[(ip, color)] = (usage_counter, exact_f, cartridge_key)
+                _exact_anchor_cache()[(ip, color)] = (usage_counter, exact_f, cartridge_key)
             _upsert_state(conn, state)
             _record_snapshot(conn, ip, color, printer_model, cartridge_name, cartridge_key,
                              timestamp, counters, usage_counter, level_i, raw_level, source,
@@ -1693,9 +1748,9 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
                      ip, color, old_key, cartridge_key)
             state.update(_swap_reset_fields(level_i, usage_counter, timestamp))
             if exact_f is not None and usage_counter is not None and level_i is not None:
-                _EXACT_ANCHOR_CACHE[(ip, color)] = (usage_counter, exact_f, cartridge_key)
+                _exact_anchor_cache()[(ip, color)] = (usage_counter, exact_f, cartridge_key)
             else:
-                _EXACT_ANCHOR_CACHE.pop((ip, color), None)
+                _exact_anchor_cache().pop((ip, color), None)
 
         # If we still only have the default and the device itself declares a valid capacity, we use it as a
         # better fallback. We do not override auto_learn/shared/high.
@@ -1776,9 +1831,9 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
                 "updated_at": now,
             })
             if exact_f is not None:
-                _EXACT_ANCHOR_CACHE[(ip, color)] = (usage_counter, exact_f, cartridge_key)
+                _exact_anchor_cache()[(ip, color)] = (usage_counter, exact_f, cartridge_key)
             else:
-                _EXACT_ANCHOR_CACHE.pop((ip, color), None)
+                _exact_anchor_cache().pop((ip, color), None)
             _record_snapshot(conn, ip, color, printer_model, cartridge_name, cartridge_key,
                              timestamp, counters, usage_counter, level_i, raw_level, source,
                              valid=level_i is not None and usage_counter is not None,
@@ -1866,9 +1921,9 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
                 "updated_at": now,
             })
             if exact_f is not None:
-                _EXACT_ANCHOR_CACHE[(ip, color)] = (usage_counter, exact_f, cartridge_key)
+                _exact_anchor_cache()[(ip, color)] = (usage_counter, exact_f, cartridge_key)
             else:
-                _EXACT_ANCHOR_CACHE.pop((ip, color), None)
+                _exact_anchor_cache().pop((ip, color), None)
             _record_snapshot(conn, ip, color, printer_model, cartridge_name, cartridge_key,
                              timestamp, counters, usage_counter, level_i, raw_level, source,
                              valid=False, reject_reason="counter_decreased_anchor_reset")
@@ -1926,9 +1981,9 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
                     "pending_refill_timestamp": None,
                 })
                 if exact_f is not None:
-                    _EXACT_ANCHOR_CACHE[(ip, color)] = (usage_counter, exact_f, cartridge_key)
+                    _exact_anchor_cache()[(ip, color)] = (usage_counter, exact_f, cartridge_key)
                 else:
-                    _EXACT_ANCHOR_CACHE.pop((ip, color), None)
+                    _exact_anchor_cache().pop((ip, color), None)
             else:
                 state.update({
                     "pending_refill_level": level_i,
@@ -1976,7 +2031,7 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
                 "updated_at": now,
             })
             if exact_f is not None:
-                _EXACT_ANCHOR_CACHE[(ip, color)] = (usage_counter, exact_f, cartridge_key)
+                _exact_anchor_cache()[(ip, color)] = (usage_counter, exact_f, cartridge_key)
             _record_snapshot(conn, ip, color, printer_model, cartridge_name, cartridge_key,
                              timestamp, counters, usage_counter, level_i, raw_level, source, valid=True)
             _upsert_state(conn, state)
@@ -2036,9 +2091,9 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
                 "updated_at": now,
             })
             if exact_f is not None:
-                _EXACT_ANCHOR_CACHE[(ip, color)] = (usage_counter, exact_f, cartridge_key)
+                _exact_anchor_cache()[(ip, color)] = (usage_counter, exact_f, cartridge_key)
             else:
-                _EXACT_ANCHOR_CACHE.pop((ip, color), None)
+                _exact_anchor_cache().pop((ip, color), None)
             _record_snapshot(conn, ip, color, printer_model, cartridge_name, cartridge_key,
                              timestamp, counters, usage_counter, level_i, raw_level, source,
                              valid=True, reject_reason="stale_anchor_reset")
@@ -2049,7 +2104,7 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
 
         # High-resolution sub-percent telemetry when SNMP reports raw max > 100
         subpct_drop = None
-        cached_exact = _EXACT_ANCHOR_CACHE.get((ip, color))
+        cached_exact = _exact_anchor_cache().get((ip, color))
         if exact_f is not None and cached_exact is not None:
             c_counter, c_exact_lvl, c_key = cached_exact
             if c_counter == anchor_counter and c_key == cartridge_key and c_exact_lvl - exact_f >= 0.75:
@@ -2195,9 +2250,9 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
                 "anchor_timestamp": timestamp,
             }
             if exact_f is not None:
-                _EXACT_ANCHOR_CACHE[(ip, color)] = (usage_counter, exact_f, cartridge_key)
+                _exact_anchor_cache()[(ip, color)] = (usage_counter, exact_f, cartridge_key)
             else:
-                _EXACT_ANCHOR_CACHE.pop((ip, color), None)
+                _exact_anchor_cache().pop((ip, color), None)
             if keep_existing_capacity:
                 update_payload.update({
                     "yield_per_page": old_yield,
@@ -2217,9 +2272,9 @@ def process_cartridge_snapshot(*, ip: str, color: str, printer_model: str, cartr
             if reject_reason not in ("not_enough_pages_yet", "quantization_1pct_noise"):
                 state.update({"anchor_counter": usage_counter, "anchor_level": level_i, "anchor_timestamp": timestamp})
                 if exact_f is not None:
-                    _EXACT_ANCHOR_CACHE[(ip, color)] = (usage_counter, exact_f, cartridge_key)
+                    _exact_anchor_cache()[(ip, color)] = (usage_counter, exact_f, cartridge_key)
                 else:
-                    _EXACT_ANCHOR_CACHE.pop((ip, color), None)
+                    _exact_anchor_cache().pop((ip, color), None)
 
         state.update({"current_level": level_i, "last_valid_level": level_i, "last_counter": usage_counter, "updated_at": now})
         _record_snapshot(conn, ip, color, printer_model, cartridge_name, cartridge_key,
@@ -2313,6 +2368,7 @@ def process_printer_yield_snapshot(*, ip: str, printer_model: str, counters: dic
     return results
 
 
+@_retry_yield_write
 def register_manual_refill(*, ip: str, color: str, printer_model: str, cartridge_name: str,
                            new_level: int, counters: dict, device_type: str = "unknown",
                            timestamp: str = None,
@@ -2561,7 +2617,7 @@ def register_manual_refill(*, ip: str, color: str, printer_model: str, cartridge
             "cycle_status": new_cyc_status,
             "updated_at": _now(),
         })
-        _EXACT_ANCHOR_CACHE.pop((ip, color), None)
+        _exact_anchor_cache().pop((ip, color), None)
         _record_snapshot(conn, ip, color, printer_model, cartridge_name, cartridge_key,
                          timestamp, counters or {}, usage_counter, level_i, level_i,
                          snap_source, valid=usage_counter is not None,
@@ -2926,7 +2982,7 @@ def compute_yield_per_color(
                     active_key = str(r_state[2])
                 if r_state[3]:
                     state_source = str(r_state[3])
-        except Exception:
+        except Exception as exc:
             if not is_pg:
                 try:
                     r_min = c.execute(
