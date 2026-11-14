@@ -4,7 +4,7 @@
   "private": true,
   "description": "DOM regression tests and pinned sources for locally vendored panel libraries",
   "scripts": {
-    "test": "node --test tests/js/panel_security.test.cjs",
+    "test": "node --test tests/js/*.test.cjs",
     "vendor:panels": "node tools/vendor_panel_libraries.cjs"
   },
   "engines": {
