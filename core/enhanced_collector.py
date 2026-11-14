@@ -1467,7 +1467,7 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
             usage_raw = _read_toshiba_value(ip, community, f"toner_{color_key}_usage", snmp_version, default=None)
             if usage_raw is not None and usage_raw > 0:
                 toners[color_key]["usage"] = usage_raw
-                toners[color_key]["usage_m"] = round(usage_raw / 1_000_000, 2)
+                toners[color_key]["usage_m"] = usage_raw / 1_000_000
 
     # ─── Cartridge name enrichment: if the toner does not have a name, read from the standard MIB ──
     _color_mib_idx = {"black": 1, "cyan": 2, "magenta": 3, "yellow": 4}
