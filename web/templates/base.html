@@ -87,6 +87,7 @@
     {% if load_dashboard_scripts | default(true) %}
     <!-- بارگذاری Sortable قبل از dashboard.js -->
     <script src="{{ url_for('static', filename='js/Sortable.min.js', v=config.get('ASSET_VERSION', '20260609-2')) }}"></script>
+    <script src="{{ url_for('static', filename='js/supply-usage-info.js', v=config.get('ASSET_VERSION', '20260609-2')) }}"></script>
     <script src="{{ url_for('static', filename='js/dashboard.js', v=config.get('ASSET_VERSION', '20260609-2')) }}"></script>
     <script src="{{ url_for('static', filename='js/legacy-mode.js', v=config.get('ASSET_VERSION', '20260609-2')) }}"></script>
     {% endif %}

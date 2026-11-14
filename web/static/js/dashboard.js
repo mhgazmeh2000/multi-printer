@@ -1838,10 +1838,8 @@ function buildPrinterDetail(p) {
       const statusColor = {ok:'var(--green)', low:'var(--yellow)', critical:'var(--red)', empty:'var(--red)', not_supported:'var(--text3)', no_sensor:'var(--text2)', used:'var(--orange, #fb8c00)'}[status] || 'var(--text3)';
       const dotColor = col === 'drum' ? '#ffb74d' : (TCOLORS[col] || '#9e9e9e');
       const progressGradient = col === 'drum' ? '#ffb74d,#fb8c00' : (TGRADS[col] || '#9e9e9e,#757575');
-      const usageValue = (typeof td.usage === 'number' && td.usage > 0) ? td.usage : null;
-      const usageMega = (typeof td.usage_m === 'number' && td.usage_m > 0)
-        ? td.usage_m
-        : (usageValue ? Number((usageValue / 1000000).toFixed(2)) : null);
+      const usageValue = (typeof td.usage === 'number' && Number.isSafeInteger(td.usage) && td.usage >= 0) ? td.usage : null;
+      const usageMega = PrintGuardSupplyUsage.megaText(td.usage, td.usage_m);
       const learnedCapacity = Number(td.capacity_pages || td.yield_per_page || c.yield_per_page || 0);
       const capacitySource = td.capacity_source || c.yield_source || '';
       const yieldConfidence = td.yield_confidence || c.yield_confidence || (capacitySource.includes('default') ? 'low' : 'medium');
@@ -1932,7 +1930,7 @@ function buildPrinterDetail(p) {
       // Device-level counter deltas since observed tracking began, not a measured toner yield.
       const usagePagesText = (typeof td.supply_pages === 'number' && Number.isFinite(td.supply_pages) && td.supply_pages >= 0) ? fmtN(td.supply_pages) : '—';
       const usageHtml = `<div class="supply-usage" title="شمارندهٔ کل دستگاه برای مشکی و شمارندهٔ تمام‌رنگی برای رنگ‌ها؛ تاریخ شروع ردیابی لزوماً تاریخ نصب واقعی نیست و صفحات، مصرف دقیق تونر نیستند." style="margin-top:6px;font-size:10.5px;color:var(--text2);display:grid;grid-template-columns:auto 1fr;gap:2px 8px">
-            <span>صفحات از شروع ردیابی:</span><strong class="num">${usagePagesText}</strong>
+            <span>صفحات از شروع ردیابی: ${PrintGuardSupplyUsage.infoButton(p, col, td)}</span><strong class="num">${usagePagesText}</strong>
             <span>شروع ردیابی این کارتریج:</span><span class="num">${escapeHtml(td.first_install_date || '—')}</span>
             <span>آخرین افزایش شمارنده:</span><span class="num">${escapeHtml(td.last_use_date || '—')}</span>
           </div>`;
@@ -1961,10 +1959,10 @@ function buildPrinterDetail(p) {
             <div class="supply-card-progress-fill${hasLevel ? '' : ' is-empty'}" style="width:${hasLevel ? level : 0}%;background:${hasLevel ? `linear-gradient(90deg,${progressGradient})` : 'linear-gradient(90deg, rgba(123,134,160,.2), rgba(123,134,160,.08))'}"></div>
           </div>
 
-          ${usageValue || usageMega ? `
+          ${usageValue !== null || usageMega !== null ? `
             <div class="supply-card-stats">
-              ${usageValue ? `<div class="supply-stat"><span class="supply-stat-lbl">Dot Count</span><span class="supply-stat-val num">${fmtN(usageValue)}</span></div>` : ''}
-              ${usageMega ? `<div class="supply-stat"><span class="supply-stat-lbl">Mega Dots</span><span class="supply-stat-val num">${usageMega}M</span></div>` : ''}
+              ${usageValue !== null ? `<div class="supply-stat"><span class="supply-stat-lbl">Dot Count</span><span class="supply-stat-val num">${fmtN(usageValue)}</span></div>` : ''}
+              ${usageMega !== null ? `<div class="supply-stat"><span class="supply-stat-lbl">Mega Dots</span><span class="supply-stat-val num">${usageMega}M</span></div>` : ''}
             </div>
           ` : ''}
           ${yieldInfoHtml}
