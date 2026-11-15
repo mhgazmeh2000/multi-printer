@@ -347,7 +347,7 @@ def collect_toshiba(ip: str, name: str, community: str, start: float) -> dict:
             "level": level,
             "status": st,
             "usage": usage,
-            "usage_m": round(usage / 1_000_000, 2),
+            "usage_m": usage / 1_000_000,
             "name": supply_names.get(col, f"{col} toner"),
             "source": source,
         }

@@ -73,3 +73,58 @@ counts, tracking labels, missing values, and inert malicious date strings.
 OID matrix and exporter source references were regenerated together. The runtime exporter
 diff changes only help-text source line references, not metric OIDs or collection behaviour.
 No merge, deployment, server migration or maintenance activation is part of this change.
+
+## Parallel consumption information (after PR19)
+
+The page-count formula, counter bases, records, identity/reset handling and yield engine
+are unchanged. The added information button is read-only and appears only beside CMYK
+supplies on devices explicitly identified as `device_type=color`. Drums, sensors and mono
+or unknown devices do not get this button. It reuses the application's modal styling;
+a lazily created native dialog supplies focus containment, with Escape, close-button and
+backdrop dismissal, and restores focus to a still-connected opener. No UI library, extra
+polling, SNMP call, API request, database migration or consumption history is added.
+
+`usage` remains the authoritative, unrounded integer reported by the collector. Toshiba's
+two collection paths now return `usage_m = usage / 1_000_000` without decimal quantization.
+The existing `usage_m` API field remains a number for compatibility; it is a derived
+floating-point convenience, not an arbitrary-precision replacement for `usage`. Backend
+calculations must use raw `usage`, not the display unit. The UI derives Mega Dots from the
+raw reading in preference to a legacy rounded `usage_m` and rounds to two decimals **only
+for display**. A reported zero is distinct from missing data. Unsafe JavaScript integers
+are not displayed as exact dot counts (the Python/API raw integer is retained).
+
+The popup shows per-colour page-count basis, observed device counters, raw consumption,
+Mega Dots, tracking dates and sample timestamp, with explicit limitations. It does not
+invent a consumption baseline: "consumption since tracking began" is unavailable because
+no independent consumption baseline is stored. Pages using a particular colour are not
+inferred from an interval's dot delta. The actual unit/reset lifecycle of vendor telemetry
+still needs model-specific validation. Snapshot values do not live-refresh inside an open
+dialog. This parallel inspection path never automatically becomes an authoritative input.
+
+The asset version default is bumped; deployments with an explicit `ASSET_VERSION` override
+must update that override or otherwise invalidate cached dashboard assets when deploying.
+The new helper loads before the dashboard renderer. All dynamic popup content uses DOM
+`textContent`; button snapshot attributes are serialized by the DOM rather than hand-built.
+
+### Validation of this addition
+
+Independent Python 3.11 runs (`DB_BACKEND=sqlite PG_DSN=`), without optional local PG lab
+packages installed, compared the unchanged `10cb46a` base against this addition:
+
+- Base full suite: **1212 passed, 22 failed, 133 skipped; 560 subtests passed**.
+- Changed full suite: **1214 passed, 22 failed, 133 skipped; 560 subtests passed**.
+- Failure-ID sets are identical, including all 4 subfailures; full suite is not all green.
+- Focused precision, supply/reset, golden, security, UI, Toshiba, hybrid, yield and OID
+  selection: **127 passed, 1 skipped; 60 subtests passed**.
+- `npm test`: **20 passed**, including colour gating, unrounded source preference,
+  missing/zero/invalid/unsafe counts, safe malicious strings, close/cancel/backdrop,
+  focus restoration, dialog reuse, no network call on opening and asset load order.
+- Native dialog focus trapping/layout still require a real-browser acceptance check;
+  jsdom tests emulate the native show/close API but do not prove browser layout or tab trapping.
+- Test split guard: **1086 unittest-style tests assigned exactly once**; OID document and
+  coverage checks and `git diff --check` passed. No change to the OID matrix was needed.
+
+The precision regression exercises both real Toshiba collection paths and an authenticated
+printer API response with non-round millionths, plus a large raw integer on the fallback
+path. Existing golden output and supply-count/reset tests pass unchanged. No production
+commands or deployment are executed as part of this addition.
