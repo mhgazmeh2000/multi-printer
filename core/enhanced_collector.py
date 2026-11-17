@@ -48,6 +48,7 @@ from core.collectors.base import (
 )
 from core.database import add_event
 from core.time_utils import to_utc_z, utc_now_iso
+from core.counter_diagnostics import timed_counter_read
 
 log = logging.getLogger("PrinterMonitor")
 
@@ -914,7 +915,7 @@ def _read_toshiba_value(ip: str, community: str, key: str, snmp_version: int, de
 
 
 
-def _collect_toshiba_job_data(ip: str, community: str, snmp_version: int, total: int, color: Optional[int]):
+def _collect_toshiba_job_data(ip: str, community: str, snmp_version: int, total: int, color: Optional[int], counter_readings=None):
     """Read Toshiba's proprietary counters to prevent overcount and UI/log completion.
 
     For older models (such as e-STUDIO3540) if the original total OID is not available,
@@ -944,7 +945,8 @@ def _collect_toshiba_job_data(ip: str, community: str, snmp_version: int, total:
     copy_bw = _read_toshiba_value(ip, community, "print_copy_bw", snmp_version, default=0)
     printer_fc = _read_toshiba_value(ip, community, "print_printer_fc", snmp_version, default=0)
     printer_bw = _read_toshiba_value(ip, community, "print_printer_bw", snmp_version, default=0)
-    print_bw_raw = _read_toshiba_value(ip, community, "print_bw", snmp_version, default=None)
+    print_bw_raw = timed_counter_read(counter_readings, "toshiba:print_bw", lambda:
+        _read_toshiba_value(ip, community, "print_bw", snmp_version, default=None))
     twin = _read_toshiba_value(ip, community, "print_twin", snmp_version, default=0)
     fax = _read_toshiba_value(ip, community, "print_fax", snmp_version, default=None)
     list_count = _read_toshiba_value(ip, community, "print_list", snmp_version, default=None)
@@ -1103,6 +1105,8 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
         except Exception as _exc:
             log.error("Persisting corrected brand for %s failed: %s", ip, _exc)
 
+    counter_readings = []  # In-memory only; persisted on uncertain split events.
+
     # The main counters
     # Trying to read total from different OIDs
     total = 0
@@ -1111,7 +1115,8 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
         "1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.2.1.4",  # Toshiba
     ]
     for oid in total_oids:
-        val = snmp_get_with_fallback(ip, oid, community, version=snmp_version, timeout=2.0)
+        val = timed_counter_read(counter_readings, "total:" + oid, lambda:
+            snmp_get_with_fallback(ip, oid, community, version=snmp_version, timeout=2.0))
         if val is not None:
             try:
                 total = int(val)
@@ -1145,7 +1150,8 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
             "1.3.6.1.4.1.1129.2.3.50.1.3.21.6.1.2.1.1",  # Toshiba color
         ]
         for oid in color_oids:
-            val = snmp_get_with_fallback(ip, oid, community, version=snmp_version, timeout=2.0)
+            val = timed_counter_read(counter_readings, "full_color:" + oid, lambda:
+                snmp_get_with_fallback(ip, oid, community, version=snmp_version, timeout=2.0))
             if val is not None:
                 try:
                     color = int(val)
@@ -1192,7 +1198,8 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
     toshiba_vendor_total_failed = False
     if is_toshiba:
         try:
-            toshiba_total = _read_toshiba_value(ip, community, "print_total", snmp_version, default=None)
+            toshiba_total = timed_counter_read(counter_readings, "toshiba:print_total", lambda:
+                _read_toshiba_value(ip, community, "print_total", snmp_version, default=None))
             if toshiba_total is not None and toshiba_total >= 0:
                 total = toshiba_total
             else:
@@ -1204,12 +1211,13 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
                     "  [%s] Toshiba vendor print_total unreadable this poll; keeping previous snapshot",
                     ip,
                 )
-            toshiba_color = _read_toshiba_value(ip, community, "print_fc", snmp_version, default=None)
+            toshiba_color = timed_counter_read(counter_readings, "toshiba:print_fc", lambda:
+                _read_toshiba_value(ip, community, "print_fc", snmp_version, default=None))
             if toshiba_color is not None:
                 color = min(toshiba_color, total) if total is not None and total > 0 else toshiba_color
                 device_type = "color" if color > 0 or device_type == "color" else device_type
             bw = max(0, total - (color or 0)) if total is not None else bw
-            toshiba_data = _collect_toshiba_job_data(ip, community, snmp_version, total, color)
+            toshiba_data = _collect_toshiba_job_data(ip, community, snmp_version, total, color, counter_readings)
             has_baseline = bool((store._prev.get(ip) or {}).get("print_total") is not None)
             if (not total or total <= 0) and not has_baseline and toshiba_data and isinstance(toshiba_data.get("suggested_total"), int) and toshiba_data.get("suggested_total") > 0:
                 # Only use the combination of side counters in the first poll (without baseline).
@@ -1716,7 +1724,8 @@ def collect_enhanced(printer: dict, save_to_db: bool = True) -> dict:
                     supply_names=_current_supply_names or None,
                     uptime=ut, a3_total=a3_total, a4_total=a4_total,
                     poll_timestamp=to_utc_z(datetime.fromtimestamp(start_time, tz=timezone.utc)),
-                    paper_split=(toshiba_data or {}).get("paper_split"))
+                    paper_split=(toshiba_data or {}).get("paper_split"),
+                    counter_readings=counter_readings)
 
     # PrevStore is the counter validator's source of truth. A rejected reading
     # leaves its old total in place (anomaly/overflow); do not pass that reading

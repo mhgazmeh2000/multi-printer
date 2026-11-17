@@ -2822,3 +2822,10 @@ html.light .ug-ratio .seg.bw { background: linear-gradient(90deg, var(--ug-bw-a)
 .supply-info-values dt{color:var(--text2)}
 .supply-info-values dd{margin:0;overflow-wrap:anywhere;unicode-bidi:plaintext}
 @media(max-width:480px){.supply-info-panel{padding:16px}.supply-info-values{grid-template-columns:1fr;gap:3px}.supply-info-values dd{margin-bottom:10px}}
+
+/* Server-cycle indicator: running width is indeterminate, not fake progress. */
+#poll-cycle-label{font-size:10px;color:var(--text3);text-align:center;padding:2px 8px}
+#cbar[data-state="polling"] #cfill{opacity:.55;animation:poll-cycle-pulse 1.5s ease-in-out infinite}
+#cbar[data-state="error"] #cfill{background:var(--red)}
+@keyframes poll-cycle-pulse{50%{opacity:1}}
+@media(prefers-reduced-motion:reduce){#cbar[data-state="polling"] #cfill{animation:none}}

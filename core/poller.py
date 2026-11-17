@@ -26,6 +26,7 @@ Polling cycle:
 import logging
 import threading
 import time
+from datetime import datetime, timezone
 from threading import Lock
 
 from config.settings import POLL_INTERVAL
@@ -376,7 +377,9 @@ def poll_all():
     with _polling_lock:
         # ✅ Status flag for UI: Manual Pull button when cycle is running
         # It shows "Running" status instead of the confusing 409 error.
-        store.poll_stats["is_polling"] = True
+        with store.data_lock:
+            store.poll_stats["is_polling"] = True
+            store.poll_stats["started_at"] = utc_now_iso()
         try:
             with store.printers_lock:
                 current = list(store.PRINTERS)
@@ -420,17 +423,30 @@ def poll_all():
                      f"{store.poll_stats['errors']} errors, "
                      f"next pull in {POLL_INTERVAL}s")
         finally:
-            store.poll_stats["is_polling"] = False
+            with store.data_lock:
+                store.poll_stats["is_polling"] = False
+
+
+def _wait_for_next_poll():
+    """Publish the automatic loop's actual deadline; manual polls do not move it."""
+    with store.data_lock:
+        store.poll_stats["next_poll_at"] = datetime.fromtimestamp(
+            time.time() + POLL_INTERVAL, timezone.utc).isoformat().replace("+00:00", "Z")
+    try:
+        time.sleep(POLL_INTERVAL)
+    finally:
+        with store.data_lock:
+            store.poll_stats["next_poll_at"] = None
 
 
 def polling_loop():
     """Infinite polling loop"""
     # poll_all executes an immediate cycle at startup; This sleep prevents execution
     # Immediately, the second cycle and registration of repeated PRINTs will be done in the first few seconds.
-    time.sleep(POLL_INTERVAL)
+    _wait_for_next_poll()
     while True:
         try:
             poll_all()
         except Exception as e:
             log.error(f"Error in pull loop: {e}")
-        time.sleep(POLL_INTERVAL)
+        _wait_for_next_poll()

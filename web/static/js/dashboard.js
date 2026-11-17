@@ -230,8 +230,6 @@ function sensorValueHtml({ip, kind, port, value, unit, status, fontSize = 16}) {
 // ══════════════════════════════════════════════════
 let allData     = [];
 let allEvents   = [];
-let countdown   = POLL_INT;
-let countTimer  = null;
 let isFirst     = true;
 let serverInfo  = {};
 
@@ -810,6 +808,7 @@ function scheduleFetchRetry() {
 }
 
 function _immediateRefreshIfStale() {
+  _cycleSync?.wake();
   if (_fetchInFlight) return;
   if (Date.now() - _lastFetchOkAt >= 15000) fetchData();
 }
@@ -833,8 +832,10 @@ const STARTUP_WARMUP_INTERVAL_MS = 2500;
 async function fetchLogsInBackground() {
   if (_logsFetchInFlight) return;
   _logsFetchInFlight = true;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
   try {
-    const res = await fetch(`${API}/api/logs/all?limit=500`, { cache: 'no-store' });
+    const res = await fetch(`${API}/api/logs/all?limit=500`, { cache: 'no-store', signal: controller.signal });
     if (res.status === 401 || res.status === 403 || !res.ok) return;
     const lg = await res.json();
     allEvents = lg.events || [];
@@ -858,6 +859,7 @@ async function fetchLogsInBackground() {
   } catch (err) {
     console.warn('Background log fetch skipped:', err);
   } finally {
+    clearTimeout(timeout);
     _logsFetchInFlight = false;
   }
 }
@@ -891,13 +893,15 @@ async function fetchData(opts = {}) {
   // a manual/scheduled fetch cancels the pending timed retry
   if (!silent && _retryTimer) { clearTimeout(_retryTimer); _retryTimer = null; }
   if (!silent) setDot('fetch');
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
   try {
     const responses = await Promise.all([
-      fetch(`${API}/api/printers`, { cache: 'no-store' }),
-      fetch(`${API}/api/status`, { cache: 'no-store' }),
+      fetch(`${API}/api/printers`, { cache: 'no-store', signal: controller.signal }),
+      fetch(`${API}/api/status`, { cache: 'no-store', signal: controller.signal }),
     ]);
     if (responses.some(response => response.status === 401)) {
-      if (countTimer) clearInterval(countTimer);
+      _cycleSync?.stop();
       if (_startupWarmupTimer) { clearTimeout(_startupWarmupTimer); _startupWarmupTimer = null; }
       window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;
       return;
@@ -930,11 +934,11 @@ async function fetchData(opts = {}) {
       _errToastShown = false;
       _lastFetchOkAt = Date.now();
       _hideConnBanner();
-      resetCountdown();
       fetchLogsInBackground();
     } else {
       _lastFetchOkAt = Date.now();
     }
+    resetCountdown(st, pr.meta);
     _scheduleStartupWarmupIfNeeded(pr.meta, st);
   } catch (e) {
     console.error(e);
@@ -945,6 +949,7 @@ async function fetchData(opts = {}) {
       scheduleFetchRetry(); // the Live loop never dies
     }
   } finally {
+    clearTimeout(timeout);
     _fetchInFlight = false;
   }
 }
@@ -3405,7 +3410,7 @@ async function submitManualEvent() {
 // ✅ گزارش فلت: کلیک روی Pull وسط چرخه‌ی خودکار، خطای 409 «Pull already in
 // progress» در کنسول می‌انداخت. حالا «busy» یک حالت عادی است (چرخه فعال
 // است و کاربر منتظر پایان می‌ماند) نه خطا.
-let _pollWatchTimer = null;
+let _cycleSync = null;
 
 function _pollBtn() {
   return document.querySelector('button[onclick="triggerPoll()"]');
@@ -3419,31 +3424,10 @@ function _setPollBtnBusy(busy) {
   b.title = busy ? 'چرخه‌ی پایش در حال اجراست…' : 'Pull دستی';
 }
 
-function _waitPollFinish(maxMs = 150000) {
-  if (_pollWatchTimer) return;      // ناظر از قبل فعال است
-  const startedAt = Date.now();
+function _waitPollFinish() {
   _setPollBtnBusy(true);
-  const tick = async () => {
-    try {
-      const r = await apiFetch(`${API}/api/status`);
-      const s = await r.json().catch(() => ({}));
-      if (s && s.is_polling === false) {
-        _pollWatchTimer = null;
-        _setPollBtnBusy(false);
-        toast('✓ چرخه‌ی پایش کامل شد', 's');
-        fetchData();
-        return;
-      }
-    } catch (_) { /* نوسان شبکه — ناظر را زنده نگه می‌داریم */ }
-    if (Date.now() - startedAt < maxMs) {
-      _pollWatchTimer = setTimeout(tick, 3000);
-    } else {
-      _pollWatchTimer = null;
-      _setPollBtnBusy(false);
-      toast('چرخه‌ی پایش بیش از حد طول کشید؛ بعداً صفحه را تازه کنید', 'e');
-    }
-  };
-  _pollWatchTimer = setTimeout(tick, 3000);
+  // Reuse the automatic-cycle watcher; no second status-polling loop.
+  _cycleSync?.wake();
 }
 
 async function triggerPoll() {
@@ -3485,26 +3469,50 @@ async function triggerPoll() {
   }
 }
 
-function resetCountdown() {
-  countdown = 40;
-  if (countTimer) clearInterval(countTimer);
-  const cfill = document.getElementById('cfill');
-  if (cfill) {
-    cfill.style.transition = 'none';
-    cfill.style.width = '100%';
-    void cfill.offsetWidth;
-    cfill.style.transition = '';
+function resetCountdown(status, meta) {
+  if (!_cycleSync) {
+    _cycleSync = window.PrintGuardPollCycle.create({
+      async readStatus() {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 15000);
+        try {
+          const r = await fetch(`${API}/api/status`, {cache: 'no-store', signal: controller.signal});
+          if (r.status === 401) {
+            _cycleSync.stop();
+            window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;
+          }
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          const s = await r.json();
+          if (s.csrf_token && typeof window.updateCsrfToken === 'function') window.updateCsrfToken(s.csrf_token);
+          return s;
+        } finally { clearTimeout(timeout); }
+      },
+      async refresh() {
+        await fetchData({silent: true});
+        fetchLogsInBackground();
+      },
+      render(view) {
+        const bar = document.getElementById('cbar');
+        const cfill = document.getElementById('cfill');
+        if (bar) {
+          bar.dataset.state = view.state;
+          bar.title = view.text;
+          bar.setAttribute('aria-label', view.text);
+          bar.setAttribute('aria-busy', String(view.state === 'polling'));
+        }
+        if (cfill) {
+          cfill.style.transition = 'none';
+          cfill.style.width = `${view.percent}%`;
+        }
+        const label = document.getElementById('poll-cycle-label');
+        if (label) label.textContent = view.text;
+        _setPollBtnBusy(view.state === 'polling');
+        if (view.state !== 'error') _hideConnBanner();
+      },
+      onError() { _showConnBanner(); },
+    });
   }
-  countTimer = setInterval(() => {
-    countdown = Math.max(0, countdown - 1);
-    const bar = document.getElementById('cfill');
-    if (bar) bar.style.width = (countdown / 40 * 100) + '%';
-    if (countdown <= 0) {
-      clearInterval(countTimer);
-      countTimer = null;
-      fetchData();
-    }
-  }, 1000);
+  _cycleSync.accept(status, meta);
 }
 
 // ══════════════════════════════════════════════════

@@ -44,7 +44,8 @@ _prev_lock = threading.Lock()   # Lock for PrevStore
 
 # Global data
 printer_data = {}          # ip → dict complete printer data
-poll_stats = {"count": 0, "last": None, "errors": 0, "is_polling": False}
+poll_stats = {"count": 0, "last": None, "errors": 0, "is_polling": False,
+              "started_at": None, "next_poll_at": None}
 
 
 # ─── Class store previous values with database backup ──────────────────────
