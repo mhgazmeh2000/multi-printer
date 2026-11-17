@@ -34,6 +34,7 @@
     <div class="meta-chip"><span class="meta-val r" id="m-off">—</span><span>آفلاین</span></div>
     <div class="meta-chip"><span class="meta-val c" id="m-poll">#—</span><span>Pull</span></div>
     <div class="meta-chip"><span class="meta-val" id="m-time" style="font-size:11px">—</span></div>
+    <div class="meta-chip"><span id="poll-cycle-label">در انتظار وضعیت سرور…</span></div>
     {% if current_user.is_authenticated %}
     <div class="meta-chip"><span class="meta-val" id="m-user">{{ username }}</span><span>کاربر</span></div>
     {% endif %}
@@ -122,7 +123,7 @@
     </div>
   </div>
 </header>
-<div id="cbar"><div id="cfill" style="width:100%"></div></div>
+<div id="cbar" role="img" aria-label="در انتظار وضعیت سرور"><div id="cfill" style="width:0%"></div></div>
 
 <!-- APP BODY: sidebar + content -->
 <div class="app-layout">

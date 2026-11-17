@@ -15,6 +15,7 @@ import logging
 from flask import Blueprint, jsonify
 
 from core import store
+from core.time_utils import utc_now_iso
 from config.settings import POLL_INTERVAL
 
 log = logging.getLogger("PrinterMonitor")
@@ -30,7 +31,10 @@ def api_status():
     """Return the application status."""
 
     from flask_wtf.csrf import generate_csrf
+    with store.data_lock:
+        stats = dict(store.poll_stats)
     return jsonify({
+        "server_time": utc_now_iso(),
         "status":        "running",
         "poll_interval": POLL_INTERVAL,
         # Fresh CSRF Token: Dashboard is long-lived page and meta token after
@@ -38,7 +42,7 @@ def api_status():
         # The frontend silently updates the status of the token with each response.
         # Safe to expose on this endpoint: same-origin + logged in + no CORS.
         "csrf_token":    generate_csrf(),
-        **store.poll_stats,
+        **stats,
     })
 
 

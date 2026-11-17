@@ -529,7 +529,7 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
                     toner_levels: dict = None, legacy_toner_color: str = None,
                     cartridge_ids: dict = None, cartridge_supply_pages: dict = None,
                     signal_quality: dict = None,
-                    supply_names: dict = None):
+                    supply_names: dict = None, counter_readings: list = None):
     """
     Log print/alert events with protection against SNMP suspicious data.
 
@@ -1283,6 +1283,16 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
     delta_fc = (full_color - prev_fc) if (full_color is not None and prev_fc is not None) else 0
     delta_bw = (black_white - prev_bw) if (black_white is not None and prev_bw is not None) else 0
     split_delta = delta_fc + delta_bw
+    # Capture evidence BEFORE fallback/invariant code overwrites the split deltas.
+    from core.counter_diagnostics import split_diagnostic
+    def diagnostic(reason):
+        return split_diagnostic(
+            {"total": prev_total, "full_color": prev_fc, "black_white": prev_bw},
+            {"total": total, "full_color": full_color, "black_white": black_white},
+            raw_delta_fc, raw_delta_bw, counter_readings, poll_timestamp,
+            prev.get("updated_at"), reason,
+        )
+    raw_delta_fc, raw_delta_bw = delta_fc, delta_bw
     total_delta = split_delta
     color_unknown = False
     counter_mismatch = False
@@ -1336,6 +1346,7 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
             "estimated": True,
             "overflow_confirmed": True,
             "gap_backfill": True,
+            "counter_diagnostic": diagnostic("overflow_confirmed"),
             **({"paper_split": paper_split} if paper_split and (paper_split.get("large") or paper_split.get("small")) else {}),
             **({"paper_detail": paper_detail} if paper_detail else {}),
             **({"func_split": func_split} if func_split else {}),
@@ -1452,6 +1463,8 @@ def _counters_event(ip: str, total: int, prev: dict, alerts: list, curr_codes: l
             event_data["counter_mismatch"] = True
             event_data["actual_delta"] = actual_delta
             event_data["split_delta"] = split_delta
+        if color_unknown or counter_mismatch:
+            event_data["counter_diagnostic"] = diagnostic("split_unreliable")
         if username:
             event_data["username"] = username
         if poll_timestamp:
