@@ -23,6 +23,7 @@ from flask import Blueprint, jsonify, request
 from flask_login import current_user
 
 from core import store
+from core.request_timing import timing_stage, trace_slow_request, timed_lock
 from core.supply_usage import counter_basis, genuine_cartridge_ids, new_record, usage_view, tracking_lock
 from core.database import add_event
 from core.time_utils import utc_now_iso
@@ -266,63 +267,69 @@ def _build_unpolled_printer_entry(p: dict, prev: dict, state_by_color: dict) -> 
 
 
 @bp.route('/api/printers')
+@trace_slow_request('api_printers')
 def api_printers():
     """Return the printers the current user may see, with their latest data."""
 
-    allowed_offices = user_allowed_offices(current_user)
-    allowed_ips = allowed_printer_ips(current_user)
-    with store.data_lock:
-        snap = [dict(item) for item in store.printer_data.values()]
-    with store.printers_lock:
-        cfg = list(store.PRINTERS)
-    cfg_by_ip = {p.get("ip"): p for p in cfg if p.get("ip")}
-    # admin has full access; allowed_offices for admin should not be empty list
-    # Remove all printers. Restriction is only for non-admin users.
-    if allowed_offices and getattr(current_user, "role", None) != "admin":
-        snap = [d for d in snap if d.get("ip") in allowed_ips]
-        cfg = [p for p in cfg if p.get("ip") in allowed_ips]
+    with timing_stage('snapshot_and_permissions'):
+        allowed_offices = user_allowed_offices(current_user)
+        allowed_ips = allowed_printer_ips(current_user)
+        with timed_lock(store.data_lock, 'data_lock_wait'):
+            snap = [dict(item) for item in store.printer_data.values()]
+        with timed_lock(store.printers_lock, 'printers_lock_wait'):
+            cfg = list(store.PRINTERS)
         cfg_by_ip = {p.get("ip"): p for p in cfg if p.get("ip")}
-    for data in snap:
-        configured = cfg_by_ip.get(data.get("ip")) or {}
-        for key in ("device_type", "brand", "group"):
-            if configured.get(key) and not data.get(key):
-                data[key] = configured[key]
+        # admin has full access; allowed_offices for admin should not be empty list
+        # Remove all printers. Restriction is only for non-admin users.
+        if allowed_offices and getattr(current_user, "role", None) != "admin":
+            snap = [d for d in snap if d.get("ip") in allowed_ips]
+            cfg = [p for p in cfg if p.get("ip") in allowed_ips]
+            cfg_by_ip = {p.get("ip"): p for p in cfg if p.get("ip")}
+        for data in snap:
+            configured = cfg_by_ip.get(data.get("ip")) or {}
+            for key in ("device_type", "brand", "group"):
+                if configured.get(key) and not data.get(key):
+                    data[key] = configured[key]
 
-    all_ips = [ip for ip in (list(cfg_by_ip.keys()) + [d.get("ip") for d in snap]) if ip]
-    store._prev.warm_many(all_ips)
+        all_ips = [ip for ip in (list(cfg_by_ip.keys()) + [d.get("ip") for d in snap]) if ip]
+    with timing_stage('previous_cache'):
+        store._prev.warm_many(all_ips)
 
-    preloaded_states = {}
-    try:
-        from core.yield_engine import get_yield_status
-        for row in get_yield_status():
-            r_ip = row.get("printer_ip")
-            r_color = str(row.get("color") or "").lower()
-            if r_ip and r_color:
-                preloaded_states.setdefault(r_ip, {})[r_color] = row
-    except Exception:
+    with timing_stage('yield_status'):
         preloaded_states = {}
+        try:
+            from core.yield_engine import get_yield_status
+            for row in get_yield_status():
+                r_ip = row.get("printer_ip")
+                r_color = str(row.get("color") or "").lower()
+                if r_ip and r_color:
+                    preloaded_states.setdefault(r_ip, {})[r_color] = row
+        except Exception:
+            preloaded_states = {}
 
-    seen = {d["ip"] for d in snap if d.get("ip")}
-    for p in cfg:
-        p_ip = p.get("ip")
-        if p_ip and p_ip not in seen:
-            snap.append(
-                _build_unpolled_printer_entry(
-                    p,
-                    store._prev.get(p_ip) or {},
-                    preloaded_states.get(p_ip) or {},
+    with timing_stage('metadata'):
+        seen = {d["ip"] for d in snap if d.get("ip")}
+        for p in cfg:
+            p_ip = p.get("ip")
+            if p_ip and p_ip not in seen:
+                snap.append(
+                    _build_unpolled_printer_entry(
+                        p,
+                        store._prev.get(p_ip) or {},
+                        preloaded_states.get(p_ip) or {},
+                    )
                 )
-            )
 
-    snap = [_attach_yield_metadata(d, preloaded_states=preloaded_states) for d in snap]
-    return jsonify({"printers": snap, "meta": {
-        "total": len(cfg),
-        "online": sum(1 for d in snap if d.get("online")),
-        "offline": sum(1 for d in snap if d.get("online") is False),
-        "poll_count": store.poll_stats["count"],
-        "last_poll": store.poll_stats["last"],
-        "poll_interval": POLL_INTERVAL,
-    }})
+        snap = [_attach_yield_metadata(d, preloaded_states=preloaded_states) for d in snap]
+    with timing_stage('serialize'):
+        return jsonify({"printers": snap, "meta": {
+            "total": len(cfg),
+            "online": sum(1 for d in snap if d.get("online")),
+            "offline": sum(1 for d in snap if d.get("online") is False),
+            "poll_count": store.poll_stats["count"],
+            "last_poll": store.poll_stats["last"],
+            "poll_interval": POLL_INTERVAL,
+        }})
 
 
 @bp.route('/api/printer/<path:ip>')

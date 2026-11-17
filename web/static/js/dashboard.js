@@ -791,12 +791,24 @@ function _getConnBanner() {
   const b = document.createElement('div');
   b.id = 'conn-retry-banner';
   b.style.cssText = 'position:fixed;bottom:12px;left:12px;z-index:9999;background:#7f1d1d;color:#fff;padding:8px 14px;border-radius:8px;font-size:12px;box-shadow:0 2px 8px rgba(0,0,0,.35);display:none;direction:rtl;';
-  b.textContent = '⚠ اتصال به سرور قطع شده — تلاش مجدد خودکار…';
+  b.textContent = '⚠ اطلاعات چاپگرها تازه نشده است — تلاش مجدد خودکار…';
   (document.body || document.documentElement).appendChild(b);
   _connBanner = b;
   return b;
 }
-function _showConnBanner() { _getConnBanner().style.display = 'block'; }
+let _printerFetchFailed = false;
+let _statusFetchFailed = false;
+function _showConnBanner() {
+  const banner = _getConnBanner();
+  banner.textContent = _statusFetchFailed
+    ? '⚠ دریافت وضعیت سرور ناموفق بود — تلاش مجدد خودکار…'
+    : '⚠ اطلاعات چاپگرها تازه نشده است — تلاش مجدد خودکار…';
+  banner.style.display = 'block';
+}
+function _syncConnBanner() {
+  if (_printerFetchFailed || _statusFetchFailed) _showConnBanner();
+  else _hideConnBanner();
+}
 function _hideConnBanner() { if (_connBanner) _connBanner.style.display = 'none'; }
 
 function scheduleFetchRetry() {
@@ -888,7 +900,7 @@ function _scheduleStartupWarmupIfNeeded(meta, st) {
 
 async function fetchData(opts = {}) {
   const silent = Boolean(opts && opts.silent);
-  if (_fetchInFlight) return; // prevent simultaneous fetches
+  if (_fetchInFlight || (silent && _retryTimer)) return false; // one fetch; respect printer retry backoff
   _fetchInFlight = true;
   // a manual/scheduled fetch cancels the pending timed retry
   if (!silent && _retryTimer) { clearTimeout(_retryTimer); _retryTimer = null; }
@@ -896,58 +908,51 @@ async function fetchData(opts = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
   try {
-    const responses = await Promise.all([
-      fetch(`${API}/api/printers`, { cache: 'no-store', signal: controller.signal }),
-      fetch(`${API}/api/status`, { cache: 'no-store', signal: controller.signal }),
-    ]);
-    if (responses.some(response => response.status === 401)) {
-      _cycleSync?.stop();
+    const response = await fetch(`${API}/api/printers`, { cache: 'no-store', signal: controller.signal });
+    if (response.status === 401) {
+      _ensurePollCycleSync().stop();
       if (_startupWarmupTimer) { clearTimeout(_startupWarmupTimer); _startupWarmupTimer = null; }
       window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;
-      return;
+      return false;
     }
-    if (responses.some(response => !response.ok)) {
-      throw new Error(`HTTP ${responses.map(r => r.status).join('/')}`);
-    }
-    const [pr, st] = await Promise.all(responses.map(response => response.json()));
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const pr = await response.json();
+    const st = serverInfo || {};
     allData = pr.printers || [];
-    serverInfo = st;
     _dataRevision += 1;
-    // Fresh CSRF token from /api/status — the page stays open for hours and the meta token
-    // expires; this line prevents 400 responses on POSTs (discover, toner_reset, ...).
-    if (st && st.csrf_token) {
-      if (typeof window.updateCsrfToken === 'function') window.updateCsrfToken(st.csrf_token);
-      else window.CSRF_TOKEN = st.csrf_token;
-    }
     updateMeta(pr.meta, st);
     rebuildTabs(allData);
     renderOverviewCards(allData);
     renderAllPrinterPanels(allData);
     renderAccessPanel(st);
     populatePrinterSelect();
+    _printerFetchFailed = false;
+    _retryDelay = RETRY_DELAY_BASE;
+    _errToastShown = false;
+    if (_retryTimer) { clearTimeout(_retryTimer); _retryTimer = null; }
+    _syncConnBanner();
     setDot('on');
     if (!silent) {
       if (!isFirst) toast('آپدیت شد', 's');
       isFirst = false;
-      // success ⇒ reset backoff/banner; the normal cycle continues with resetCountdown
-      _retryDelay = RETRY_DELAY_BASE;
-      _errToastShown = false;
       _lastFetchOkAt = Date.now();
-      _hideConnBanner();
       fetchLogsInBackground();
     } else {
       _lastFetchOkAt = Date.now();
     }
-    resetCountdown(st, pr.meta);
+    _ensurePollCycleSync().markRendered(pr.meta);
     _scheduleStartupWarmupIfNeeded(pr.meta, st);
+    return true;
   } catch (e) {
-    console.error(e);
+    console.warn('Printer snapshot refresh failed:', e.name === 'AbortError' ? 'timeout (30s)' : e);
+    _printerFetchFailed = true;
+    setDot('err');
+    scheduleFetchRetry();
     if (!silent) {
-      setDot('err');
       // toast only for the initial failure — not repeated on every retry (anti-spam)
-      if (!_errToastShown) { toast('خطا در اتصال به سرور', 'e'); _errToastShown = true; }
-      scheduleFetchRetry(); // the Live loop never dies
+      if (!_errToastShown) { toast('اطلاعات چاپگرها تازه نشد؛ تلاش مجدد خودکار', 'e'); _errToastShown = true; }
     }
+    return false;
   } finally {
     clearTimeout(timeout);
     _fetchInFlight = false;
@@ -3469,7 +3474,7 @@ async function triggerPoll() {
   }
 }
 
-function resetCountdown(status, meta) {
+function _ensurePollCycleSync() {
   if (!_cycleSync) {
     _cycleSync = window.PrintGuardPollCycle.create({
       async readStatus() {
@@ -3483,13 +3488,16 @@ function resetCountdown(status, meta) {
           }
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
           const s = await r.json();
-          if (s.csrf_token && typeof window.updateCsrfToken === 'function') window.updateCsrfToken(s.csrf_token);
+          serverInfo = s;
+          if (s.csrf_token) {
+            if (typeof window.updateCsrfToken === 'function') window.updateCsrfToken(s.csrf_token);
+            else window.CSRF_TOKEN = s.csrf_token;
+          }
           return s;
         } finally { clearTimeout(timeout); }
       },
       async refresh() {
-        await fetchData({silent: true});
-        fetchLogsInBackground();
+        if (await fetchData({silent: true})) fetchLogsInBackground();
       },
       render(view) {
         const bar = document.getElementById('cbar');
@@ -3507,12 +3515,17 @@ function resetCountdown(status, meta) {
         const label = document.getElementById('poll-cycle-label');
         if (label) label.textContent = view.text;
         _setPollBtnBusy(view.state === 'polling');
-        if (view.state !== 'error') _hideConnBanner();
+        _statusFetchFailed = view.state === 'error';
+        _syncConnBanner();
       },
-      onError() { _showConnBanner(); },
+      onError() { _statusFetchFailed = true; _syncConnBanner(); },
     });
   }
-  _cycleSync.accept(status, meta);
+  return _cycleSync;
+}
+
+function resetCountdown(status, meta) {
+  _ensurePollCycleSync().accept(status, meta);
 }
 
 // ══════════════════════════════════════════════════
@@ -3961,6 +3974,7 @@ async function loadPrinterDailyChart(ip) {
 // ══════════════════════════════════════════════════
 // INIT
 // ══════════════════════════════════════════════════
+_ensurePollCycleSync().wake();
 fetchData();
 
 // ══════════════════════════════════════════════════
