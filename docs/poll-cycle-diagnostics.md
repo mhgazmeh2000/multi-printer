@@ -66,7 +66,7 @@ The dashboard's former independent 40-second reload is replaced by `poll-cycle.j
 - Compare status against the **rendered printer response's** metadata to handle requests
   straddling a completion. Skipped/failed full refreshes retry until a new snapshot is accepted.
 - Repeated wakes cannot overlap watcher requests. Existing full-printer/log in-flight guards
-  remain. Printer/status full loads and log loads time out at 30s, watcher requests at 15s.
+  remain. Printer and log loads time out at 30s; independent status requests at 15s.
 - Network failures back off to 60s; returning to the tab or receiving an online event wakes the
   watcher. Authentication loss stops it and redirects to login. The manual Pull button shares
   this watcher instead of maintaining a second polling loop.
@@ -101,3 +101,73 @@ colour labels are changed by this work.
 - OID matrix regenerated for source-line shifts only; coverage 136/136, test-split guard
   1,100 unittest-style tests assigned exactly once, and `git diff --check` passed.
 - Real production browser/device acceptance remains a post-deployment step.
+
+
+## Slow printer responses: independent status and bounded diagnostics
+
+Production browser evidence showed `/api/printers` repeatedly cancelled at 30 seconds
+while `/api/status` succeeded. A one-time `pg_stat_activity` snapshot was empty. This
+localizes the failing browser operation, **not** its backend root cause; the snapshot
+cannot exclude earlier SQL, lock waits outside PostgreSQL, or Python CPU work.
+
+The watcher now starts on page load, before the first printer response. Printer
+refresh runs separately from status reads and has its own in-flight guard and retry
+backoff. Neither an unresolved refresh nor a printer timeout suspends status/CSRF
+updates. Status errors still use the watcher's own backoff and auth-loss handling.
+Only a successfully rendered printer response acknowledges its completion metadata;
+this does not reset the server clock. Failed printer reads leave cards, counters and
+their last-update metadata untouched and display an explicit **printer data not
+refreshed** warning. A successful status read must not hide that warning. Conversely,
+a successful printer refresh must not hide a status failure. A silent printer
+recovery clears its own error/backoff too. Logs refresh after successful cycle-driven
+printer refresh, not on failed/skipped attempts. No second automatic printer loop or
+SNMP request is added; manual actions and existing bounded startup warmup remain.
+
+`/api/printers` emits one `Slow request timing: {...}` warning **on exit** if its
+wall-clock duration is at least 5 seconds, including failed requests. There is no
+extra DB query, periodic progress logger, API field or persisted diagnostic event.
+Fast requests emit nothing. A request that never exits cannot emit this summary.
+Timings cover route work only, not earlier auth middleware, WSGI queueing or network
+transfer. The summary contains only constant operation/stage names, durations and
+an unhandled-route-exception boolean (existing swallowed errors retain their behavior)—no IP, user, SQL, arguments, counters, credentials, result or
+exception text. Concurrent requests use separate `ContextVar` traces.
+
+Stages (milliseconds, nested values intentionally overlap; **do not sum all stages**):
+
+- `snapshot_and_permissions`, with `data_lock_wait` and `printers_lock_wait` measuring
+  lock acquisition only, not protected work;
+- `previous_cache` (includes cache locking and any existing DB warmup);
+- `yield_status`, containing `yield_connection`, `yield_state_query`,
+  `yield_profile_query`, `yield_history` (read and grouping), and `yield_estimation`
+  (signature/cache lookup and Python estimation);
+- `metadata` (enrichment, including previous-cache access) and `serialize` (JSON build).
+
+Collect a few slow summaries after a separately approved deployment. They are
+measurement evidence, not a claim that the underlying slow query/calculation is fixed.
+Existing SQL, history windows, estimator mathematics and cache semantics are unchanged.
+No derived-run activation, rebuild, migration, reset or recalculation is included.
+
+Acceptance must include a cold load with a delayed/failed printers request and healthy
+status; continuing countdown/busy state and CSRF refresh during that delay; visible
+stale-data warning after timeout; automatic printer recovery; independent status
+failure; manual completion, tab-return and auth-loss behavior. Compare actual printer
+page totals separately. The default asset suffix is `20261107-dashboard-status-v8`.
+
+
+### Validation of independent-status follow-up
+
+- 40 JavaScript tests passed (34 previous + 6 new), including production fetch/DOM
+  wiring with a 30-second abort, sustained status requests, stale-data warning,
+  CSRF updates, retry recovery, and independent status failure.
+- 27 related Python tests passed, including 8 new timing tests: quiet fast path,
+  return/exception identity, secret omission, aggregate stages, context isolation,
+  lock acquisition versus held time, real route response, and identical actual SQL
+  calls/results with and without tracing.
+- 62 yield tests passed, 1 skipped; golden replay 10/10 byte-for-byte unchanged.
+- Full local suite: 1,236 passed, 133 skipped, 560 subtests passed, 22 failed.
+  A fresh archive of base `7bfd9eb` with the same interpreter/dependencies produced
+  1,228 passed and the **identical 22 failure/subfailure IDs** (18 FAILED and 4
+  SUBFAILED). No new failing ID. This is not a claim of a fully green local suite.
+- Test-split guard: 1,108 tests assigned exactly once. OID coverage 136/136 and
+  generated matrix freshness passed. No production deployment or device acceptance
+  has been performed for this follow-up.

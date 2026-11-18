@@ -114,7 +114,8 @@ test('dashboard wiring loads helper first, uses one watcher and has bounded netw
   const dashboard = fs.readFileSync(path.resolve(__dirname, '../../web/static/js/dashboard.js'), 'utf8');
   const template = fs.readFileSync(path.resolve(__dirname, '../../web/templates/base.html'), 'utf8');
   assert.ok(template.indexOf('js/poll-cycle.js') < template.indexOf('js/dashboard.js'));
-  assert.match(dashboard, /resetCountdown\(st, pr.meta\)/);
+  assert.match(dashboard, /markRendered\(pr.meta\)/);
+  assert.match(dashboard, /_ensurePollCycleSync\(\).wake\(\);\nfetchData\(\)/);
   assert.doesNotMatch(dashboard, /countdown = 40|_pollWatchTimer/);
   assert.match(dashboard, /controller.abort\(\), 15000/);
   assert.match(dashboard, /controller.abort\(\), 30000/);
@@ -131,9 +132,9 @@ test('production DOM wiring displays busy state, clock label and restores manual
   };
   let options, accepted;
   w.PrintGuardPollCycle = {create(o) { options = o; return {accept(s, m) { accepted = [s, m]; }}; }};
-  w._hideConnBanner = () => {};
+  w._syncConnBanner = () => {};
   w._cycleSync = null;
-  for (const name of ['_pollBtn', '_setPollBtnBusy', 'resetCountdown']) w.eval(functionSource(name));
+  for (const name of ['_pollBtn', '_setPollBtnBusy', '_ensurePollCycleSync', 'resetCountdown']) w.eval(functionSource(name));
   try {
     w.resetCountdown(status(), meta);
     assert.equal(accepted[0].poll_interval, 60);
@@ -147,4 +148,43 @@ test('production DOM wiring displays busy state, clock label and restores manual
     assert.equal(w.document.getElementById('cfill').style.width, '50%');
     assert.match(w.document.getElementById('poll-cycle-label').textContent, /۳۰/);
   } finally { w.close(); }
+});
+
+
+test('slow printer refresh never holds the status watcher or duplicates refreshes', async () => {
+  let finish, refreshes = 0;
+  const pending = new Promise(resolve => { finish = resolve; });
+  const f = fixture({async refresh() { refreshes++; await pending; }});
+  f.api.wake(); await f.tick(0);
+  await f.tick(40000);
+  assert.ok(f.checks >= 5);
+  assert.equal(refreshes, 1);
+  assert.equal(f.api.view().state, 'idle');
+  finish(); await Promise.resolve(); f.api.stop();
+});
+
+test('rejected printer refresh leaves healthy status and retries without stale acknowledgement', async () => {
+  let refreshes = 0;
+  const f = fixture({async refresh() { refreshes++; throw Error('printer timeout'); }});
+  f.api.wake(); await f.tick(0); await f.tick(30000);
+  assert.ok(refreshes >= 2);
+  assert.equal(f.api.view().state, 'idle');
+  f.api.markRendered(meta);
+  const previous = refreshes;
+  await f.tick(10000);
+  assert.equal(refreshes, previous);
+  f.api.stop();
+});
+
+test('marking printer metadata does not rewind the server clock or clear status errors', async () => {
+  const f = fixture({async readStatus() { throw Error('offline'); }});
+  f.api.accept(status()); await f.tick(5000);
+  const remaining = f.api.view().remaining;
+  f.api.markRendered(meta);
+  assert.equal(f.api.view().remaining, remaining);
+  f.api.wake(); await f.tick(0);
+  assert.equal(f.api.view().state, 'error');
+  f.api.markRendered(meta);
+  assert.equal(f.api.view().state, 'error');
+  f.api.stop();
 });

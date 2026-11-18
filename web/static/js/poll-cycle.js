@@ -6,7 +6,7 @@
     const later = options.setTimeout || setTimeout;
     const cancel = options.clearTimeout || clearTimeout;
     let status = {}, receivedAt = 0, serverAt = 0, rendered = null, completionPending = false;
-    let timer = null, paintTimer = null, inFlight = false, stopped = false, errors = 0;
+    let timer = null, paintTimer = null, inFlight = false, refreshInFlight = false, stopped = false, errors = 0;
     const token = (count, last) => JSON.stringify([count ?? null, last ?? null]);
     function view() {
       const interval = Number(status.poll_interval);
@@ -39,6 +39,21 @@
       // Catch manual cycles too, even when an automatic cycle is far away.
       schedule(status.is_polling ? 3000 : Math.min(10000, Math.max(1000, view().remaining || 3000)));
     }
+    function markRendered(meta) {
+      if (stopped || !meta) return;
+      rendered = token(meta.poll_count, meta.last_poll);
+      completionPending = false;
+    }
+    function refreshSnapshot() {
+      if (refreshInFlight || stopped) return;
+      refreshInFlight = true;
+      // A slow/failed printer fetch must not block status reads or report the
+      // lightweight status connection as offline. Metadata is accepted only
+      // after a real printer response has rendered.
+      Promise.resolve().then(() => { if (!stopped) return options.refresh(); }).catch(err => {
+        if (!stopped) options.onRefreshError?.(err);
+      }).finally(() => { refreshInFlight = false; });
+    }
     async function check() {
       timer = null;
       if (stopped || inFlight) return;
@@ -51,7 +66,7 @@
         if (finished) completionPending = true;
         // Compare with the PRINTER snapshot, not another status response: the two
         // requests can straddle completion. A skipped/failed fetch retries next check.
-        if (completionPending || rendered !== token(s.count, s.last)) await options.refresh();
+        if (completionPending || rendered !== token(s.count, s.last)) refreshSnapshot();
       } catch (err) {
         if (stopped) return;
         errors += 1;
@@ -65,6 +80,7 @@
     }
     return {
       accept,
+      markRendered,
       wake() { if (!stopped && !inFlight) schedule(0); },
       stop() { stopped = true; cancel(timer); cancel(paintTimer); timer = paintTimer = null; },
       view,

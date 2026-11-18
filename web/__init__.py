@@ -84,7 +84,7 @@ def create_app() -> Flask:
         MAIL_OAUTH_REFRESH_TOKEN=settings.MAIL_OAUTH_REFRESH_TOKEN,
         GOOGLE_CLIENT_ID=settings.GOOGLE_CLIENT_ID,
         GOOGLE_CLIENT_SECRET=settings.GOOGLE_CLIENT_SECRET,
-        ASSET_VERSION=os.getenv("ASSET_VERSION", "20261107-poll-diagnostics-v7"),
+        ASSET_VERSION=os.getenv("ASSET_VERSION", "20261107-dashboard-status-v8"),
     )
 
     init_auth(app)
