@@ -1,5 +1,8 @@
 """Copy trial guards plus an optional owned-local PostgreSQL rehearsal."""
+import io
 import os
+import subprocess
+import zipfile
 from pathlib import Path
 import tempfile
 import unittest
@@ -44,6 +47,34 @@ class TrialGuards(unittest.TestCase):
             with self.subTest(name=name), self.assertRaisesRegex(RuntimeError, 'UNSAFE_SOURCE_ARCHIVE'):
                 trial.safe_archive_names([name])
         trial.safe_archive_names(['core/yield_engine.py', '.env.example'])
+
+    def test_archive_respects_git_export_line_endings(self):
+        root = Path(__file__).resolve().parents[1]
+        expected = subprocess.check_output(['git', 'archive', '--format=zip', trial.HEAD], cwd=root)
+        with zipfile.ZipFile(io.BytesIO(expected)) as archive:
+            raw = subprocess.check_output(['git', 'show', trial.HEAD + ':cartridge_test.bat'], cwd=root)
+            self.assertNotEqual(raw, archive.read('cartridge_test.bat'))
+            trial.verify_source_archive(archive, expected)
+
+    def test_changed_or_extra_archive_payload_refused(self):
+        def zipped(items):
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(buffer, 'w') as archive:
+                for name, data in items:
+                    archive.writestr(name, data)
+            return buffer.getvalue()
+        expected = zipped([('script.bat', b'echo ok\r\n')])
+        for items in ([('script.bat', b'echo changed\r\n')],
+                      [('script.bat', b'echo ok\r\n'), ('extra.py', b'bad')]):
+            with zipfile.ZipFile(io.BytesIO(zipped(items))) as archive:
+                with self.assertRaisesRegex(RuntimeError, 'SOURCE_ARCHIVE_'):
+                    trial.verify_source_archive(archive, expected)
+
+    def test_error_codes_do_not_expose_messages(self):
+        self.assertEqual(trial.safe_error_code(RuntimeError('SOURCE_ARCHIVE_COMMIT_MISMATCH')),
+                         'SOURCE_ARCHIVE_COMMIT_MISMATCH')
+        for exc in (RuntimeError('PRIVATE_PASSWORD'), ValueError('SOURCE_ARCHIVE_COMMIT_MISMATCH')):
+            self.assertEqual(trial.safe_error_code(exc), 'UNCLASSIFIED')
 
     def test_identity_checks_system_id_and_all_target_fields(self):
         valid = ['127.0.0.1', trial.PORT, trial.DB, trial.USER,

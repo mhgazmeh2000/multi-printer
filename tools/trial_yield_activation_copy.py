@@ -5,6 +5,7 @@ All target details are pinned, credentials remain local, and no .env is loaded.
 """
 import ast
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -28,6 +29,34 @@ def safe_archive_names(names):
         parts = name.replace('\\', '/').split('/')
         if name.startswith(('/', '\\')) or ':' in name or '..' in parts or '.env' in parts:
             raise RuntimeError('UNSAFE_SOURCE_ARCHIVE')
+
+
+def verify_source_archive(archive, expected_bytes):
+    """Compare to git archive output, including .gitattributes export conversions."""
+    safe_archive_names(archive.namelist())
+    with zipfile.ZipFile(io.BytesIO(expected_bytes)) as expected:
+        names = archive.namelist()
+        if len(names) != len(set(names)) or set(names) != set(expected.namelist()):
+            raise RuntimeError('SOURCE_ARCHIVE_MEMBERS_MISMATCH')
+        for name in names:
+            if hashlib.sha256(archive.read(name)).digest() != hashlib.sha256(expected.read(name)).digest():
+                raise RuntimeError('SOURCE_ARCHIVE_COMMIT_MISMATCH')
+
+
+def safe_error_code(exc):
+    # Explicit allowlist: no arbitrary exception messages or private paths.
+    codes = {
+        'WINDOWS_ONLY', 'TRIAL_ALREADY_ATTEMPTED_DO_NOT_REPEAT',
+        'COPY_REPORT_MISMATCH', 'COPY_AUTH_TARGET_MISMATCH', 'COPY_ALREADY_RUNNING',
+        'SOURCE_DIRECTORY_ALREADY_EXISTS', 'UNSAFE_SOURCE_ARCHIVE',
+        'SOURCE_ARCHIVE_MEMBERS_MISMATCH', 'SOURCE_ARCHIVE_COMMIT_MISMATCH',
+        'COPY_IDENTITY_MISMATCH', 'CLUSTER_START_FAILED', 'TRIAL_BUDGET_EXCEEDED',
+        'REVISION_MISMATCH', 'SOURCE_COUNT_MISMATCH', 'SLOT_COUNT_NEEDS_REVIEW',
+        'READY_MARKER_MISMATCH', 'ORDERED_OUTPUT_MISMATCH',
+        'TRIGGER_UPDATE_OUTPUT_MISMATCH', 'DISABLE_TRIGGERS_REMAIN',
+        'DISABLE_STATE_REMAINS', 'DISABLED_FALLBACK_MISMATCH', 'SOURCE_SIGNATURE_CHANGED',
+    }
+    return str(exc) if type(exc) is RuntimeError and str(exc) in codes else 'UNCLASSIFIED'
 
 
 def validate_report(report, auth):
@@ -183,15 +212,11 @@ def main():
     source = ROOT / 'trial-source'
     if source.exists():
         raise RuntimeError('SOURCE_DIRECTORY_ALREADY_EXISTS')
+    expected_archive = subprocess.run(
+        ['git', 'archive', '--format=zip', HEAD],
+        capture_output=True, check=True, timeout=60).stdout
     with zipfile.ZipFile(ROOT / 'source.zip') as archive:
-        safe_archive_names(archive.namelist())
-        # Verify every archived payload against the production base commit.
-        for name in archive.namelist():
-            if name.endswith('/'):
-                continue
-            blob = subprocess.run(['git', 'show', HEAD + ':' + name], capture_output=True, check=True, timeout=30).stdout
-            if hashlib.sha256(blob).digest() != hashlib.sha256(archive.read(name)).digest():
-                raise RuntimeError('SOURCE_ARCHIVE_COMMIT_MISMATCH')
+        verify_source_archive(archive, expected_archive)
         archive.extractall(source)
     # No settings from the production working directory or parent .env files.
     os.environ['PYTHON_DOTENV_DISABLED'] = '1'
@@ -230,9 +255,7 @@ def main():
     except Exception as exc:
         report['status'] = 'FAILED'
         report['error_type'] = type(exc).__name__
-        # Only our fixed uppercase codes, never raw driver errors/credentials.
-        code = str(exc)
-        report['error_code'] = code if type(exc) is RuntimeError and code.isupper() and code.replace('_', '').isalnum() and len(code) < 80 else 'UNCLASSIFIED'
+        report['error_code'] = safe_error_code(exc)
     finally:
         if raw is not None:
             try:
@@ -259,5 +282,6 @@ if __name__ == '__main__':
         raise SystemExit(main())
     except Exception as exc:
         print('COPY_TRIAL_PRECHECK_FAILED_TYPE=' + type(exc).__name__)
+        print('COPY_TRIAL_PRECHECK_FAILED_CODE=' + safe_error_code(exc))
         print('Stop; do not repeat or share private files.')
         raise SystemExit(1)
