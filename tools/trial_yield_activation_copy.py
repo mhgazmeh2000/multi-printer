@@ -3,7 +3,9 @@
 No app/server/collector is started. Source code comes from the verified base ZIP.
 All target details are pinned, credentials remain local, and no .env is loaded.
 """
+import argparse
 import ast
+from contextlib import contextmanager, nullcontext
 import hashlib
 import io
 import json
@@ -12,6 +14,7 @@ from pathlib import Path
 import socket
 import subprocess
 import sys
+import threading
 import time
 import zipfile
 
@@ -55,8 +58,153 @@ def safe_error_code(exc):
         'READY_MARKER_MISMATCH', 'ORDERED_OUTPUT_MISMATCH',
         'TRIGGER_UPDATE_OUTPUT_MISMATCH', 'DISABLE_TRIGGERS_REMAIN',
         'DISABLE_STATE_REMAINS', 'DISABLED_FALLBACK_MISMATCH', 'SOURCE_SIGNATURE_CHANGED',
+        'BASELINE_RETRY_STATE_MISMATCH', 'COPY_NOT_INACTIVE_BEFORE_ANALYZE',
+        'LOCK_RETRY_STATE_MISMATCH', 'COPY_NOT_INACTIVE_BEFORE_LOCK_TRIAL',
     }
     return str(exc) if type(exc) is RuntimeError and str(exc) in codes else 'UNCLASSIFIED'
+
+
+def safe_sqlstate(exc):
+    state = getattr(exc, 'sqlstate', None)
+    return state if isinstance(state, str) and len(state) == 5 and state.isascii() and state.isalnum() else 'unknown'
+
+
+def validate_baseline_retry(previous):
+    # Only the observed, stopped, pre-activation first-read failure is eligible.
+    if not (previous.get('status') == 'FAILED'
+            and previous.get('cluster_stopped') is True
+            and previous.get('activation_committed') is False
+            and previous.get('disable_committed') is False
+            and previous.get('baseline_seconds') == []
+            and previous.get('slot_count') == 51
+            and previous.get('source_commit') == HEAD
+            and str(previous.get('system_identifier')) == SYSTEM_ID
+            and previous.get('error_type') == 'DatabaseOperationalError'):
+        raise RuntimeError('BASELINE_RETRY_STATE_MISMATCH')
+
+
+def validate_lock_retry(previous):
+    if not (previous.get('status') == 'FAILED'
+            and previous.get('cluster_stopped') is True
+            and previous.get('activation_committed') is False
+            and previous.get('disable_committed') is False
+            and previous.get('analyze_committed') is True
+            and previous.get('phase') == 'ACTIVATION'
+            and previous.get('sqlstate') == '55P03'
+            and previous.get('slot_count') == 51
+            and previous.get('source_commit') == HEAD
+            and str(previous.get('system_identifier')) == SYSTEM_ID
+            and len(previous.get('baseline_seconds', [])) == 4):
+        raise RuntimeError('LOCK_RETRY_STATE_MISMATCH')
+
+
+def maintenance_stage(sql):
+    text = ' '.join(sql.upper().split())
+    if text.startswith('LOCK TABLE TONER_SNAPSHOTS_V2 '):
+        return 'LOCK_SOURCE_EXCLUSIVE'
+    if text.startswith('CREATE INDEX '):
+        return 'CREATE_SOURCE_INDEX'
+    if text.startswith('CREATE TRIGGER '):
+        return 'CREATE_TRIGGER'
+    if text.startswith('CREATE FUNCTION ') or text.startswith('CREATE OR REPLACE FUNCTION '):
+        return 'CREATE_FUNCTION'
+    if text.startswith('INSERT INTO YIELD_RUN_BOUNDARIES'):
+        return 'BUILD_BOUNDARIES'
+    if text.startswith('COMMIT'):
+        return 'COMMIT'
+    return 'OTHER_MAINTENANCE_SQL'
+
+
+def blocker_sample(diag, pid):
+    # Do not select query, application_name, addresses, usernames or row payloads.
+    rows = diag.execute('''SELECT p.pid, a.backend_type, a.state
+        FROM unnest(pg_blocking_pids(%s)) AS p(pid)
+        LEFT JOIN pg_stat_activity a ON a.pid=p.pid''', (pid,)).fetchall()
+    types = {'client backend', 'autovacuum worker', 'parallel worker', 'background worker'}
+    states = {'active', 'idle', 'idle in transaction', 'idle in transaction (aborted)', 'disabled'}
+    return [{'pid': int(row[0]),
+             'backend_type': row[1] if row[1] in types else 'other_or_unavailable',
+             'state': row[2] if row[2] in states else 'other_or_unavailable'} for row in rows]
+
+
+@contextmanager
+def observe_activation(conn, report, diagnostic_factory):
+    """Read-only bounded observer; never cancels, terminates or retries SQL."""
+    diag = diagnostic_factory()  # production caller verifies live copy identity
+    stop = threading.Event()
+    original = conn.execute
+    report['activation_lock_observer'] = {'status': 'STARTING', 'samples': []}
+    evidence = report['activation_lock_observer']
+    current = {'stage': 'STARTING'}
+    pid = conn.raw_connection.info.backend_pid
+    def watched(sql, *args, **kwargs):
+        # Preserve omitted params vs explicit None: psycopg treats these
+        # differently when processing literal percent signs in function DDL.
+        stage = maintenance_stage(sql)
+        current['stage'] = stage
+        report['activation_last_sql_stage'] = stage
+        try:
+            return original(sql, *args, **kwargs)
+        except Exception:
+            report['activation_failed_sql_stage'] = stage
+            raise
+    def worker():
+        started = time.monotonic()
+        try:
+            evidence['status'] = 'RUNNING'
+            while not stop.is_set() and time.monotonic() - started < 610:
+                blockers = blocker_sample(diag, pid)
+                if blockers and len(evidence['samples']) < 32:
+                    sample = {'stage': current['stage'], 'blockers': blockers}
+                    if sample not in evidence['samples']:
+                        evidence['samples'].append(sample)
+                stop.wait(.1)
+            evidence['status'] = 'STOPPED' if stop.is_set() else 'BUDGET_REACHED'
+        except Exception as exc:
+            evidence['status'] = 'FAILED'
+            evidence['sqlstate'] = safe_sqlstate(exc)
+            evidence['error_type'] = type(exc).__name__
+        finally:
+            diag.close()
+    thread = threading.Thread(target=worker, name='copy-lock-observer', daemon=True)
+    conn.execute = watched
+    try:
+        thread.start()
+        yield
+    finally:
+        conn.execute = original
+        stop.set()
+        if thread.ident is not None:
+            thread.join(5)
+            if thread.is_alive():
+                evidence['status'] = 'STOP_NOT_CONFIRMED'
+        else:
+            diag.close()
+
+
+def analyze_copy(conn, report):
+    """Bounded planner-statistics refresh; only called after live copy identity check."""
+    conn.execute("SET LOCAL statement_timeout = '120s'")
+    conn.execute("SET LOCAL lock_timeout = '1s'")
+    active = conn.execute("""SELECT EXISTS(SELECT 1 FROM yield_run_meta)
+        OR to_regclass('yield_runs_snapshot_neighbor') IS NOT NULL
+        OR EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='toner_snapshots_v2'::regclass
+                  AND tgname IN ('yield_runs_lock','yield_runs_insert','yield_runs_delete',
+                                 'yield_runs_update','yield_runs_truncate'))""").fetchone()[0]
+    if active:
+        raise RuntimeError('COPY_NOT_INACTIVE_BEFORE_ANALYZE')
+    report['planner_rows_before_analyze'] = conn.execute(
+        "SELECT reltuples FROM pg_class WHERE oid='toner_snapshots_v2'::regclass").fetchone()[0]
+    print('COPY_ANALYZE_BEGIN (same 120 second statement cap)', flush=True)
+    start = time.perf_counter()
+    conn.execute('ANALYZE public.toner_snapshots_v2')
+    conn.commit()
+    report['analyze_committed'] = True
+    report['analyze_seconds'] = round(time.perf_counter() - start, 4)
+    conn.execute("SET LOCAL statement_timeout = '120s'")
+    report['planner_rows_after_analyze'] = conn.execute(
+        "SELECT reltuples FROM pg_class WHERE oid='toner_snapshots_v2'::regclass").fetchone()[0]
+    conn.rollback()
 
 
 def validate_report(report, auth):
@@ -92,7 +240,7 @@ def history_factory(source):
     return namespace['_interval_history_query']
 
 
-def execute_trial(conn, source, report, *, expected_rows=2256043):
+def execute_trial(conn, source, report, *, expected_rows=2256043, activation_observer=None):
     """Real maintenance library and reader, not prototype SQL; caller closes DB."""
     from core.yield_run_maintenance import enable_yield_runs, disable_yield_runs
     from core.yield_runs import load_derived_snapshots
@@ -132,17 +280,22 @@ def execute_trial(conn, source, report, *, expected_rows=2256043):
     references = []
     report['baseline_seconds'] = []
     for ordinal, choice in enumerate(options, 1):
-        print('REFERENCE_READ_' + str(ordinal), flush=True)
+        report['phase'] = 'REFERENCE_READ_' + str(ordinal)
+        print(report['phase'], flush=True)
         rows, seconds = read(choice, False)
         references.append(rows)
         report['baseline_seconds'].append(seconds)
         conn.rollback()
+    report['phase'] = 'ACTIVATION'
     print('ACTIVATION_BEGIN (budget 600 seconds)', flush=True)
     os.environ['YIELD_DERIVED_RUNS_ENABLED'] = '0'
     start = time.perf_counter()
-    enable_yield_runs(conn, approved=True, timeout_seconds=600)
-    conn.commit()
-    report['activation_committed'] = True
+    context = activation_observer(conn, report) if activation_observer else nullcontext()
+    with context:
+        enable_yield_runs(conn, approved=True, timeout_seconds=600)
+        report['activation_last_sql_stage'] = 'COMMIT'
+        conn.commit()
+        report['activation_committed'] = True
     report['activation_seconds'] = round(time.perf_counter() - start, 4)
     budget()
     if conn.execute('SELECT version, ready FROM yield_run_meta WHERE singleton').fetchone() != (1, True):
@@ -152,7 +305,8 @@ def execute_trial(conn, source, report, *, expected_rows=2256043):
     conn.rollback()
     report['derived_seconds'] = []
     for ordinal, (choice, expected) in enumerate(zip(options, references), 1):
-        print('DERIVED_COMPARE_' + str(ordinal), flush=True)
+        report['phase'] = 'DERIVED_COMPARE_' + str(ordinal)
+        print(report['phase'], flush=True)
         rows, seconds = read(choice, True)
         if rows != expected:
             raise RuntimeError('ORDERED_OUTPUT_MISMATCH')
@@ -160,7 +314,8 @@ def execute_trial(conn, source, report, *, expected_rows=2256043):
         conn.rollback()
     report['exact_ordered_read_equal'] = True
     # Exercise real UPDATE triggers without committing any source mutation.
-    print('TRIGGER_ROLLBACK_CHECK', flush=True)
+    report['phase'] = 'TRIGGER_ROLLBACK_CHECK'
+    print(report['phase'], flush=True)
     budget()
     last_id = original[2]
     key = conn.execute('SELECT printer_ip, LOWER(color) FROM toner_snapshots_v2 WHERE id=?', (last_id,)).fetchone()
@@ -172,6 +327,7 @@ def execute_trial(conn, source, report, *, expected_rows=2256043):
         raise RuntimeError('TRIGGER_UPDATE_OUTPUT_MISMATCH')
     conn.rollback()
     report['update_trigger_rollback_equal'] = True
+    report['phase'] = 'DISABLE'
     print('DISABLE_BEGIN', flush=True)
     os.environ['YIELD_DERIVED_RUNS_ENABLED'] = '0'
     disable_yield_runs(conn, approved=True, timeout_seconds=120)
@@ -183,6 +339,7 @@ def execute_trial(conn, source, report, *, expected_rows=2256043):
     if conn.execute("SELECT to_regclass('yield_runs_snapshot_neighbor') IS NOT NULL OR EXISTS(SELECT 1 FROM yield_run_meta)").fetchone()[0]:
         raise RuntimeError('DISABLE_STATE_REMAINS')
     conn.rollback()
+    report['phase'] = 'DISABLED_FALLBACK_READ'
     fallback, seconds = read({}, True)
     if fallback != references[0]:
         raise RuntimeError('DISABLED_FALLBACK_MISMATCH')
@@ -196,10 +353,24 @@ def execute_trial(conn, source, report, *, expected_rows=2256043):
     report['scope'] = 'history_reader_only_not_full_api_or_all_trigger_types'
 
 
-def main():
+def main(argv=None):
     if os.name != 'nt':
         raise RuntimeError('WINDOWS_ONLY')
-    report_path = ROOT / 'activation-trial-report.json'
+    parser = argparse.ArgumentParser(description=__doc__)
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument('--retry-baseline-after-analyze', action='store_true',
+                        help='Explicit one-time retry of the stopped first-read failure on this copy only')
+    modes.add_argument('--diagnose-activation-lock', action='store_true',
+                       help='One observed attempt after the verified 55P03 activation failure')
+    args = parser.parse_args(argv)
+    suffix = '-lock-observed' if args.diagnose_activation_lock else ('-analyzed' if args.retry_baseline_after_analyze else '')
+    if args.diagnose_activation_lock:
+        previous = json.loads((ROOT / 'activation-trial-analyzed-report.json').read_text(encoding='utf-8'))
+        validate_lock_retry(previous)
+    if args.retry_baseline_after_analyze:
+        previous = json.loads((ROOT / 'activation-trial-report.json').read_text(encoding='utf-8'))
+        validate_baseline_retry(previous)
+    report_path = ROOT / ('activation-trial' + suffix + '-report.json')
     if report_path.exists():
         raise RuntimeError('TRIAL_ALREADY_ATTEMPTED_DO_NOT_REPEAT')
     restore = json.loads((ROOT / 'restore-report.json').read_text(encoding='utf-8'))
@@ -209,7 +380,7 @@ def main():
         raise RuntimeError('COPY_ALREADY_RUNNING')
     with socket.socket() as probe:
         probe.bind(('127.0.0.1', PORT))
-    source = ROOT / 'trial-source'
+    source = ROOT / ('trial-source' + suffix)
     if source.exists():
         raise RuntimeError('SOURCE_DIRECTORY_ALREADY_EXISTS')
     expected_archive = subprocess.run(
@@ -235,7 +406,9 @@ def main():
     env = {k: v for k, v in os.environ.items() if k.upper() in {
         'SYSTEMROOT', 'WINDIR', 'PATH', 'PATHEXT', 'TEMP', 'TMP', 'COMSPEC', 'SYSTEMDRIVE'}}
     report = {'status': 'IN_PROGRESS', 'system_identifier': SYSTEM_ID, 'source_commit': HEAD,
-              'cluster_stopped': False, 'activation_committed': False, 'disable_committed': False}
+              'cluster_stopped': False, 'activation_committed': False, 'disable_committed': False,
+              'analyze_requested': args.retry_baseline_after_analyze, 'analyze_committed': False,
+              'phase': 'COPY_START', 'lock_observation_requested': args.diagnose_activation_lock}
     report_path.write_text(json.dumps(report), encoding='utf-8')
     def ctl(args, logfile):
         with (ROOT / logfile).open('xb') as output:
@@ -245,16 +418,45 @@ def main():
     attempted = False
     try:
         attempted = True
-        if ctl(['-l', str(ROOT / 'trial-postgresql.log'), '-o', '-h 127.0.0.1 -p 55439 -c max_connections=12', '-w', '-t', '60', 'start'], 'trial-start.log'):
+        if ctl(['-l', str(ROOT / ('trial' + suffix + '-postgresql.log')), '-o', '-h 127.0.0.1 -p 55439 -c max_connections=12', '-w', '-t', '60', 'start'], 'trial' + suffix + '-start.log'):
             raise RuntimeError('CLUSTER_START_FAILED')
         raw = psycopg.connect(**auth, connect_timeout=5, options='-c timezone=UTC -c statement_timeout=120000')
         assert_identity(raw)
         from core.db.connection import ConnectionAdapter
-        execute_trial(ConnectionAdapter(raw, backend='postgresql'), source, report)
+        conn = ConnectionAdapter(raw, backend='postgresql')
+        if args.retry_baseline_after_analyze:
+            report['phase'] = 'COPY_ANALYZE'
+            analyze_copy(conn, report)
+        observer = None
+        if args.diagnose_activation_lock:
+            raw.execute("SET LOCAL statement_timeout = '5s'")
+            raw.execute("SET LOCAL lock_timeout = '1s'")
+            installed = raw.execute("""SELECT EXISTS(SELECT 1 FROM yield_run_meta)
+                OR to_regclass('yield_runs_snapshot_neighbor') IS NOT NULL
+                OR EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid='toner_snapshots_v2'::regclass
+                    AND tgname IN ('yield_runs_lock','yield_runs_insert','yield_runs_delete',
+                                   'yield_runs_update','yield_runs_truncate'))""").fetchone()[0]
+            raw.rollback()
+            if installed:
+                raise RuntimeError('COPY_NOT_INACTIVE_BEFORE_LOCK_TRIAL')
+            def diagnostic_factory():
+                diagnostic = psycopg.connect(**auth, connect_timeout=5,
+                    options='-c timezone=UTC -c statement_timeout=500 -c default_transaction_read_only=on')
+                try:
+                    assert_identity(diagnostic)
+                    diagnostic.autocommit = True
+                    return diagnostic
+                except Exception:
+                    diagnostic.close()
+                    raise
+            observer = lambda connection, evidence: observe_activation(connection, evidence, diagnostic_factory)
+        execute_trial(conn, source, report, activation_observer=observer)
+        report['phase'] = 'COMPLETE'
         report['status'] = 'COPY_HISTORY_TRIAL_PASSED'
     except Exception as exc:
         report['status'] = 'FAILED'
         report['error_type'] = type(exc).__name__
+        report['sqlstate'] = safe_sqlstate(exc)
         report['error_code'] = safe_error_code(exc)
     finally:
         if raw is not None:
@@ -263,7 +465,7 @@ def main():
             except Exception:
                 report['connection_close_failed'] = True
         try:
-            if attempted and ctl(['-m', 'fast', '-w', '-t', '60', 'stop'], 'trial-stop.log') == 0:
+            if attempted and ctl(['-m', 'fast', '-w', '-t', '60', 'stop'], 'trial' + suffix + '-stop.log') == 0:
                 status = subprocess.run([str(BIN / 'pg_ctl.exe'), '-D', str(ROOT / 'data'), 'status'], env=env,
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
                 report['cluster_stopped'] = status.returncode == 3 and not (ROOT / 'data/postmaster.pid').exists()
@@ -283,5 +485,6 @@ if __name__ == '__main__':
     except Exception as exc:
         print('COPY_TRIAL_PRECHECK_FAILED_TYPE=' + type(exc).__name__)
         print('COPY_TRIAL_PRECHECK_FAILED_CODE=' + safe_error_code(exc))
+        print('COPY_TRIAL_PRECHECK_SQLSTATE=' + safe_sqlstate(exc))
         print('Stop; do not repeat or share private files.')
         raise SystemExit(1)
