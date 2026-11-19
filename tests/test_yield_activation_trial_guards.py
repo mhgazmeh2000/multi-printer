@@ -49,12 +49,23 @@ class TrialGuards(unittest.TestCase):
         trial.safe_archive_names(['core/yield_engine.py', '.env.example'])
 
     def test_archive_respects_git_export_line_endings(self):
-        root = Path(__file__).resolve().parents[1]
-        expected = subprocess.check_output(['git', 'archive', '--format=zip', trial.HEAD], cwd=root)
-        with zipfile.ZipFile(io.BytesIO(expected)) as archive:
-            raw = subprocess.check_output(['git', 'show', trial.HEAD + ':cartridge_test.bat'], cwd=root)
-            self.assertNotEqual(raw, archive.read('cartridge_test.bat'))
-            trial.verify_source_archive(archive, expected)
+        # Self-contained: CI commonly checks out shallow history without the
+        # pinned production commit. Reproduce export conversion in an owned repo.
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            def git(*args):
+                return subprocess.check_output(['git', *args], cwd=root, stderr=subprocess.PIPE)
+            git('init', '-q')
+            (root / '.gitattributes').write_bytes(b'* text=auto eol=lf\n*.bat text eol=crlf\n')
+            (root / 'script.bat').write_bytes(b'echo ok\n')
+            git('-c', 'core.autocrlf=false', 'add', '.')
+            git('-c', 'user.name=Copy Test', '-c', 'user.email=copy-test@example.invalid',
+                '-c', 'commit.gpgsign=false', 'commit', '-qm', 'owned export fixture')
+            expected = git('archive', '--format=zip', 'HEAD')
+            with zipfile.ZipFile(io.BytesIO(expected)) as archive:
+                raw = git('show', 'HEAD:script.bat')
+                self.assertNotEqual(raw, archive.read('script.bat'))
+                trial.verify_source_archive(archive, expected)
 
     def test_changed_or_extra_archive_payload_refused(self):
         def zipped(items):
@@ -97,6 +108,55 @@ class TrialGuards(unittest.TestCase):
             run.assert_not_called()
 
 
+class AnalyzedRetryGuards(unittest.TestCase):
+    def previous(self):
+        return dict(status='FAILED', cluster_stopped=True, activation_committed=False,
+                    disable_committed=False, baseline_seconds=[], slot_count=51,
+                    source_commit=trial.HEAD, system_identifier=trial.SYSTEM_ID,
+                    error_type='DatabaseOperationalError')
+
+    def test_only_observed_stopped_baseline_failure_can_retry(self):
+        trial.validate_baseline_retry(self.previous())
+        for key, value in [('status', 'COPY_HISTORY_TRIAL_PASSED'), ('cluster_stopped', False),
+                           ('activation_committed', True), ('disable_committed', True),
+                           ('baseline_seconds', [1.0]), ('slot_count', 52), ('source_commit', 'other'),
+                           ('system_identifier', 'wrong'), ('error_type', 'ValueError')]:
+            with self.subTest(key=key):
+                report = self.previous()
+                report[key] = value
+                with self.assertRaisesRegex(RuntimeError, 'BASELINE_RETRY_STATE_MISMATCH'):
+                    trial.validate_baseline_retry(report)
+
+    def test_sqlstate_output_is_restricted(self):
+        exc = RuntimeError('private driver message')
+        for state, expected in [('57014', '57014'), ('55P03', '55P03'), (None, 'unknown'),
+                                ('secret-password', 'unknown'), ('1234\\n', 'unknown'),
+                                ('１２３４５', 'unknown')]:
+            exc.sqlstate = state
+            self.assertEqual(trial.safe_sqlstate(exc), expected)
+
+    def test_analyze_refuses_active_copy_without_commit_or_analyze(self):
+        conn = Mock()
+        conn.execute.return_value.fetchone.return_value = (True,)
+        with self.assertRaisesRegex(RuntimeError, 'COPY_NOT_INACTIVE_BEFORE_ANALYZE'):
+            trial.analyze_copy(conn, {})
+        conn.commit.assert_not_called()
+        self.assertFalse(any(str(call.args[0]).startswith('ANALYZE ') for call in conn.execute.call_args_list))
+
+    def test_analyze_keeps_120_second_cap_and_commits_statistics_only(self):
+        conn = Mock()
+        conn.execute.return_value.fetchone.side_effect = [(False,), (-1.0,), (500.0,)]
+        report = {}
+        trial.analyze_copy(conn, report)
+        sql = [call.args[0] for call in conn.execute.call_args_list]
+        self.assertIn("SET LOCAL statement_timeout = '120s'", sql)
+        self.assertIn('ANALYZE public.toner_snapshots_v2', sql)
+        self.assertFalse(any(statement.startswith(('INSERT ', 'UPDATE ', 'DELETE ')) for statement in sql))
+        conn.commit.assert_called_once()
+        self.assertIs(report['analyze_committed'], True)
+        self.assertEqual(report['planner_rows_after_analyze'], 500.0)
+
+
 class LocalPostgresRehearsal(unittest.TestCase):
     def test_full_maintenance_reader_update_rollback_disable(self):
         try:
@@ -123,8 +183,10 @@ class LocalPostgresRehearsal(unittest.TestCase):
                     raw.commit()
                     from core.db.connection import ConnectionAdapter
                     report = {}
-                    trial.execute_trial(ConnectionAdapter(raw, backend='postgresql'), root,
-                                        report, expected_rows=len(rows))
+                    conn = ConnectionAdapter(raw, backend='postgresql')
+                    trial.analyze_copy(conn, report)
+                    self.assertIs(report['analyze_committed'], True)
+                    trial.execute_trial(conn, root, report, expected_rows=len(rows))
                     for key in ('activation_committed', 'disable_committed', 'exact_ordered_read_equal',
                                 'update_trigger_rollback_equal', 'disabled_fallback_equal',
                                 'source_count_min_max_unchanged'):
