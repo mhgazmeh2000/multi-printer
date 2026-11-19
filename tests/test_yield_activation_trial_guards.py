@@ -157,6 +157,41 @@ class AnalyzedRetryGuards(unittest.TestCase):
         self.assertEqual(report['planner_rows_after_analyze'], 500.0)
 
 
+class LockObservationGuards(unittest.TestCase):
+    def test_only_observed_lock_failure_is_eligible(self):
+        previous = dict(status='FAILED', cluster_stopped=True, activation_committed=False,
+                        disable_committed=False, analyze_committed=True, phase='ACTIVATION',
+                        sqlstate='55P03', slot_count=51, source_commit=trial.HEAD,
+                        system_identifier=trial.SYSTEM_ID, baseline_seconds=[29.9, 2.0, 5.3, 18.4])
+        trial.validate_lock_retry(previous)
+        for key, value in [('cluster_stopped', False), ('activation_committed', True),
+                           ('disable_committed', True), ('analyze_committed', False),
+                           ('phase', 'REFERENCE_READ_1'), ('sqlstate', '57014'),
+                           ('system_identifier', 'other'), ('source_commit', 'other'),
+                           ('slot_count', 52), ('baseline_seconds', [])]:
+            bad = dict(previous, **{key: value})
+            with self.subTest(key=key), self.assertRaisesRegex(RuntimeError, 'LOCK_RETRY_STATE_MISMATCH'):
+                trial.validate_lock_retry(bad)
+
+    def test_sample_does_not_expose_sql_or_arbitrary_activity_fields(self):
+        diag = Mock()
+        diag.execute.return_value.fetchall.return_value = [(1, 'autovacuum worker', 'active'),
+                                                            (2, 'PRIVATE', 'PRIVATE')]
+        sample = trial.blocker_sample(diag, 123)
+        self.assertEqual(sample[0]['backend_type'], 'autovacuum worker')
+        self.assertNotIn('PRIVATE', str(sample))
+        query = diag.execute.call_args.args[0]
+        for forbidden in ('application_name', 'query,', 'client_addr', 'usename'):
+            self.assertNotIn(forbidden, query)
+
+    def test_stage_labels_are_fixed_not_raw_sql(self):
+        self.assertEqual(trial.maintenance_stage('LOCK TABLE toner_snapshots_v2 IN ACCESS EXCLUSIVE MODE'),
+                         'LOCK_SOURCE_EXCLUSIVE')
+        self.assertEqual(trial.maintenance_stage('CREATE INDEX yield_runs_snapshot_neighbor ON t (id)'),
+                         'CREATE_SOURCE_INDEX')
+        self.assertEqual(trial.maintenance_stage('SELECT private_payload'), 'OTHER_MAINTENANCE_SQL')
+
+
 class LocalPostgresRehearsal(unittest.TestCase):
     def test_full_maintenance_reader_update_rollback_disable(self):
         try:
@@ -184,9 +219,32 @@ class LocalPostgresRehearsal(unittest.TestCase):
                     from core.db.connection import ConnectionAdapter
                     report = {}
                     conn = ConnectionAdapter(raw, backend='postgresql')
+                    def diagnostic_factory():
+                        return psycopg.connect(server.get_uri(), autocommit=True,
+                            options='-c statement_timeout=500 -c default_transaction_read_only=on')
+                    original_execute = conn.execute
+                    # A real second session holds a share lock. The observer must
+                    # capture its PID without changing the 1s maintenance lock cap.
+                    with psycopg.connect(server.get_uri()) as blocker:
+                        blocker.execute('SELECT count(*) FROM toner_snapshots_v2').fetchone()
+                        conn.execute("SET LOCAL lock_timeout = '1s'")
+                        failed = {}
+                        with self.assertRaises(Exception) as failure:
+                            with trial.observe_activation(conn, failed, diagnostic_factory):
+                                conn.execute('LOCK TABLE toner_snapshots_v2 IN ACCESS EXCLUSIVE MODE')
+                        self.assertEqual(trial.safe_sqlstate(failure.exception), '55P03')
+                        self.assertEqual(failed['activation_failed_sql_stage'], 'LOCK_SOURCE_EXCLUSIVE')
+                        samples = failed['activation_lock_observer']['samples']
+                        self.assertTrue(any(entry['pid'] == blocker.info.backend_pid
+                                            for sample in samples for entry in sample['blockers']))
+                        self.assertEqual(failed['activation_lock_observer']['status'], 'STOPPED')
+                        self.assertEqual(conn.execute, original_execute)
+                        conn.rollback()
                     trial.analyze_copy(conn, report)
                     self.assertIs(report['analyze_committed'], True)
-                    trial.execute_trial(conn, root, report, expected_rows=len(rows))
+                    observer = lambda connection, evidence: trial.observe_activation(connection, evidence, diagnostic_factory)
+                    trial.execute_trial(conn, root, report, expected_rows=len(rows), activation_observer=observer)
+                    self.assertEqual(report['activation_lock_observer']['status'], 'STOPPED')
                     for key in ('activation_committed', 'disable_committed', 'exact_ordered_read_equal',
                                 'update_trigger_rollback_equal', 'disabled_fallback_equal',
                                 'source_count_min_max_unchanged'):
