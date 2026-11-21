@@ -290,7 +290,7 @@
 
 | پیشوند | نمونهٔ محل | چرا شمرده نشد |
 |---|---|---|
-| `127.0.0.1` | `tools/yield_copy_stage2.py:306` · `tools/yield_copy_stage2.py:324` | یا پیشوند برندیابی است یا «دُم» یک f-string/تابع ⇒ OID کاملِ یک برگ نیست |
+| `127.0.0.1` | `tools/diagnose_yield_history.py:44` · `tools/diagnose_yield_history.py:55` | یا پیشوند برندیابی است یا «دُم» یک f-string/تابع ⇒ OID کاملِ یک برگ نیست |
 | `172.16.25` | `web/routes/discover.py:92` | یا پیشوند برندیابی است یا «دُم» یک f-string/تابع ⇒ OID کاملِ یک برگ نیست |
 
 از کاتالوگ، **22** OID فقط در `OID_CATALOG` آمده و در collectorها مستقیم نوشته نشده — اینها هم در ماتریس‌اند (کاتالوگ بخشی از قرارداد است).
@@ -301,4 +301,4 @@
 - نام متریک در generator از ستون «برچسب/کلید» می‌آید؛ اگر برچسب یک کلمهٔ مبهم باشد (نام برند یا کوتاه‌تر از ۶ حرف)، نام ظرف پیشوند می‌شود (`brother` داخل `CANDIDATE_SUBTREES` ⇒ `candidate_subtrees_brother`).
 - یتیم‌های §۵ در generator فقط **کامنت**‌اند (probe-only) و گیت مراقب است که متریک زنده نشوند؛ پوششِ یک یتیم با walk زیر درختش مجاز است (std: `43.11.1.1`).
 - OID تازه: اول کد (کاتالوگ/collector)، بعد `--write`. سند هیچ‌وقت جلوتر از کد نمی‌رود.
-<!-- sha256:f6d5418feaec · tools/build_oid_matrix.py -->
+<!-- sha256:2d335df4dc2c · tools/build_oid_matrix.py -->

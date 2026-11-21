@@ -160,18 +160,29 @@ class MigrationScopeTests(unittest.TestCase):
         m = _migration()
         self.assertEqual((m.revision, m.down_revision), ("0004", "0003"))
 
-    def test_0004_is_the_head_of_the_chain(self):
-        """The chain head is 0008 (0004 was 0005 before the migration renumbering)."""
-        self.assertEqual(migration_head(), "0005")
+    def test_current_migration_head(self):
+        """JSONB remains revision 0004; later additive revisions end at 0009."""
+        self.assertEqual(migration_head(), "0009")
 
 
 class SqliteSchemaUnchangedTests(unittest.TestCase):
-    """SQLite side: Nothing is converted — checked against the actual schema of the repository."""
+    """SQLite declarations are checked in an isolated database initialized by the app."""
 
-    @staticmethod
-    def _decls(table):
-        """Helper: decls."""
-        conn = sqlite3.connect(f"file:{ROOT / 'logs.db'}?mode=ro", uri=True)
+    def setUp(self):
+        # A checkout's logs.db may be absent, stale or unrelated to this test.
+        # Build the actual SQLite schema in a disposable file, even in PG runs.
+        import config.settings as settings
+        from core.database import init_db
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.sqlite_path = Path(tmp.name) / 'schema.db'
+        with mock.patch.object(settings, 'DB_PATH', str(self.sqlite_path)), \
+                mock.patch.dict(os.environ, {'DB_BACKEND': 'sqlite'}):
+            init_db()
+
+    def _decls(self, table):
+        """Read only the owned SQLite fixture, never repository runtime data."""
+        conn = sqlite3.connect(self.sqlite_path.as_uri() + '?mode=ro', uri=True)
         try:
             return {r[1]: (r[2] or "").upper() for r in conn.execute(
                 f"PRAGMA table_info({table})")}

@@ -184,11 +184,14 @@ class PostgresOrderingEquivalenceTests(unittest.TestCase):
         "core/yield_engine.py": "ORDER BY printer_ip, color — شناسهٔ ASCII",
         "web/routes/metrics.py": "ORDER BY printer_ip — شناسهٔ ASCII",
         "web/routes/import_db.py": "ORDER BY {_q(ip_col)} — شناسهٔ ASCII (فایل picker)",
+        "core/yield_runs.py": "ORDER BY printer_ip, slot_color — internal slot identifiers, not UI collation",
+        "core/datasources/drivers/postgresql_ds.py": "External database table-name metadata; uses that datasource's collation",
+        "core/datasources/manager.py": "Datasource display-name ordering intentionally follows app C/BINARY, not Persian linguistic order",
     }
     TEXT_TOKENS = ("USERNAME", "PRINTER_IP", "IP_COL", "NAME", "TITLE")
 
-    def test_text_order_by_sites_are_only_ascii_identifiers(self):
-        """Verifies text order by sites are only ascii identifiers."""
+    def test_text_order_by_sites_are_reviewed_identifiers_or_metadata(self):
+        """New text sorts require review; metadata sorts are not yield formulas."""
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         found = set()
         for pkg in ("core", "web"):

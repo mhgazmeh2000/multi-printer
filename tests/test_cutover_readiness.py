@@ -321,7 +321,9 @@ class TimestampsTests(unittest.TestCase):
         """Verifies after cutover z is green."""
         db = self.dir / "logs.db"
         _make_logs_db(db, ("2026-10-04T10:00:00Z",))
-        res = self.t.check_timestamps(db)
+        # The date boundary is test input, not an assumption about available Git
+        # history (CI/shallow/source archives may have no cutover commit).
+        res = self.t.check_timestamps(db, cutover="2026-10-04T00:00:00Z")
         self.assertEqual(res.status, "ok", res["detail"])
         self.assertIn("ردیف‌های نیازمند بازبینی=0", res["detail"])
 

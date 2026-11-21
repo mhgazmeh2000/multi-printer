@@ -564,3 +564,59 @@ def test_rebuild_cannot_mark_ready_after_concurrent_deactivation(appdb):
     finally:
         disabling.close()
         rebuilding.close()
+
+
+@pytest.mark.parametrize('seed', [7, 31])
+def test_history_join_rewrite_matches_legacy_and_derived_fallback(appdb, monkeypatch, seed):
+    """PG typed windows + all filters + ready/not-ready derived UNION branches."""
+    from tools.diagnose_yield_history import legacy_query
+    conn, uri = appdb
+    rows = fixture(seed, 2200)
+    insert(conn, rows)
+    options = [{}, {'limit': 0}, {'limit': 1}, {'limit': 3}, {'limit': 400}, {'limit': 1000},
+               {'ip': '192.0.2.1', 'color': 'BLACK', 'limit': 3},
+               {'color': 'cyan'}, {'ip': 'missing'}]
+    monkeypatch.setenv('YIELD_DERIVED_RUNS_ENABLED', '0')
+    for choice in options:
+        sql, params = _interval_history_query(conn, **choice)
+        expected = oracle(rows, **choice)
+        assert conn.execute(legacy_query(sql), params).fetchall() == expected
+        assert conn.execute(sql, params).fetchall() == expected
+    conn.rollback()
+    migrate(uri, 'upgrade')
+    monkeypatch.setenv('YIELD_DERIVED_RUNS_ENABLED', '1')
+    # Empty metadata forces the unchanged-history branch inside reader_query.
+    for choice in options:
+        assert _load_interval_snapshots(conn, **choice) == oracle(rows, **choice)
+    conn.rollback()
+    enable_yield_runs(conn, approved=True)
+    conn.commit()
+    for choice in options:
+        assert _load_interval_snapshots(conn, **choice) == oracle(rows, **choice)
+    conn.rollback()
+    disable_yield_runs(conn, approved=True)
+    conn.commit()
+    for choice in options:
+        assert _load_interval_snapshots(conn, **choice) == oracle(rows, **choice)
+    conn.rollback()
+
+
+def test_readonly_diagnostic_pg_comparison_and_plans(appdb):
+    from tools.diagnose_yield_history import compare_queries
+    conn, _uri = appdb
+    rows = fixture(101, 500)
+    insert(conn, rows)
+    conn.execute('SET TRANSACTION READ ONLY')
+    result = compare_queries(conn.raw_connection.execute, backend='postgresql', repeats=2, explain=True)
+    assert result['exact_ordered_equal'] is True
+    assert len(result['measurements']) == 4
+    assert result['history_rows'] == len(rows)
+    assert result['plans']['candidate']['estimated_rows'] >= 0
+    raw = conn.raw_connection
+    raw.execute('SAVEPOINT readonly_guard')
+    with pytest.raises(psycopg.errors.ReadOnlySqlTransaction):
+        raw.execute('CREATE TABLE forbidden_diagnostic_write(id integer)')
+    raw.execute('ROLLBACK TO SAVEPOINT readonly_guard')
+    raw.execute('RELEASE SAVEPOINT readonly_guard')
+    assert conn.execute('SELECT count(*) FROM toner_snapshots_v2').fetchone()[0] == len(rows)
+    conn.rollback()

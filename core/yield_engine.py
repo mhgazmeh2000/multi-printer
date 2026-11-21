@@ -27,7 +27,7 @@ import os
 import re
 import threading
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from core.database import db_connection
 from core.request_timing import timing_stage
@@ -1271,13 +1271,15 @@ def _interval_history_query(conn, *, ip: Optional[str] = None,
                        PARTITION BY printer_ip, slot_color ORDER BY id DESC
                        ROWS UNBOUNDED PRECEDING) AS rn
             FROM edges
+        ), picked AS (
+            SELECT r.first_id, r.last_id FROM recent r WHERE r.changed = 1 AND r.rn <= ?
         )
         SELECT s.printer_ip, s.color, s.usage_counter, s.toner_level, s.raw_level,
                s.source, s.valid, s.reject_reason, s.timestamp, s.cartridge_key,
                s.full_color, s.print_total
-        FROM toner_snapshots_v2 s JOIN recent r
-          ON s.id = r.first_id OR s.id = r.last_id
-        WHERE r.changed = 1 AND r.rn <= ? ORDER BY s.id
+        FROM toner_snapshots_v2 s
+        WHERE s.id IN (SELECT first_id FROM picked UNION SELECT last_id FROM picked)
+        ORDER BY s.id
     """, params
 
 
