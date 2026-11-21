@@ -59,6 +59,24 @@ def _debug_forbidden():
     return jsonify({"error": "not found"}), 404
 
 
+def _printer_response(data):
+    """Remove SNMP community credentials from non-admin telemetry responses.
+
+    Copy nested containers so sanitizing a response never changes collector state.
+    Admin configuration/debug contracts remain unchanged.
+    """
+    if getattr(current_user, "role", None) == "admin":
+        return data
+    def redact(value):
+        if isinstance(value, dict):
+            return {key: redact(item) for key, item in value.items()
+                    if str(key).lower() not in {"community", "snmp_community", "snmpcommunity"}}
+        if isinstance(value, list):
+            return [redact(item) for item in value]
+        return value
+    return redact(data)
+
+
 def _attach_yield_metadata(printer_data: dict, preloaded_states: dict = None) -> dict:
     """Add per-color yield/capacity & interval CI95 metadata to API output."""
     if not isinstance(printer_data, dict):
@@ -320,7 +338,7 @@ def api_printers():
                     )
                 )
 
-        snap = [_attach_yield_metadata(d, preloaded_states=preloaded_states) for d in snap]
+        snap = [_printer_response(_attach_yield_metadata(d, preloaded_states=preloaded_states)) for d in snap]
     with timing_stage('serialize'):
         return jsonify({"printers": snap, "meta": {
             "total": len(cfg),
@@ -340,7 +358,7 @@ def api_printer(ip):
         return jsonify({"error": "forbidden"}), 403
     with store.data_lock:
         d = dict(store.printer_data.get(ip) or {}) if store.printer_data.get(ip) else None
-    return jsonify(_attach_yield_metadata(d)) if d else (jsonify({"error": "not found"}), 404)
+    return jsonify(_printer_response(_attach_yield_metadata(d))) if d else (jsonify({"error": "not found"}), 404)
 
 
 @bp.route('/api/debug/printer/<path:ip>')

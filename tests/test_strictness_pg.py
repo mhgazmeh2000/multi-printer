@@ -128,14 +128,20 @@ class _PgBase(unittest.TestCase):
 class BooleanStrictnessTests(_PgBase):
     """On PG the columns are really BOOLEAN and do not accept ``int''."""
 
-    def test_all_five_columns_are_boolean(self):
-        """Verifies all five columns are boolean."""
+    def test_boolean_columns_match_legacy_and_present_optional_tables(self):
+        """Keep the five legacy columns plus explicitly reviewed additive columns."""
         rows = self.conn.execute(
             "SELECT table_name, column_name, data_type FROM information_schema.columns "
             "WHERE table_schema = current_schema() AND data_type = 'boolean' "
             "ORDER BY table_name, column_name").fetchall()
         found = {(t, c) for t, c, _d in rows}
-        self.assertEqual(found, set(BOOLEAN_COLUMNS))
+        # BOOLEAN_COLUMNS is the legacy SQLite-import conversion contract, not
+        # a complete registry of later dashboard/optional-derived migrations.
+        optional = {('data_sources', 'is_default'), ('dashboards', 'is_starred'),
+                    ('yield_run_meta', 'singleton'), ('yield_run_meta', 'ready')}
+        tables = present_tables(self.conn)
+        expected = set(BOOLEAN_COLUMNS) | {(table, col) for table, col in optional if table in tables}
+        self.assertEqual(found, expected)
 
     def test_int_is_rejected_by_a_boolean_column(self):
         """``yield_samples.accepted'' rejects an ``int'' value (type hard binding)."""

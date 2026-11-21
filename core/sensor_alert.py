@@ -7,6 +7,7 @@ import logging
 import os
 import time
 from datetime import datetime
+from html import escape
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -173,17 +174,17 @@ def check_and_send_sensor_alert(ip: str, sensor_name: str, readings: list):
     for sev, label, value, unit, port in triggered:
         color = "#dc2626" if sev == "critical" else "#f59e0b"
         row = '<tr><td style="padding:8px;border:1px solid #ddd;color:%s;">%s: %s%s (port %s)</td></tr>' + NL
-        alert_rows += row % (color, label, value, unit, port)
+        alert_rows += row % (color, *(escape(str(part)) for part in (label, value, unit, port)))
 
     html_parts = [
         '<div style="font-family:Arial,sans-serif;direction:rtl;text-align:right;max-width:600px;margin:0 auto">',
         '<h2 style="color:%s">\U0001f6a8 \u0647\u0634\u062f\u0627\u0631 \u0633\u0646\u0633\u0648\u0631</h2>' % icon_color,
         '<table style="width:100%;border-collapse:collapse;margin:16px 0">',
-        '<tr style="background:#f8f9fa"><td style="padding:8px;border:1px solid #ddd"><strong>\u062f\u0633\u062a\u06af\u0627\u0647</strong></td><td style="padding:8px;border:1px solid #ddd">%s (%s)</td></tr>' % (sensor_name, ip),
-        '<tr><td style="padding:8px;border:1px solid #ddd"><strong>\u0632\u0645\u0627\u0646</strong></td><td style="padding:8px;border:1px solid #ddd">%s</td></tr>' % now_str,
+        '<tr style="background:#f8f9fa"><td style="padding:8px;border:1px solid #ddd"><strong>\u062f\u0633\u062a\u06af\u0627\u0647</strong></td><td style="padding:8px;border:1px solid #ddd">%s (%s)</td></tr>' % (escape(str(sensor_name)), escape(str(ip))),
+        '<tr><td style="padding:8px;border:1px solid #ddd"><strong>\u0632\u0645\u0627\u0646</strong></td><td style="padding:8px;border:1px solid #ddd">%s</td></tr>' % escape(str(now_str)),
         '</table>',
         '<h3 style="color:#333">\u0647\u0634\u062f\u0627\u0631\u0647\u0627:</h3>',
-        '<table style="width:100%;border-collapse:collapse">%s</table>' % alert_rows,
+        '<table style="width:100%%;border-collapse:collapse">%s</table>' % alert_rows,
         '<hr style="margin:20px 0;border-color:#eee">',
         '<p style="color:#999;font-size:11px">\u0627\u06cc\u0646 \u0627\u06cc\u0645\u06cc\u0644 \u0628\u0647 \u0635\u0648\u0631\u062a \u062e\u0648\u062f\u06a9\u0627\u0631 \u0627\u0631\u0633\u0627\u0644 \u0634\u062f\u0647 \u0627\u0633\u062a.</p>',
         '</div>',
